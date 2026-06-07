@@ -116,7 +116,7 @@ function loadMessages(id) {
   try {
     const messages = JSON.parse(localStorage.getItem(cacheKey(id)) || '[]');
     state.messages.set(id, messages);
-    state.lastSeq.set(id, Math.max(0, ...messages.map((m) => m.seq || 0)));
+    state.lastSeq.set(id, lastRealSeq(messages));
     return messages;
   } catch {
     state.messages.set(id, []);
@@ -261,13 +261,14 @@ function renderSessionButton(session) {
   return row;
 }
 
-function renderActive() {
+function renderActive(options = {}) {
+  const shouldRenderMessages = options.messages !== false;
   const session = state.sessions.find((item) => item.id === state.activeId);
   const isRunning = session && (session.status === 'running' || session.status === 'stopping');
   el.emptyState.hidden = Boolean(session);
   el.messagePane.hidden = !session;
   el.promptInput.disabled = !session;
-  el.sendButton.disabled = !session || isRunning;
+  el.sendButton.disabled = !session;
   el.stopButton.hidden = !isRunning;
   el.stopButton.disabled = !session || session.status === 'stopping';
 
@@ -281,7 +282,8 @@ function renderActive() {
   el.activeTitle.textContent = session.title;
   el.activeMeta.textContent = session.cwd || '';
   setBadge(isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线', isRunning ? 'running' : state.online ? 'online' : '');
-  renderMessages(session.id);
+  if (shouldRenderMessages) renderMessages(session.id);
+  else updateRunIndicator();
 }
 
 function getActiveSession() {
@@ -294,6 +296,7 @@ function renderMessages(sessionId) {
   for (const message of messages) {
     el.messagePane.append(renderMessage(message));
   }
+  updateRunIndicator();
   requestAnimationFrame(() => {
     el.messagePane.scrollTop = el.messagePane.scrollHeight;
   });
@@ -303,6 +306,9 @@ function renderMessage(message) {
   const article = document.createElement('article');
   article.className = `message ${message.role || 'system'}`;
   article.dataset.seq = message.seq || '';
+  if (message.clientMessageId) article.dataset.clientMessageId = message.clientMessageId;
+  if (message.pending) article.classList.add('pending');
+  if (message.failed) article.classList.add('failed');
   const role = message.role || 'system';
   const collapsible = isCollapsibleMessage(message);
   const defaultCollapsed = isDefaultCollapsedMessage(message);
@@ -350,6 +356,31 @@ function renderMessage(message) {
     article.append(button);
   }
   return article;
+}
+
+function renderRunIndicator(session) {
+  const indicator = document.createElement('div');
+  indicator.className = 'run-indicator';
+  indicator.dataset.runIndicator = '1';
+  const queued = session?.queuedCount ? ` · 队列 ${session.queuedCount}` : '';
+  indicator.innerHTML = `
+    <span class="run-orbit" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span>${session?.status === 'stopping' ? '正在停止' : `Codex 运行中${queued}`}</span>
+  `;
+  return indicator;
+}
+
+function updateRunIndicator() {
+  const existing = el.messagePane.querySelector('[data-run-indicator="1"]');
+  if (existing) existing.remove();
+  const session = getActiveSession();
+  if (!session || !['running', 'stopping'].includes(session.status)) return;
+  el.messagePane.append(renderRunIndicator(session));
+}
+
+function removeRunIndicator() {
+  const existing = el.messagePane.querySelector('[data-run-indicator="1"]');
+  if (existing) existing.remove();
 }
 
 function renderCommandList() {
@@ -408,23 +439,59 @@ function extractOptionActions(text) {
 
 function upsertMessage(sessionId, message) {
   const messages = loadMessages(sessionId);
-  if (messages.some((item) => item.seq === message.seq)) return;
-  messages.push(message);
-  messages.sort((a, b) => (a.seq || 0) - (b.seq || 0));
-  state.lastSeq.set(sessionId, Math.max(state.lastSeq.get(sessionId) || 0, message.seq || 0));
+  let replaced = false;
+  if (message.clientMessageId) {
+    const localIndex = messages.findIndex((item) => item.clientMessageId === message.clientMessageId && item.pending);
+    if (localIndex >= 0) {
+      messages[localIndex] = message;
+      replaced = true;
+    }
+  }
+  if (!replaced) {
+    const seq = Number(message.seq || 0);
+    if (seq > 0 && messages.some((item) => Number(item.seq || 0) === seq)) return;
+    messages.push(message);
+  }
+  messages.sort(compareMessages);
+  state.lastSeq.set(sessionId, lastRealSeq(messages));
   saveMessages(sessionId);
 
   if (message.status) {
-    state.sessions = state.sessions.map((item) => item.id === sessionId ? { ...item, status: message.status, updatedAt: message.at || item.updatedAt } : item);
+    state.sessions = state.sessions.map((item) => item.id === sessionId ? {
+      ...item,
+      status: message.status,
+      queuedCount: message.queuedCount ?? item.queuedCount,
+      updatedAt: message.at || item.updatedAt
+    } : item);
     saveSessionCache();
     renderSessions();
   }
 
   if (sessionId === state.activeId) {
-    el.messagePane.append(renderMessage(message));
+    const nextNode = renderMessage(message);
+    const existing = message.clientMessageId
+      ? [...el.messagePane.children].find((node) => node.dataset?.clientMessageId === message.clientMessageId)
+      : null;
+    removeRunIndicator();
+    if (existing) existing.replaceWith(nextNode);
+    else el.messagePane.append(nextNode);
+    updateRunIndicator();
     el.messagePane.scrollTop = el.messagePane.scrollHeight;
-    renderActive();
+    renderActive({ messages: false });
   }
+}
+
+function compareMessages(a, b) {
+  const aSeq = Number(a.seq || 0);
+  const bSeq = Number(b.seq || 0);
+  if (aSeq > 0 && bSeq > 0) return aSeq - bSeq;
+  if (aSeq > 0) return -1;
+  if (bSeq > 0) return 1;
+  return String(a.at || '').localeCompare(String(b.at || ''));
+}
+
+function lastRealSeq(messages) {
+  return Math.max(0, ...messages.map((message) => Number(message.seq || 0)).filter((seq) => seq > 0));
 }
 
 function escapeHtml(value) {
@@ -469,7 +536,7 @@ async function loadSession(id) {
     const session = data.session;
     state.sessions = state.sessions.map((item) => item.id === id ? session : item);
     state.messages.set(id, data.messages || []);
-    state.lastSeq.set(id, Math.max(0, ...(data.messages || []).map((m) => m.seq || 0)));
+    state.lastSeq.set(id, lastRealSeq(data.messages || []));
     saveSessionCache();
     saveMessages(id);
     renderSessions();
@@ -500,7 +567,7 @@ async function refreshActiveContext() {
     state.sessions = state.sessions.map((item) => item.id === session.id ? data.session : item);
     if (changed) {
       state.messages.set(session.id, nextMessages);
-      state.lastSeq.set(session.id, Math.max(0, ...nextMessages.map((m) => m.seq || 0)));
+      state.lastSeq.set(session.id, lastRealSeq(nextMessages));
       saveSessionCache();
       saveMessages(session.id);
       if (state.activeId === session.id) {
@@ -652,20 +719,37 @@ if (!el.loginForm.dataset.fallbackBound) {
 async function sendPrompt(rawPrompt, opts = {}) {
   const prompt = String(rawPrompt || '').trim();
   if (!prompt || !state.activeId) return;
+  const sessionId = state.activeId;
   if (!opts.keepInput) el.promptInput.value = '';
   autoSizePrompt();
   const elevated = Boolean(el.elevatedRun.checked);
+  const clientMessageId = globalThis.crypto?.randomUUID ? crypto.randomUUID() : `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const optimisticMessage = {
+    at: new Date().toISOString(),
+    role: 'user',
+    text: prompt,
+    elevated,
+    clientMessageId,
+    pending: true
+  };
+  upsertMessage(sessionId, optimisticMessage);
   try {
-    const data = await api(`/api/sessions/${state.activeId}/messages`, {
+    const data = await api(`/api/sessions/${sessionId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ prompt, elevated })
+      body: JSON.stringify({ prompt, elevated, clientMessageId })
     });
-    state.sessions = state.sessions.map((item) => item.id === state.activeId ? data.session : item);
+    state.sessions = state.sessions.map((item) => item.id === sessionId ? data.session : item);
     renderSessions();
-    renderActive();
+    renderActive({ messages: false });
   } catch (error) {
-    upsertMessage(state.activeId, {
-      seq: Date.now(),
+    const messages = loadMessages(sessionId);
+    const index = messages.findIndex((message) => message.clientMessageId === clientMessageId);
+    if (index >= 0) {
+      messages[index] = { ...messages[index], pending: false, failed: true };
+      saveMessages(sessionId);
+      if (state.activeId === sessionId) renderActive();
+    }
+    upsertMessage(sessionId, {
       at: new Date().toISOString(),
       role: 'system',
       text: error.message || '发送失败'
@@ -685,7 +769,6 @@ async function stopCurrentRun() {
     }
   } catch (error) {
     upsertMessage(state.activeId, {
-      seq: Date.now(),
       at: new Date().toISOString(),
       role: 'system',
       text: error.message || '停止失败'

@@ -190,6 +190,7 @@ function publicSession(session) {
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     lastSeq: session.lastSeq || 0,
+    queuedCount: session.queue?.length || 0,
     messageCount: session.messages?.length || 0
   };
 }
@@ -627,13 +628,15 @@ function updateCodexSessionId(session, event) {
 function runCodex(session, prompt, options = {}) {
   if (running.has(session.id)) throw new Error('session_running');
 
+  session.queue ||= [];
   session.status = 'running';
   session.updatedAt = nowIso();
   scheduleSave();
   addMessage(session, {
     role: 'system',
     text: options.elevated ? 'Codex is working with elevated permissions for this run.' : 'Codex is working.',
-    status: 'running'
+    status: 'running',
+    queuedCount: session.queue?.length || 0
   });
 
   const args = buildCodexArgs(session, prompt, options);
@@ -683,13 +686,22 @@ function runCodex(session, prompt, options = {}) {
     if (stdoutBuffer.trim()) handleCodexLine(session, stdoutBuffer);
     running.delete(session.id);
     const wasStopping = session.status === 'stopping';
-    session.status = code === 0 || wasStopping ? 'idle' : 'error';
-    session.updatedAt = nowIso();
     addMessage(session, {
       role: 'system',
       text: wasStopping ? 'Codex run stopped.' : code === 0 ? 'Codex run finished.' : `Codex exited with code ${code}.`,
-      status: session.status
+      status: code === 0 || wasStopping ? 'idle' : 'error',
+      queuedCount: session.queue?.length || 0
     });
+
+    const next = !wasStopping ? session.queue?.shift() : null;
+    if (next?.prompt) {
+      scheduleSave();
+      runCodex(session, next.prompt, { elevated: next.elevated });
+      return;
+    }
+
+    session.status = code === 0 || wasStopping ? 'idle' : 'error';
+    session.updatedAt = nowIso();
     scheduleSave();
   });
 }
@@ -700,7 +712,14 @@ function stopRunningSession(session) {
 
   session.status = 'stopping';
   session.updatedAt = nowIso();
-  addMessage(session, { role: 'system', text: 'Stop requested.', status: 'stopping' });
+  const queuedCount = session.queue?.length || 0;
+  if (queuedCount) session.queue = [];
+  addMessage(session, {
+    role: 'system',
+    text: queuedCount ? `Stop requested. Cleared ${queuedCount} queued prompt${queuedCount === 1 ? '' : 's'}.` : 'Stop requested.',
+    status: 'stopping',
+    queuedCount: 0
+  });
 
   try {
     if (child.pid) process.kill(-child.pid, 'SIGTERM');
@@ -938,12 +957,19 @@ async function handleApi(req, res, url) {
   if (sendMatch && req.method === 'POST') {
     const session = state.sessions[decodeURIComponent(sendMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
-    if (running.has(session.id)) return json(res, 409, { error: 'session_running' });
     const body = await readJson(req);
     const prompt = String(body.prompt || '').trim();
     const elevated = body.elevated === true;
+    const clientMessageId = String(body.clientMessageId || '').trim().slice(0, 120);
     if (!prompt) return json(res, 400, { error: 'empty_prompt' });
-    addMessage(session, { role: 'user', text: prompt, elevated });
+    addMessage(session, { role: 'user', text: prompt, elevated, clientMessageId });
+    if (running.has(session.id)) {
+      session.queue ||= [];
+      session.queue.push({ prompt, elevated, createdAt: nowIso(), clientMessageId });
+      session.updatedAt = nowIso();
+      scheduleSave();
+      return json(res, 202, { session: publicSession(session), queued: true });
+    }
     try {
       runCodex(session, prompt, { elevated });
     } catch (error) {
