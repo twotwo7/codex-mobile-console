@@ -1,5 +1,5 @@
-const CACHE_NAME = 'codex-console-v26';
-const ASSETS = ['/', '/index.html', '/styles.css?v=21', '/app.js?v=21', '/manifest.json?v=2'];
+const CACHE_NAME = 'codex-console-v27';
+const ASSETS = ['/', '/index.html', '/styles.css?v=22', '/app.js?v=22', '/manifest.json?v=2'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)));

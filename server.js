@@ -61,10 +61,12 @@ async function init() {
     state.sessions ||= {};
     state.hiddenCodexSessions ||= {};
     state.codexSessionTitles ||= {};
+    state.starredMessages ||= {};
     state.nextSeq ||= 1;
   } else {
     state.hiddenCodexSessions ||= {};
     state.codexSessionTitles ||= {};
+    state.starredMessages ||= {};
     await saveState();
   }
   reconcileRunningSessions();
@@ -191,6 +193,12 @@ function publicSession(session) {
     updatedAt: session.updatedAt,
     lastSeq: session.lastSeq || 0,
     queuedCount: session.queue?.length || 0,
+    queue: (session.queue || []).map((item) => ({
+      id: item.id,
+      prompt: item.prompt,
+      elevated: item.elevated === true,
+      createdAt: item.createdAt
+    })),
     messageCount: session.messages?.length || 0
   };
 }
@@ -236,6 +244,10 @@ function compactText(text, limit = 8000) {
   const value = String(text || '').trim();
   if (value.length <= limit) return value;
   return `${value.slice(0, limit)}\n...[truncated]`;
+}
+
+function stableMessageId(...parts) {
+  return createHash('sha1').update(parts.map((part) => String(part || '')).join('\0')).digest('hex').slice(0, 24);
 }
 
 function shouldSkipCodexText(role, text) {
@@ -382,14 +394,17 @@ async function readCodexMessages(codexSessionId) {
     }
 
     if (!message || shouldSkipCodexText(message.role, message.text)) continue;
+    const text = compactText(message.text);
+    const id = stableMessageId(codexSessionId, item.timestamp, item.type, message.role, text);
     messages.push({
       seq: seq++,
-      id: randomUUID(),
+      id,
       at,
       source: 'codex',
       role: message.role,
-      text: compactText(message.text),
-      phase: message.phase || ''
+      text,
+      phase: message.phase || '',
+      starred: state.starredMessages?.[id] === true
     });
   }
 
@@ -414,7 +429,10 @@ async function displayMessages(session, limit = 500) {
     const key = `${message.role}\0${String(message.text || '').trim()}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push(message);
+    out.push({
+      ...message,
+      starred: message.starred === true || state.starredMessages?.[message.id] === true
+    });
   }
   const sorted = out.sort((a, b) => {
     const byTime = Date.parse(a.at || '') - Date.parse(b.at || '');
@@ -961,11 +979,12 @@ async function handleApi(req, res, url) {
     const prompt = String(body.prompt || '').trim();
     const elevated = body.elevated === true;
     const clientMessageId = String(body.clientMessageId || '').trim().slice(0, 120);
+    const queueId = clientMessageId || randomUUID();
     if (!prompt) return json(res, 400, { error: 'empty_prompt' });
     addMessage(session, { role: 'user', text: prompt, elevated, clientMessageId });
     if (running.has(session.id)) {
       session.queue ||= [];
-      session.queue.push({ prompt, elevated, createdAt: nowIso(), clientMessageId });
+      session.queue.push({ id: queueId, prompt, elevated, createdAt: nowIso(), clientMessageId });
       session.updatedAt = nowIso();
       scheduleSave();
       return json(res, 202, { session: publicSession(session), queued: true });
@@ -977,6 +996,36 @@ async function handleApi(req, res, url) {
       addMessage(session, { role: 'system', text: String(error.message || error), status: 'error' });
     }
     return json(res, 202, { session: publicSession(session) });
+  }
+
+  const queueMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/queue\/([^/]+)$/);
+  if (queueMatch && req.method === 'DELETE') {
+    const session = state.sessions[decodeURIComponent(queueMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    const queueId = decodeURIComponent(queueMatch[2]);
+    const index = (session.queue || []).findIndex((item) => item.id === queueId || item.clientMessageId === queueId);
+    if (index < 0) return json(res, 404, { error: 'queue_item_not_found', session: publicSession(session) });
+    session.queue.splice(index, 1);
+    session.updatedAt = nowIso();
+    scheduleSave();
+    return json(res, 200, { ok: true, session: publicSession(session) });
+  }
+
+  const messagePatchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages\/([^/]+)$/);
+  if (messagePatchMatch && req.method === 'PATCH') {
+    const session = state.sessions[decodeURIComponent(messagePatchMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    const messageId = decodeURIComponent(messagePatchMatch[2]);
+    const body = await readJson(req);
+    const starred = body.starred === true;
+    const message = (session.messages || []).find((item) => item.id === messageId || String(item.seq) === messageId);
+    if (message) message.starred = starred;
+    state.starredMessages ||= {};
+    if (starred) state.starredMessages[messageId] = true;
+    else delete state.starredMessages[messageId];
+    session.updatedAt = nowIso();
+    scheduleSave();
+    return json(res, 200, { ok: true, messageId, starred, session: publicSession(session) });
   }
 
   const stopMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/stop$/);

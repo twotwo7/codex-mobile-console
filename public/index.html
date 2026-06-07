@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=21">
+    <link rel="stylesheet" href="/styles.css?v=22">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -72,6 +72,7 @@
           <div class="prompt-tools">
             <button id="stopButton" class="stop-button" type="button" hidden>停止</button>
             <button id="commandButton" class="command-button" type="button">命令</button>
+            <button id="favoritesButton" class="command-button" type="button" aria-pressed="false">收藏</button>
           </div>
           <div class="prompt-row">
             <textarea id="promptInput" rows="1" placeholder="输入给 Codex 的指令..." disabled></textarea>
@@ -231,6 +232,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=21" type="module"></script>
+    <script src="/app.js?v=22" type="module"></script>
   </body>
 </html>

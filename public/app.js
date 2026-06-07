@@ -14,6 +14,7 @@ const state = {
   theme: localStorage.getItem('cmc.theme') || 'graphite',
   historyLimit: localStorage.getItem('cmc.historyLimit') || '500',
   elevated: localStorage.getItem('cmc.elevated') === '1',
+  showStarredOnly: localStorage.getItem('cmc.showStarredOnly') === '1',
   directoryPath: '/root/Projects',
   expandedCwds: new Set(storedExpandedCwds),
   messages: new Map(),
@@ -57,6 +58,7 @@ const el = {
   promptForm: document.querySelector('#promptForm'),
   promptInput: document.querySelector('#promptInput'),
   commandButton: document.querySelector('#commandButton'),
+  favoritesButton: document.querySelector('#favoritesButton'),
   elevatedRun: document.querySelector('#elevatedRun'),
   stopButton: document.querySelector('#stopButton'),
   sendButton: document.querySelector('#sendButton'),
@@ -283,29 +285,39 @@ function renderActive(options = {}) {
   el.activeMeta.textContent = session.cwd || '';
   setBadge(isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线', isRunning ? 'running' : state.online ? 'online' : '');
   if (shouldRenderMessages) renderMessages(session.id);
-  else updateRunIndicator();
+  else {
+    updateQueuePanel();
+    updateRunIndicator();
+  }
+  updateFavoritesButton();
 }
 
 function getActiveSession() {
   return state.sessions.find((item) => item.id === state.activeId);
 }
 
-function renderMessages(sessionId) {
-  const messages = loadMessages(sessionId);
+function renderMessages(sessionId, options = {}) {
+  const stickToBottom = options.stickToBottom ?? true;
+  const messages = displayMessages(sessionId);
   el.messagePane.innerHTML = '';
   for (const message of messages) {
-    el.messagePane.append(renderMessage(message));
+    el.messagePane.append(renderMessage(message, { animate: false }));
   }
+  if (state.showStarredOnly && !messages.length) el.messagePane.append(renderFavoriteEmpty());
+  updateQueuePanel();
   updateRunIndicator();
-  requestAnimationFrame(() => {
-    el.messagePane.scrollTop = el.messagePane.scrollHeight;
-  });
+  if (stickToBottom) scrollMessagesToBottom();
 }
 
-function renderMessage(message) {
+function renderMessage(message, options = {}) {
   const article = document.createElement('article');
   article.className = `message ${message.role || 'system'}`;
+  if (options.animate === false) article.classList.add('no-animate');
+  if (message.streaming) article.classList.add('streaming');
+  if (message.starred) article.classList.add('starred');
   article.dataset.seq = message.seq || '';
+  article.dataset.messageId = message.id || '';
+  if (message.ids) article.dataset.messageIds = message.ids.join(',');
   if (message.clientMessageId) article.dataset.clientMessageId = message.clientMessageId;
   if (message.pending) article.classList.add('pending');
   if (message.failed) article.classList.add('failed');
@@ -333,6 +345,8 @@ function renderMessage(message) {
     });
     article.querySelector('.message-head').append(button);
   }
+  const menu = renderMessageMenu(message);
+  if (menu) article.querySelector('.message-head').append(menu);
   if (actions.length) {
     const actionWrap = document.createElement('div');
     actionWrap.className = 'option-actions';
@@ -358,6 +372,116 @@ function renderMessage(message) {
   return article;
 }
 
+function renderMessageMenu(message) {
+  if (!message.text && !message.id && !message.ids?.length) return null;
+  const wrap = document.createElement('div');
+  wrap.className = 'message-menu';
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'message-menu-button';
+  button.textContent = '⋯';
+  button.setAttribute('aria-label', '消息操作');
+  if (message.starred) button.classList.add('starred');
+
+  const popover = document.createElement('div');
+  popover.className = 'message-menu-popover';
+  popover.hidden = true;
+
+  if (message.id || message.ids?.length) {
+    const star = document.createElement('button');
+    star.type = 'button';
+    star.textContent = message.starred ? '取消收藏' : '收藏';
+    star.addEventListener('click', () => {
+      popover.hidden = true;
+      toggleStarred(message);
+    });
+    popover.append(star);
+  }
+
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.textContent = '复制';
+  copy.addEventListener('click', () => {
+    popover.hidden = true;
+    copyMessageText(message.text || '');
+  });
+  popover.append(copy);
+
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeMessageMenus(wrap);
+    popover.hidden = !popover.hidden;
+  });
+  wrap.append(button, popover);
+  return wrap;
+}
+
+function closeMessageMenus(except) {
+  for (const menu of document.querySelectorAll('.message-menu')) {
+    if (menu === except) continue;
+    const popover = menu.querySelector('.message-menu-popover');
+    if (popover) popover.hidden = true;
+  }
+}
+
+async function copyMessageText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    const area = document.createElement('textarea');
+    area.value = text;
+    area.style.position = 'fixed';
+    area.style.opacity = '0';
+    document.body.append(area);
+    area.select();
+    document.execCommand('copy');
+    area.remove();
+  }
+}
+
+function displayMessages(sessionId) {
+  const messages = loadMessages(sessionId);
+  const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
+  return mergeAssistantMessages(filtered);
+}
+
+function mergeAssistantMessages(messages) {
+  const out = [];
+  for (const message of messages) {
+    const previous = out.at(-1);
+    if (message.role === 'assistant' && previous?.role === 'assistant' && !message.pending && !previous.pending) {
+      previous.text = [previous.text, message.text].filter(Boolean).join('\n\n');
+      previous.at = message.at || previous.at;
+      previous.seq = message.seq || previous.seq;
+      previous.id = previous.id || message.id;
+      previous.ids = [...(previous.ids || [previous.id]).filter(Boolean), message.id].filter(Boolean);
+      previous.starred = previous.starred === true || message.starred === true;
+      previous.streaming = message.streaming === true || previous.streaming === true;
+      continue;
+    }
+    out.push({
+      ...message,
+      ids: message.id ? [message.id] : [],
+      streaming: message.role === 'assistant' && isLatestAssistant(message, messages) && getActiveSession()?.status === 'running'
+    });
+  }
+  return out;
+}
+
+function isLatestAssistant(message, messages) {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === 'assistant') return messages[i] === message;
+  }
+  return false;
+}
+
+function renderFavoriteEmpty() {
+  const empty = document.createElement('div');
+  empty.className = 'favorite-empty';
+  empty.textContent = '暂无收藏';
+  return empty;
+}
+
 function renderRunIndicator(session) {
   const indicator = document.createElement('div');
   indicator.className = 'run-indicator';
@@ -381,6 +505,48 @@ function updateRunIndicator() {
 function removeRunIndicator() {
   const existing = el.messagePane.querySelector('[data-run-indicator="1"]');
   if (existing) existing.remove();
+}
+
+function renderQueuePanel(session) {
+  const panel = document.createElement('div');
+  panel.className = 'queue-panel';
+  panel.dataset.queuePanel = '1';
+  panel.innerHTML = `<div class="queue-head"><strong>队列 ${session.queue.length}</strong><span>当前完成后继续</span></div>`;
+  for (const item of session.queue || []) {
+    const row = document.createElement('div');
+    row.className = 'queue-item';
+    row.innerHTML = `
+      <span>${escapeHtml(summarizeText(item.prompt || '', 72))}</span>
+      <button type="button" aria-label="取消这条排队输入">×</button>
+    `;
+    row.querySelector('button').addEventListener('click', () => cancelQueuedPrompt(item.id));
+    panel.append(row);
+  }
+  return panel;
+}
+
+function updateQueuePanel() {
+  const existing = el.messagePane.querySelector('[data-queue-panel="1"]');
+  if (existing) existing.remove();
+  if (state.showStarredOnly) return;
+  const session = getActiveSession();
+  if (!session?.queue?.length) return;
+  el.messagePane.append(renderQueuePanel(session));
+}
+
+function removeQueuePanel() {
+  const existing = el.messagePane.querySelector('[data-queue-panel="1"]');
+  if (existing) existing.remove();
+}
+
+function isNearMessageBottom() {
+  return el.messagePane.scrollHeight - el.messagePane.scrollTop - el.messagePane.clientHeight < 96;
+}
+
+function scrollMessagesToBottom() {
+  requestAnimationFrame(() => {
+    el.messagePane.scrollTop = el.messagePane.scrollHeight;
+  });
 }
 
 function renderCommandList() {
@@ -416,8 +582,13 @@ function summarizeMessage(message) {
   const text = String(message.text || '').replaceAll('```', '').trim();
   const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || '(空消息)';
   const prefix = message.role === 'tool' ? '工具' : message.role === 'user' ? '输入' : '输出';
-  const clipped = firstLine.length > 120 ? `${firstLine.slice(0, 120)}...` : firstLine;
+  const clipped = summarizeText(firstLine, 120);
   return `${prefix} · ${clipped}`;
+}
+
+function summarizeText(value, limit) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > limit ? `${text.slice(0, limit)}...` : text;
 }
 
 function extractOptionActions(text) {
@@ -468,15 +639,23 @@ function upsertMessage(sessionId, message) {
   }
 
   if (sessionId === state.activeId) {
+    const stickToBottom = isNearMessageBottom();
     const nextNode = renderMessage(message);
     const existing = message.clientMessageId
       ? [...el.messagePane.children].find((node) => node.dataset?.clientMessageId === message.clientMessageId)
       : null;
     removeRunIndicator();
+    removeQueuePanel();
     if (existing) existing.replaceWith(nextNode);
-    else el.messagePane.append(nextNode);
+    else if (message.role === 'assistant') {
+      renderMessages(sessionId, { stickToBottom });
+      return;
+    } else {
+      el.messagePane.append(nextNode);
+    }
+    updateQueuePanel();
     updateRunIndicator();
-    el.messagePane.scrollTop = el.messagePane.scrollHeight;
+    if (stickToBottom) scrollMessagesToBottom();
     renderActive({ messages: false });
   }
 }
@@ -720,6 +899,11 @@ async function sendPrompt(rawPrompt, opts = {}) {
   const prompt = String(rawPrompt || '').trim();
   if (!prompt || !state.activeId) return;
   const sessionId = state.activeId;
+  if (state.showStarredOnly) {
+    state.showStarredOnly = false;
+    localStorage.setItem('cmc.showStarredOnly', '0');
+    updateFavoritesButton();
+  }
   if (!opts.keepInput) el.promptInput.value = '';
   autoSizePrompt();
   const elevated = Boolean(el.elevatedRun.checked);
@@ -733,6 +917,7 @@ async function sendPrompt(rawPrompt, opts = {}) {
     pending: true
   };
   upsertMessage(sessionId, optimisticMessage);
+  scrollMessagesToBottom();
   try {
     const data = await api(`/api/sessions/${sessionId}/messages`, {
       method: 'POST',
@@ -776,6 +961,65 @@ async function stopCurrentRun() {
   }
 }
 
+async function cancelQueuedPrompt(queueId) {
+  const session = getActiveSession();
+  if (!session || !queueId) return;
+  try {
+    const data = await api(`/api/sessions/${session.id}/queue/${encodeURIComponent(queueId)}`, { method: 'DELETE' });
+    if (data.session) {
+      state.sessions = state.sessions.map((item) => item.id === session.id ? data.session : item);
+      saveSessionCache();
+      renderSessions();
+      renderActive({ messages: false });
+    }
+  } catch (error) {
+    upsertMessage(session.id, {
+      at: new Date().toISOString(),
+      role: 'system',
+      text: error.message || '取消排队失败'
+    });
+  }
+}
+
+async function toggleStarred(message) {
+  const session = getActiveSession();
+  if (!session) return;
+  const ids = (message.ids?.length ? message.ids : [message.id]).filter(Boolean);
+  if (!ids.length) return;
+  const next = !message.starred;
+  applyLocalStarred(session.id, ids, next);
+  renderActive();
+  try {
+    await Promise.all(ids.map((id) => api(`/api/sessions/${session.id}/messages/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ starred: next })
+    })));
+  } catch (error) {
+    applyLocalStarred(session.id, ids, !next);
+    renderActive();
+    upsertMessage(session.id, {
+      at: new Date().toISOString(),
+      role: 'system',
+      text: error.message || '收藏失败'
+    });
+  }
+}
+
+function applyLocalStarred(sessionId, ids, starred) {
+  const idSet = new Set(ids);
+  const messages = loadMessages(sessionId).map((message) => (
+    idSet.has(message.id) ? { ...message, starred } : message
+  ));
+  state.messages.set(sessionId, messages);
+  saveMessages(sessionId);
+}
+
+function updateFavoritesButton() {
+  el.favoritesButton.classList.toggle('active', state.showStarredOnly);
+  el.favoritesButton.setAttribute('aria-pressed', String(state.showStarredOnly));
+  el.favoritesButton.textContent = state.showStarredOnly ? '全部' : '收藏';
+}
+
 function editPrompt(text, elevated) {
   el.promptInput.value = text;
   el.elevatedRun.checked = Boolean(elevated);
@@ -793,7 +1037,19 @@ el.promptInput.addEventListener('keydown', (event) => {
   autoSizePrompt();
 });
 
+document.addEventListener('click', () => closeMessageMenus());
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape') closeMessageMenus();
+});
+
 el.stopButton.addEventListener('click', stopCurrentRun);
+
+el.favoritesButton.addEventListener('click', () => {
+  state.showStarredOnly = !state.showStarredOnly;
+  localStorage.setItem('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
+  renderActive();
+});
 
 el.themeSelect.addEventListener('change', () => {
   state.theme = el.themeSelect.value;
