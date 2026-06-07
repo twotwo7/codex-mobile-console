@@ -15,6 +15,8 @@ const state = {
   historyLimit: localStorage.getItem('cmc.historyLimit') || '500',
   elevated: localStorage.getItem('cmc.elevated') === '1',
   showStarredOnly: localStorage.getItem('cmc.showStarredOnly') === '1',
+  pendingImages: [],
+  sending: false,
   directoryPath: '/root/Projects',
   expandedCwds: new Set(storedExpandedCwds),
   messages: new Map(),
@@ -34,6 +36,13 @@ const CODEX_COMMANDS = [
   { name: '/init', detail: '初始化项目说明', value: '/init' },
   { name: 'codex doctor', detail: '诊断本机 Codex', value: '请运行 `codex doctor` 并总结需要我处理的问题。' },
   { name: 'code review', detail: '代码审查', value: '请对当前工作区做一次代码审查，优先指出 bug、风险和缺少的测试。' }
+];
+
+const IMAGE_PROMPTS = [
+  { label: '描述', value: '描述这张图片。' },
+  { label: '问题', value: '指出这张图片里的问题，并给出处理建议。' },
+  { label: '文字', value: '提取图片中的文字，并按原结构整理。' },
+  { label: '客户', value: '这是客户发来的截图，请帮我判断客户想表达什么、可能的问题和我应该如何回复。' }
 ];
 
 const el = {
@@ -59,6 +68,9 @@ const el = {
   promptInput: document.querySelector('#promptInput'),
   commandButton: document.querySelector('#commandButton'),
   favoritesButton: document.querySelector('#favoritesButton'),
+  imageButton: document.querySelector('#imageButton'),
+  imageInput: document.querySelector('#imageInput'),
+  imagePreviewStrip: document.querySelector('#imagePreviewStrip'),
   elevatedRun: document.querySelector('#elevatedRun'),
   stopButton: document.querySelector('#stopButton'),
   sendButton: document.querySelector('#sendButton'),
@@ -80,7 +92,10 @@ const el = {
   closeSettingsDialog: document.querySelector('#closeSettingsDialog'),
   commandDialog: document.querySelector('#commandDialog'),
   closeCommandDialog: document.querySelector('#closeCommandDialog'),
-  commandList: document.querySelector('#commandList')
+  commandList: document.querySelector('#commandList'),
+  imageViewer: document.querySelector('#imageViewer'),
+  closeImageViewer: document.querySelector('#closeImageViewer'),
+  imageViewerImg: document.querySelector('#imageViewerImg')
 };
 
 applyTheme(state.theme);
@@ -110,7 +125,19 @@ function loadCachedSessions() {
 }
 
 function saveMessages(id) {
-  localStorage.setItem(cacheKey(id), JSON.stringify(state.messages.get(id) || []));
+  try {
+    localStorage.setItem(cacheKey(id), JSON.stringify((state.messages.get(id) || []).map(cacheSafeMessage)));
+  } catch {
+    // Large pasted screenshots should not break the live UI if browser storage is full.
+  }
+}
+
+function cacheSafeMessage(message) {
+  return {
+    ...message,
+    images: (message.images || []).map(({ data, dataUrl, ...image }) => image),
+    retryImages: (message.retryImages || []).map(({ data, dataUrl, ...image }) => image)
+  };
 }
 
 function loadMessages(id) {
@@ -270,7 +297,7 @@ function renderActive(options = {}) {
   el.emptyState.hidden = Boolean(session);
   el.messagePane.hidden = !session;
   el.promptInput.disabled = !session;
-  el.sendButton.disabled = !session;
+  el.sendButton.disabled = !session || state.sending;
   el.stopButton.hidden = !isRunning;
   el.stopButton.disabled = !session || session.status === 'stopping';
 
@@ -333,20 +360,30 @@ function renderMessage(message, options = {}) {
     <div class="message-summary">${escapeHtml(summarizeMessage(message))}</div>
     <pre class="message-text">${escapeHtml(message.text || '')}</pre>
   `;
+  const delivery = deliveryLabel(message);
+  if (delivery) {
+    const status = document.createElement('span');
+    status.className = `message-delivery ${message.failed ? 'failed' : message.pending ? 'pending' : message.delivery || ''}`.trim();
+    status.textContent = delivery;
+    article.querySelector('.message-head').append(status);
+  }
+  const menu = renderMessageMenu(message);
+  if (menu) article.querySelector('.message-head').append(menu);
   if (collapsible) {
     article.classList.toggle('collapsed', defaultCollapsed);
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'message-toggle';
-    button.textContent = defaultCollapsed ? '展开' : '折叠';
+    button.textContent = defaultCollapsed ? '▸' : '▾';
+    button.setAttribute('aria-label', defaultCollapsed ? '展开消息' : '折叠消息');
     button.addEventListener('click', () => {
       const collapsed = article.classList.toggle('collapsed');
-      button.textContent = collapsed ? '展开' : '折叠';
+      button.textContent = collapsed ? '▸' : '▾';
+      button.setAttribute('aria-label', collapsed ? '展开消息' : '折叠消息');
     });
     article.querySelector('.message-head').append(button);
   }
-  const menu = renderMessageMenu(message);
-  if (menu) article.querySelector('.message-head').append(menu);
+  if (message.images?.length) article.append(renderMessageImages(message.images));
   if (actions.length) {
     const actionWrap = document.createElement('div');
     actionWrap.className = 'option-actions';
@@ -370,6 +407,35 @@ function renderMessage(message, options = {}) {
     article.append(button);
   }
   return article;
+}
+
+function renderMessageImages(images) {
+  const wrap = document.createElement('div');
+  wrap.className = 'message-images';
+  for (const image of images) {
+    const link = document.createElement('button');
+    link.type = 'button';
+    link.setAttribute('aria-label', '查看图片');
+    const img = document.createElement('img');
+    img.src = image.url || image.dataUrl;
+    img.alt = image.name || 'uploaded image';
+    link.append(img);
+    link.addEventListener('click', () => openImageViewer(img.src, img.alt));
+    wrap.append(link);
+  }
+  return wrap;
+}
+
+function openImageViewer(src, alt = '图片预览') {
+  if (!src) return;
+  el.imageViewerImg.src = src;
+  el.imageViewerImg.alt = alt;
+  el.imageViewer.hidden = false;
+}
+
+function closeImageViewer() {
+  el.imageViewer.hidden = true;
+  el.imageViewerImg.removeAttribute('src');
 }
 
 function renderMessageMenu(message) {
@@ -398,6 +464,17 @@ function renderMessageMenu(message) {
     popover.append(star);
   }
 
+  if (message.failed && message.role === 'user') {
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = '重发';
+    retry.addEventListener('click', () => {
+      popover.hidden = true;
+      retryMessage(message);
+    });
+    popover.append(retry);
+  }
+
   const copy = document.createElement('button');
   copy.type = 'button';
   copy.textContent = '复制';
@@ -410,10 +487,21 @@ function renderMessageMenu(message) {
   button.addEventListener('click', (event) => {
     event.stopPropagation();
     closeMessageMenus(wrap);
-    popover.hidden = !popover.hidden;
+    const nextOpen = popover.hidden;
+    popover.hidden = !nextOpen;
+    wrap.classList.toggle('open', nextOpen);
+    wrap.closest('.message')?.classList.toggle('menu-open', nextOpen);
   });
   wrap.append(button, popover);
   return wrap;
+}
+
+function deliveryLabel(message) {
+  if (message.failed) return '失败';
+  if (message.pending) return '发送中';
+  if (message.delivery === 'queued') return '已排队';
+  if (message.delivery === 'sent') return '已发送';
+  return '';
 }
 
 function closeMessageMenus(except) {
@@ -421,6 +509,8 @@ function closeMessageMenus(except) {
     if (menu === except) continue;
     const popover = menu.querySelector('.message-menu-popover');
     if (popover) popover.hidden = true;
+    menu.classList.remove('open');
+    menu.closest('.message')?.classList.remove('menu-open');
   }
 }
 
@@ -442,30 +532,47 @@ async function copyMessageText(text) {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
-  return mergeAssistantMessages(filtered);
+  return mergeDisplayMessages(filtered);
 }
 
-function mergeAssistantMessages(messages) {
+function mergeDisplayMessages(messages) {
   const out = [];
   for (const message of messages) {
     const previous = out.at(-1);
-    if (message.role === 'assistant' && previous?.role === 'assistant' && !message.pending && !previous.pending) {
-      previous.text = [previous.text, message.text].filter(Boolean).join('\n\n');
+    const canMerge = ['assistant', 'tool'].includes(message.role)
+      && previous?.role === message.role
+      && !message.pending
+      && !previous.pending;
+    if (canMerge) {
+      if (message.role === 'tool' && !previous.groupFormatted) {
+        previous.text = formatMergedMessagePart(previous);
+        previous.groupFormatted = true;
+      }
+      previous.text = [previous.text, formatMergedMessagePart(message)].filter(Boolean).join('\n\n');
       previous.at = message.at || previous.at;
       previous.seq = message.seq || previous.seq;
       previous.id = previous.id || message.id;
       previous.ids = [...(previous.ids || [previous.id]).filter(Boolean), message.id].filter(Boolean);
       previous.starred = previous.starred === true || message.starred === true;
       previous.streaming = message.streaming === true || previous.streaming === true;
+      previous.groupCount = (previous.groupCount || 1) + 1;
       continue;
     }
     out.push({
       ...message,
       ids: message.id ? [message.id] : [],
+      groupCount: 1,
+      groupFormatted: false,
       streaming: message.role === 'assistant' && isLatestAssistant(message, messages) && getActiveSession()?.status === 'running'
     });
   }
   return out;
+}
+
+function formatMergedMessagePart(message) {
+  if (message.role !== 'tool') return message.text || '';
+  const label = message.rawType ? `[${message.rawType}]` : '[tool]';
+  return `${label}\n${message.text || ''}`;
 }
 
 function isLatestAssistant(message, messages) {
@@ -516,10 +623,21 @@ function renderQueuePanel(session) {
     const row = document.createElement('div');
     row.className = 'queue-item';
     row.innerHTML = `
-      <span>${escapeHtml(summarizeText(item.prompt || '', 72))}</span>
-      <button type="button" aria-label="取消这条排队输入">×</button>
+      <span>${escapeHtml(`${summarizeText(item.prompt || '', 64)}${item.imageCount ? ` · 图片 ${item.imageCount}` : ''}`)}</span>
+      <div class="queue-images"></div>
+      <button class="queue-cancel-button" type="button" aria-label="取消这条排队输入">×</button>
     `;
-    row.querySelector('button').addEventListener('click', () => cancelQueuedPrompt(item.id));
+    const imageWrap = row.querySelector('.queue-images');
+    for (const image of item.images || []) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'queue-image-button';
+      button.setAttribute('aria-label', '查看排队图片');
+      button.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || 'queued image')}">`;
+      button.addEventListener('click', () => openImageViewer(image.url, image.name || '排队图片'));
+      imageWrap.append(button);
+    }
+    row.querySelector('.queue-cancel-button').addEventListener('click', () => cancelQueuedPrompt(item.id));
     panel.append(row);
   }
   return panel;
@@ -547,6 +665,136 @@ function scrollMessagesToBottom() {
   requestAnimationFrame(() => {
     el.messagePane.scrollTop = el.messagePane.scrollHeight;
   });
+}
+
+function renderPendingImages() {
+  el.imagePreviewStrip.innerHTML = '';
+  el.imagePreviewStrip.hidden = !state.pendingImages.length;
+  for (const image of state.pendingImages) {
+    const item = document.createElement('div');
+    item.className = 'image-preview-item';
+    item.innerHTML = `
+      <img src="${escapeHtml(image.data)}" alt="${escapeHtml(image.name)}">
+      <span>${escapeHtml(formatBytes(image.size || image.originalSize))}</span>
+      <button type="button" aria-label="移除图片">×</button>
+    `;
+    item.querySelector('button').addEventListener('click', () => {
+      state.pendingImages = state.pendingImages.filter((candidate) => candidate.id !== image.id);
+      renderPendingImages();
+    });
+    el.imagePreviewStrip.append(item);
+  }
+  if (state.pendingImages.length) {
+    const actions = document.createElement('div');
+    actions.className = 'image-quick-actions';
+    for (const item of IMAGE_PROMPTS) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = item.label;
+      button.addEventListener('click', () => {
+        el.promptInput.value = item.value;
+        autoSizePrompt();
+        el.promptInput.focus();
+      });
+      actions.append(button);
+    }
+    el.imagePreviewStrip.append(actions);
+  }
+}
+
+function imageSizeFromDataUrl(dataUrl) {
+  const base64 = String(dataUrl || '').split(',').pop() || '';
+  return Math.round(base64.length * 0.75);
+}
+
+function formatBytes(bytes) {
+  if (!Number.isFinite(bytes)) return '';
+  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function loadImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error('解析图片失败。'));
+    image.src = dataUrl;
+  });
+}
+
+async function compressImageDataUrl(dataUrl, type) {
+  const image = await loadImage(dataUrl);
+  const maxSide = 1600;
+  const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width, image.naturalHeight || image.height));
+  if (scale >= 1 && imageSizeFromDataUrl(dataUrl) < 1024 * 1024) return dataUrl;
+
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round((image.naturalWidth || image.width) * scale));
+  canvas.height = Math.max(1, Math.round((image.naturalHeight || image.height) * scale));
+  const context = canvas.getContext('2d');
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  const nextType = type === 'image/webp' ? 'image/webp' : 'image/jpeg';
+  const compressed = canvas.toDataURL(nextType, 0.82);
+  return imageSizeFromDataUrl(compressed) < imageSizeFromDataUrl(dataUrl) ? compressed : dataUrl;
+}
+
+function readImageFile(file) {
+  return new Promise((resolve, reject) => {
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      reject(new Error('只支持 PNG、JPEG、WebP 图片。'));
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      reject(new Error('单张图片不能超过 8MB。'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const originalData = String(reader.result || '');
+        const compressedData = await compressImageDataUrl(originalData, file.type);
+        const nextType = compressedData.startsWith('data:image/webp') ? 'image/webp'
+          : compressedData.startsWith('data:image/jpeg') ? 'image/jpeg'
+            : file.type;
+        resolve({
+          id: globalThis.crypto?.randomUUID ? crypto.randomUUID() : `image-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+          name: file.name || 'image',
+          type: nextType,
+          data: compressedData,
+          originalSize: file.size,
+          size: imageSizeFromDataUrl(compressedData)
+        });
+      } catch (error) {
+        reject(error);
+      }
+    };
+    reader.onerror = () => reject(new Error('读取图片失败。'));
+    reader.readAsDataURL(file);
+  });
+}
+
+async function addImageFiles(fileList) {
+  const files = [...fileList].slice(0, Math.max(0, 4 - state.pendingImages.length));
+  if (!files.length) return;
+  el.imageButton.disabled = true;
+  el.imageButton.textContent = '处理中';
+  try {
+    const images = await Promise.all(files.map(readImageFile));
+    state.pendingImages = [...state.pendingImages, ...images].slice(0, 4);
+    renderPendingImages();
+  } catch (error) {
+    alert(error.message || '添加图片失败');
+  } finally {
+    el.imageInput.value = '';
+    el.imageButton.disabled = false;
+    el.imageButton.textContent = '图片';
+  }
+}
+
+function setSendState(mode) {
+  state.sending = mode === 'sending';
+  el.sendButton.disabled = !state.activeId || state.sending;
+  el.sendButton.textContent = state.sending ? '发送中' : '发送';
 }
 
 function renderCommandList() {
@@ -581,7 +829,9 @@ function isDefaultCollapsedMessage(message) {
 function summarizeMessage(message) {
   const text = String(message.text || '').replaceAll('```', '').trim();
   const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || '(空消息)';
-  const prefix = message.role === 'tool' ? '工具' : message.role === 'user' ? '输入' : '输出';
+  const prefix = message.role === 'tool'
+    ? `工具${message.groupCount > 1 ? `组 ${message.groupCount}` : ''}`
+    : message.role === 'user' ? '输入' : '输出';
   const clipped = summarizeText(firstLine, 120);
   return `${prefix} · ${clipped}`;
 }
@@ -647,7 +897,7 @@ function upsertMessage(sessionId, message) {
     removeRunIndicator();
     removeQueuePanel();
     if (existing) existing.replaceWith(nextNode);
-    else if (message.role === 'assistant') {
+    else if (message.role === 'assistant' || message.role === 'tool') {
       renderMessages(sessionId, { stickToBottom });
       return;
     } else {
@@ -897,23 +1147,34 @@ if (!el.loginForm.dataset.fallbackBound) {
 
 async function sendPrompt(rawPrompt, opts = {}) {
   const prompt = String(rawPrompt || '').trim();
-  if (!prompt || !state.activeId) return;
+  const images = opts.images ? [...opts.images] : [...state.pendingImages];
+  if ((!prompt && !images.length) || !state.activeId) return;
   const sessionId = state.activeId;
   if (state.showStarredOnly) {
     state.showStarredOnly = false;
     localStorage.setItem('cmc.showStarredOnly', '0');
     updateFavoritesButton();
   }
+  const previousInput = el.promptInput.value;
+  const previousImages = [...state.pendingImages];
   if (!opts.keepInput) el.promptInput.value = '';
+  if (!opts.keepImages) {
+    state.pendingImages = [];
+    renderPendingImages();
+  }
   autoSizePrompt();
   const elevated = Boolean(el.elevatedRun.checked);
   const clientMessageId = globalThis.crypto?.randomUUID ? crypto.randomUUID() : `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  setSendState('sending');
   const optimisticMessage = {
     at: new Date().toISOString(),
     role: 'user',
-    text: prompt,
+    text: prompt || '请分析这张图片。',
     elevated,
     clientMessageId,
+    images: images.map((image) => ({ name: image.name, type: image.type, dataUrl: image.data })),
+    retryImages: images,
+    delivery: 'sending',
     pending: true
   };
   upsertMessage(sessionId, optimisticMessage);
@@ -921,16 +1182,26 @@ async function sendPrompt(rawPrompt, opts = {}) {
   try {
     const data = await api(`/api/sessions/${sessionId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ prompt, elevated, clientMessageId })
+      body: JSON.stringify({ prompt, elevated, clientMessageId, images })
+    });
+    updateLocalClientMessage(sessionId, clientMessageId, {
+      pending: data.queued === true,
+      delivery: data.queued === true ? 'queued' : 'sent'
     });
     state.sessions = state.sessions.map((item) => item.id === sessionId ? data.session : item);
     renderSessions();
     renderActive({ messages: false });
   } catch (error) {
+    if (state.activeId === sessionId && !el.promptInput.value && !state.pendingImages.length) {
+      el.promptInput.value = previousInput;
+      state.pendingImages = previousImages;
+      autoSizePrompt();
+      renderPendingImages();
+    }
     const messages = loadMessages(sessionId);
     const index = messages.findIndex((message) => message.clientMessageId === clientMessageId);
     if (index >= 0) {
-      messages[index] = { ...messages[index], pending: false, failed: true };
+      messages[index] = { ...messages[index], pending: false, failed: true, delivery: 'failed' };
       saveMessages(sessionId);
       if (state.activeId === sessionId) renderActive();
     }
@@ -939,7 +1210,29 @@ async function sendPrompt(rawPrompt, opts = {}) {
       role: 'system',
       text: error.message || '发送失败'
     });
+  } finally {
+    setSendState('');
   }
+}
+
+function updateLocalClientMessage(sessionId, clientMessageId, patch) {
+  const messages = loadMessages(sessionId);
+  const index = messages.findIndex((message) => message.clientMessageId === clientMessageId);
+  if (index < 0) return;
+  messages[index] = { ...messages[index], ...patch };
+  saveMessages(sessionId);
+  if (state.activeId === sessionId) renderActive();
+}
+
+function retryMessage(message) {
+  sendPrompt(message.text || '', {
+    images: (message.retryImages || message.images || []).map((image) => ({
+      ...image,
+      data: image.data || image.dataUrl
+    })).filter((image) => image.data),
+    keepInput: true,
+    keepImages: true
+  });
 }
 
 async function stopCurrentRun() {
@@ -1041,6 +1334,7 @@ document.addEventListener('click', () => closeMessageMenus());
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeMessageMenus();
+  if (event.key === 'Escape' && !el.imageViewer.hidden) closeImageViewer();
 });
 
 el.stopButton.addEventListener('click', stopCurrentRun);
@@ -1049,6 +1343,17 @@ el.favoritesButton.addEventListener('click', () => {
   state.showStarredOnly = !state.showStarredOnly;
   localStorage.setItem('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
   renderActive();
+});
+
+el.imageButton.addEventListener('click', () => el.imageInput.click());
+
+el.imageInput.addEventListener('change', () => addImageFiles(el.imageInput.files || []));
+
+el.promptInput.addEventListener('paste', (event) => {
+  const files = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/'));
+  if (!files.length) return;
+  event.preventDefault();
+  addImageFiles(files);
 });
 
 el.themeSelect.addEventListener('change', () => {
@@ -1110,6 +1415,10 @@ el.commandButton.addEventListener('click', () => {
 el.closeCommandDialog.addEventListener('click', () => closeModal(el.commandDialog));
 el.settingsButton.addEventListener('click', () => openModal(el.settingsDialog));
 el.closeSettingsDialog.addEventListener('click', () => closeModal(el.settingsDialog));
+el.closeImageViewer.addEventListener('click', closeImageViewer);
+el.imageViewer.addEventListener('click', (event) => {
+  if (event.target === el.imageViewer) closeImageViewer();
+});
 el.cancelNewSession.addEventListener('click', () => closeModal(el.dialog));
 el.browseCwdButton.addEventListener('click', () => openDirectoryBrowser(el.cwdInput.value));
 el.closeDirectoryDialog.addEventListener('click', () => closeModal(el.directoryDialog));

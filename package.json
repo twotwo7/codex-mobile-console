@@ -5,6 +5,10 @@
   "type": "module",
   "description": "Mobile-first Codex control console with persistent sessions",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check:mobile-ui": "node scripts/mobile-ui-check.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.60.0"
   }
 }

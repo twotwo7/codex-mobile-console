@@ -13,6 +13,7 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const PASSWORD_FILE = path.join(DATA_DIR, 'admin-password.txt');
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const CODEX_HOME = process.env.CODEX_HOME || '/root/.codex';
 const CODEX_BIN = process.env.CODEX_BIN || '/root/.nvm/versions/node/v22.22.0/bin/codex';
 const CODEX_NODE = process.env.CODEX_NODE || process.execPath;
@@ -50,6 +51,7 @@ async function exists(file) {
 
 async function init() {
   await mkdir(DATA_DIR, { recursive: true });
+  await mkdir(UPLOAD_DIR, { recursive: true });
   if (!(await exists(PASSWORD_FILE))) {
     const password = randomBytes(18).toString('base64url');
     await writeFile(PASSWORD_FILE, `${password}\n`, { mode: 0o600 });
@@ -125,8 +127,8 @@ function readBody(req, limit = 1024 * 1024) {
   });
 }
 
-async function readJson(req) {
-  const raw = await readBody(req);
+async function readJson(req, limit) {
+  const raw = await readBody(req, limit);
   if (!raw) return {};
   return JSON.parse(raw);
 }
@@ -197,6 +199,12 @@ function publicSession(session) {
       id: item.id,
       prompt: item.prompt,
       elevated: item.elevated === true,
+      imageCount: item.images?.length || 0,
+      images: (item.images || []).map((image) => ({
+        name: image.name,
+        type: image.type,
+        url: image.url
+      })),
       createdAt: item.createdAt
     })),
     messageCount: session.messages?.length || 0
@@ -246,6 +254,41 @@ function compactText(text, limit = 8000) {
   return `${value.slice(0, limit)}\n...[truncated]`;
 }
 
+const imageTypes = new Map([
+  ['image/png', '.png'],
+  ['image/jpeg', '.jpg'],
+  ['image/webp', '.webp']
+]);
+
+function uploadUrl(fileName) {
+  return `/api/uploads/${encodeURIComponent(fileName)}`;
+}
+
+async function savePromptImages(images) {
+  if (!Array.isArray(images) || !images.length) return [];
+  const saved = [];
+  for (const image of images.slice(0, 4)) {
+    const type = String(image.type || '').toLowerCase();
+    const ext = imageTypes.get(type);
+    if (!ext) throw new Error('unsupported_image_type');
+    const value = String(image.data || '');
+    const base64 = value.includes(',') ? value.split(',').pop() : value;
+    const buffer = Buffer.from(base64, 'base64');
+    if (!buffer.length || buffer.length > 8 * 1024 * 1024) throw new Error('invalid_image_size');
+    const fileName = `${randomUUID()}${ext}`;
+    const filePath = path.join(UPLOAD_DIR, fileName);
+    await writeFile(filePath, buffer, { mode: 0o600 });
+    saved.push({
+      name: String(image.name || fileName).slice(0, 120),
+      type,
+      fileName,
+      path: filePath,
+      url: uploadUrl(fileName)
+    });
+  }
+  return saved;
+}
+
 function stableMessageId(...parts) {
   return createHash('sha1').update(parts.map((part) => String(part || '')).join('\0')).digest('hex').slice(0, 24);
 }
@@ -258,6 +301,13 @@ function shouldSkipCodexText(role, text) {
   if (text.includes('<environment_context>')) return true;
   if (text.includes('encrypted_content')) return true;
   return false;
+}
+
+function stripCodexImageTags(text) {
+  return String(text || '')
+    .replace(/<image\b[^>]*>\s*<\/image>/gi, '')
+    .replace(/<image\b[^>]*\/>/gi, '')
+    .trim();
 }
 
 async function readCodexThreadNames() {
@@ -393,6 +443,7 @@ async function readCodexMessages(codexSessionId) {
       }
     }
 
+    if (message) message.text = stripCodexImageTags(message.text);
     if (!message || shouldSkipCodexText(message.role, message.text)) continue;
     const text = compactText(message.text);
     const id = stableMessageId(codexSessionId, item.timestamp, item.type, message.role, text);
@@ -424,15 +475,27 @@ async function deleteCodexSessionFile(codexSessionId) {
 async function displayMessages(session, limit = 500) {
   const codexMessages = session.codexSessionId ? await readCodexMessages(session.codexSessionId) : [];
   const out = [];
-  const seen = new Set();
+  const seen = new Map();
   for (const message of [...codexMessages, ...(session.messages || [])]) {
     const key = `${message.role}\0${String(message.text || '').trim()}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
+    const next = {
       ...message,
       starred: message.starred === true || state.starredMessages?.[message.id] === true
-    });
+    };
+    if (seen.has(key)) {
+      const index = seen.get(key);
+      const existing = out[index];
+      const nextHasImages = next.images?.length;
+      const existingHasImages = existing.images?.length;
+      out[index] = {
+        ...(nextHasImages && !existingHasImages ? next : existing),
+        starred: existing.starred === true || next.starred === true,
+        images: existingHasImages ? existing.images : next.images
+      };
+      continue;
+    }
+    seen.set(key, out.length);
+    out.push(next);
   }
   const sorted = out.sort((a, b) => {
     const byTime = Date.parse(a.at || '') - Date.parse(b.at || '');
@@ -547,6 +610,7 @@ function buildCodexArgs(session, prompt, options = {}) {
     const args = ['exec', 'resume', '--json', '--skip-git-repo-check'];
     if (session.model) args.push('-m', session.model);
     if (options.elevated) args.push('--dangerously-bypass-approvals-and-sandbox');
+    for (const imagePath of options.imagePaths || []) args.push('--image', imagePath);
     args.push(session.codexSessionId, '-');
     return args;
   }
@@ -558,6 +622,7 @@ function buildCodexArgs(session, prompt, options = {}) {
   } else if (session.sandbox) {
     args.push('-s', session.sandbox);
   }
+  for (const imagePath of options.imagePaths || []) args.push('--image', imagePath);
   args.push('-');
   return args;
 }
@@ -714,7 +779,7 @@ function runCodex(session, prompt, options = {}) {
     const next = !wasStopping ? session.queue?.shift() : null;
     if (next?.prompt) {
       scheduleSave();
-      runCodex(session, next.prompt, { elevated: next.elevated });
+      runCodex(session, next.prompt, { elevated: next.elevated, imagePaths: (next.images || []).map((image) => image.path) });
       return;
     }
 
@@ -847,6 +912,25 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true, expiresAt: auth.session.expiresAt });
   }
 
+  const uploadMatch = url.pathname.match(/^\/api\/uploads\/([^/]+)$/);
+  if (uploadMatch && req.method === 'GET') {
+    const fileName = decodeURIComponent(uploadMatch[1]);
+    if (!/^[a-f0-9-]+\.(png|jpg|webp)$/.test(fileName)) return json(res, 400, { error: 'invalid_upload_name' });
+    const filePath = path.join(UPLOAD_DIR, fileName);
+    const resolved = path.resolve(filePath);
+    if (!resolved.startsWith(`${path.resolve(UPLOAD_DIR)}${path.sep}`)) return json(res, 403, { error: 'forbidden' });
+    try {
+      await stat(resolved);
+      const ext = path.extname(resolved);
+      const type = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
+      res.writeHead(200, { 'content-type': type, 'cache-control': 'private, max-age=3600' });
+      createReadStream(resolved).pipe(res);
+    } catch {
+      json(res, 404, { error: 'upload_not_found' });
+    }
+    return;
+  }
+
   if (url.pathname === '/api/projects') {
     const projectsRoot = process.env.PROJECTS_ROOT || '/root/Projects';
     return json(res, 200, {
@@ -975,22 +1059,24 @@ async function handleApi(req, res, url) {
   if (sendMatch && req.method === 'POST') {
     const session = state.sessions[decodeURIComponent(sendMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
-    const body = await readJson(req);
+    const body = await readJson(req, 32 * 1024 * 1024);
     const prompt = String(body.prompt || '').trim();
     const elevated = body.elevated === true;
     const clientMessageId = String(body.clientMessageId || '').trim().slice(0, 120);
     const queueId = clientMessageId || randomUUID();
-    if (!prompt) return json(res, 400, { error: 'empty_prompt' });
-    addMessage(session, { role: 'user', text: prompt, elevated, clientMessageId });
+    const images = await savePromptImages(body.images || []);
+    if (!prompt && !images.length) return json(res, 400, { error: 'empty_prompt' });
+    const effectivePrompt = prompt || '请分析这张图片。';
+    addMessage(session, { role: 'user', text: effectivePrompt, elevated, clientMessageId, images });
     if (running.has(session.id)) {
       session.queue ||= [];
-      session.queue.push({ id: queueId, prompt, elevated, createdAt: nowIso(), clientMessageId });
+      session.queue.push({ id: queueId, prompt: effectivePrompt, elevated, images, createdAt: nowIso(), clientMessageId });
       session.updatedAt = nowIso();
       scheduleSave();
       return json(res, 202, { session: publicSession(session), queued: true });
     }
     try {
-      runCodex(session, prompt, { elevated });
+      runCodex(session, effectivePrompt, { elevated, imagePaths: images.map((image) => image.path) });
     } catch (error) {
       session.status = 'error';
       addMessage(session, { role: 'system', text: String(error.message || error), status: 'error' });

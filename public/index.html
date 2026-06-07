@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=22">
+    <link rel="stylesheet" href="/styles.css?v=30">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -73,7 +73,10 @@
             <button id="stopButton" class="stop-button" type="button" hidden>停止</button>
             <button id="commandButton" class="command-button" type="button">命令</button>
             <button id="favoritesButton" class="command-button" type="button" aria-pressed="false">收藏</button>
+            <button id="imageButton" class="command-button" type="button">图片</button>
+            <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
           </div>
+          <div id="imagePreviewStrip" class="image-preview-strip" hidden></div>
           <div class="prompt-row">
             <textarea id="promptInput" rows="1" placeholder="输入给 Codex 的指令..." disabled></textarea>
             <button id="sendButton" type="submit" disabled>发送</button>
@@ -178,6 +181,11 @@
       <div id="commandList" class="command-list"></div>
     </dialog>
 
+    <div id="imageViewer" class="image-viewer" hidden>
+      <button id="closeImageViewer" class="image-viewer-close" type="button" aria-label="关闭图片">×</button>
+      <img id="imageViewerImg" alt="图片预览">
+    </div>
+
     <script>
       window.cmcLoginNow = async function cmcLoginNow(event) {
         if (event) event.preventDefault();
@@ -232,6 +240,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=22" type="module"></script>
+    <script src="/app.js?v=30" type="module"></script>
   </body>
 </html>
