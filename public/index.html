@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#101215">
+    <title>Codex Console</title>
+    <link rel="manifest" href="/manifest.json?v=2">
+    <link rel="stylesheet" href="/styles.css?v=20">
+  </head>
+  <body>
+    <div id="loginView" class="login-view" hidden>
+      <main class="login-panel">
+        <p class="eyebrow">Private Console</p>
+        <h1>Codex</h1>
+        <p class="login-copy">输入本机控制台密码后，此设备会保留 30 天登录状态。</p>
+        <form id="loginForm" class="login-form">
+          <label for="password">访问密码</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" inputmode="text" required>
+          <button id="loginButton" type="submit" onclick="window.cmcLoginNow && window.cmcLoginNow(event)">登录</button>
+        </form>
+        <p id="loginError" class="error-text" role="status"></p>
+      </main>
+    </div>
+
+    <div id="appView" class="app-shell" hidden>
+      <aside id="sessionDrawer" class="session-drawer" aria-label="会话列表">
+        <div class="drawer-head">
+          <div>
+            <p class="eyebrow">Sessions</p>
+            <h2>Codex Console</h2>
+          </div>
+          <button id="closeDrawer" class="icon-button" type="button" aria-label="关闭会话列表">×</button>
+        </div>
+        <div class="drawer-action-row">
+          <button id="newSessionButton" class="new-session-button" type="button">新建</button>
+          <label class="compact-select-label">
+            <span>视图</span>
+            <select id="sessionViewMode" name="sessionViewMode">
+              <option value="recent">最近</option>
+              <option value="flat">平铺</option>
+              <option value="cwd">按目录</option>
+            </select>
+          </label>
+          <button id="settingsButton" class="drawer-settings-button" type="button">设置</button>
+        </div>
+        <div id="sessionList" class="session-list"></div>
+        <button id="logoutButton" class="ghost-button" type="button">退出登录</button>
+      </aside>
+
+      <div id="drawerScrim" class="drawer-scrim" hidden></div>
+
+      <main class="workspace">
+        <header class="topbar">
+          <button id="openDrawer" class="icon-button" type="button" aria-label="打开会话列表">☰</button>
+          <div class="top-title">
+            <strong id="activeTitle">Codex Console</strong>
+            <span id="activeMeta">未选择会话</span>
+          </div>
+          <span id="connectionBadge" class="connection-badge">离线</span>
+        </header>
+
+        <section id="emptyState" class="empty-state">
+          <p class="eyebrow">Ready</p>
+          <h2>选择或新建一个会话</h2>
+          <p>手机端只负责展示和发送指令，Codex 会在服务器后端持续运行。</p>
+        </section>
+
+        <section id="messagePane" class="message-pane" aria-live="polite"></section>
+
+        <form id="promptForm" class="prompt-bar">
+          <div class="prompt-tools">
+            <button id="stopButton" class="stop-button" type="button" hidden>停止</button>
+            <button id="commandButton" class="command-button" type="button">命令</button>
+          </div>
+          <div class="prompt-row">
+            <textarea id="promptInput" rows="1" placeholder="输入给 Codex 的指令..." disabled></textarea>
+            <button id="sendButton" type="submit" disabled>发送</button>
+          </div>
+        </form>
+      </main>
+    </div>
+
+    <dialog id="newSessionDialog" class="session-dialog">
+      <form id="newSessionForm" method="dialog">
+        <div class="dialog-head">
+          <h2>新建会话</h2>
+          <button class="icon-button" value="cancel" type="button" id="cancelNewSession" aria-label="关闭">×</button>
+        </div>
+        <label>
+          名称
+          <input name="title" placeholder="例如 openclaw 修复">
+        </label>
+        <label>
+          项目目录
+          <div class="field-with-button">
+            <input id="cwdInput" name="cwd" value="/root/Projects">
+            <button id="browseCwdButton" type="button">浏览</button>
+          </div>
+        </label>
+        <label>
+          模型
+          <input name="model" placeholder="留空使用 Codex 默认模型">
+        </label>
+        <div class="field-grid">
+          <label>
+            沙箱
+            <select name="sandbox">
+              <option value="workspace-write">workspace-write</option>
+              <option value="read-only">read-only</option>
+              <option value="danger-full-access">danger-full-access</option>
+            </select>
+          </label>
+          <label>
+            审批
+            <select name="approval">
+              <option value="on-request">on-request</option>
+              <option value="never">never</option>
+              <option value="untrusted">untrusted</option>
+            </select>
+          </label>
+        </div>
+        <button class="primary-wide" type="submit">创建</button>
+      </form>
+    </dialog>
+
+    <dialog id="directoryDialog" class="session-dialog">
+      <div class="dialog-head">
+        <h2>选择目录</h2>
+        <button class="icon-button" type="button" id="closeDirectoryDialog" aria-label="关闭目录选择">×</button>
+      </div>
+      <p id="directoryPath" class="directory-path"></p>
+      <div class="directory-actions">
+        <button id="directoryUpButton" class="ghost-button inline" type="button">上级目录</button>
+        <button id="chooseDirectoryButton" type="button">选择此目录</button>
+      </div>
+      <div id="directoryList" class="directory-list" role="list"></div>
+    </dialog>
+
+    <dialog id="settingsDialog" class="session-dialog">
+      <div class="dialog-head">
+        <h2>界面设置</h2>
+        <button class="icon-button" type="button" id="closeSettingsDialog" aria-label="关闭界面设置">×</button>
+      </div>
+      <div class="settings-form">
+        <label>
+          主题
+          <select id="themeSelect" name="theme">
+            <option value="graphite">石墨</option>
+            <option value="daylight">日光</option>
+            <option value="terminal">终端</option>
+            <option value="ocean">深海</option>
+          </select>
+        </label>
+        <label>
+          历史
+          <input id="historyLimitInput" name="historyLimit" type="number" min="0" max="5000" step="50" inputmode="numeric" list="historyLimitPresets" placeholder="500">
+          <datalist id="historyLimitPresets">
+            <option value="200"></option>
+            <option value="500"></option>
+            <option value="1000"></option>
+            <option value="0"></option>
+          </datalist>
+        </label>
+        <label class="settings-checkbox">
+          <input id="elevatedRun" type="checkbox">
+          <span>提权执行</span>
+        </label>
+      </div>
+    </dialog>
+
+    <dialog id="commandDialog" class="session-dialog">
+      <div class="dialog-head">
+        <h2>Codex 命令</h2>
+        <button class="icon-button" type="button" id="closeCommandDialog" aria-label="关闭命令选择">×</button>
+      </div>
+      <div id="commandList" class="command-list"></div>
+    </dialog>
+
+    <script>
+      window.cmcLoginNow = async function cmcLoginNow(event) {
+        if (event) event.preventDefault();
+        const form = document.querySelector('#loginForm');
+        const button = document.querySelector('#loginButton');
+        const error = document.querySelector('#loginError');
+        if (!form || !button || !error) return;
+
+        const password = new FormData(form).get('password');
+        if (!password) {
+          error.textContent = '请输入密码。';
+          return;
+        }
+
+        error.textContent = '';
+        button.disabled = true;
+        button.textContent = '登录中';
+        try {
+          const res = await fetch('/api/login', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ password })
+          });
+          if (!res.ok) {
+            error.textContent = res.status === 401 ? '密码不正确。' : `登录失败：HTTP ${res.status}`;
+            return;
+          }
+          error.textContent = '登录成功，正在进入...';
+          const loginView = document.querySelector('#loginView');
+          const appView = document.querySelector('#appView');
+          if (loginView) loginView.hidden = true;
+          if (appView) appView.hidden = false;
+          if (window.cmcAfterLogin) {
+            await window.cmcAfterLogin();
+          } else {
+            window.location.href = `/?logged_in=1&t=${Date.now()}`;
+          }
+        } catch (loginError) {
+          error.textContent = `登录失败：${loginError.message || loginError}`;
+        } finally {
+          button.disabled = false;
+          button.textContent = '登录';
+        }
+      };
+
+      document.addEventListener('DOMContentLoaded', function () {
+        const form = document.querySelector('#loginForm');
+        if (form && !form.dataset.fallbackBound) {
+          form.dataset.fallbackBound = '1';
+          form.addEventListener('submit', window.cmcLoginNow);
+        }
+      });
+    </script>
+    <script src="/app.js?v=20" type="module"></script>
+  </body>
+</html>

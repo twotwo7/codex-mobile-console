@@ -1,0 +1,10 @@
+{
+  "name": "codex-mobile-console",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Mobile-first Codex control console with persistent sessions",
+  "scripts": {
+    "start": "node server.js"
+  }
+}
