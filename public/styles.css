@@ -1117,24 +1117,6 @@ button:disabled {
   border-color: transparent;
 }
 
-.option-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 0 10px 10px;
-}
-
-.option-button {
-  min-height: 34px;
-  max-width: 100%;
-  padding: 7px 10px;
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--line);
-  font-size: 12px;
-  text-align: left;
-}
-
 .message-edit-icon {
   position: absolute;
   top: -8px;

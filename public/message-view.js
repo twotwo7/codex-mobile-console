@@ -16,9 +16,9 @@ export function createMessageView(actions) {
 
     const role = message.role || 'system';
     const collapsible = isCollapsibleMessage(message);
-    const defaultCollapsed = isDefaultCollapsedMessage(message);
+    const savedCollapsed = actions.getMessageCollapsed?.(message);
+    const defaultCollapsed = typeof savedCollapsed === 'boolean' ? savedCollapsed : isDefaultCollapsedMessage(message);
     const deferredText = collapsible && defaultCollapsed;
-    const optionActions = role === 'assistant' ? extractOptionActions(message.text || '') : [];
     article.innerHTML = `
       <div class="message-head">
         <span>${escapeHtml(role)}</span>
@@ -55,12 +55,12 @@ export function createMessageView(actions) {
         }
         button.textContent = collapsed ? '▸' : '▾';
         button.setAttribute('aria-label', collapsed ? '展开消息' : '折叠消息');
+        actions.setMessageCollapsed?.(message, collapsed);
       });
       article.querySelector('.message-head').append(button);
     }
 
     if (message.images?.length) article.append(renderMessageImages(message.images));
-    if (optionActions.length) article.append(renderOptionActions(optionActions));
     if (role === 'user') article.append(renderEditButton(message));
     return article;
   }
@@ -80,20 +80,6 @@ export function createMessageView(actions) {
       wrap.append(link);
     }
     return wrap;
-  }
-
-  function renderOptionActions(optionActions) {
-    const actionWrap = document.createElement('div');
-    actionWrap.className = 'option-actions';
-    for (const action of optionActions) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'option-button';
-      button.textContent = action.label;
-      button.addEventListener('click', () => actions.sendPrompt(action.value));
-      actionWrap.append(button);
-    }
-    return actionWrap;
   }
 
   function renderEditButton(message) {
@@ -187,23 +173,6 @@ function summarizeMessage(message) {
     : message.role === 'user' ? '输入' : '输出';
   const clipped = summarizeText(firstLine, 120);
   return `${prefix} · ${clipped}`;
-}
-
-function extractOptionActions(text) {
-  const actions = [];
-  const seen = new Set();
-  const lines = String(text).split('\n');
-  for (const line of lines) {
-    const match = line.trim().match(/^(?:选项\s*)?([1-9][0-9]?|[A-Za-z])[\.\)、:：]\s*(.{2,80})$/);
-    if (!match) continue;
-    const key = match[1];
-    const label = `${key}. ${match[2].trim()}`;
-    if (seen.has(label)) continue;
-    seen.add(label);
-    actions.push({ label, value: key });
-    if (actions.length >= 6) break;
-  }
-  return actions;
 }
 
 function deliveryLabel(message) {

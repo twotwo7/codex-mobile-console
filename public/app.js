@@ -2,7 +2,7 @@ import { createMessageScheduler } from './message-scheduler.js?v=1';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
-import { createMessageView } from './message-view.js?v=1';
+import { createMessageView } from './message-view.js?v=2';
 import { createPromptActions } from './prompt-actions.js?v=1';
 import { createQueueView } from './queue-view.js?v=1';
 import { createSkillView } from './skill-view.js?v=3';
@@ -26,6 +26,7 @@ const state = {
   expandedCwds: new Set(storedExpandedCwds),
   messages: new Map(),
   messagePages: new Map(),
+  messageCollapseStates: new Map(),
   lastSeq: new Map(),
   eventSource: null,
   contextRefreshTimer: null,
@@ -203,9 +204,10 @@ const promptActions = createPromptActions({
 
 const messageView = createMessageView({
   editPrompt,
+  getMessageCollapsed,
   openImageViewer,
   retryMessage: promptActions.retryMessage,
-  sendPrompt: promptActions.sendPrompt,
+  setMessageCollapsed,
   toggleStarred
 });
 
@@ -241,6 +243,46 @@ function cacheKey(id) {
 
 function pageCacheKey(id) {
   return `cmc.messagePage.${id}`;
+}
+
+function collapseStateKey(sessionId = state.activeId) {
+  return `cmc.messageCollapsed.${sessionId || 'global'}`;
+}
+
+function messageCollapseId(message) {
+  return message.clientMessageId
+    || (message.ids || []).find(Boolean)
+    || message.id
+    || (message.seq ? `seq:${message.seq}` : '');
+}
+
+function getMessageCollapsed(message) {
+  const key = messageCollapseId(message);
+  if (!key) return null;
+  const states = loadMessageCollapseStates();
+  if (!states || typeof states !== 'object' || !(key in states)) return null;
+  return states[key] === true;
+}
+
+function setMessageCollapsed(message, collapsed) {
+  const key = messageCollapseId(message);
+  if (!key) return;
+  const sessionId = state.activeId || 'global';
+  const states = loadMessageCollapseStates(sessionId);
+  const next = {
+    ...(states && typeof states === 'object' ? states : {}),
+    [key]: collapsed === true
+  };
+  state.messageCollapseStates.set(sessionId, next);
+  storageJsonSet(collapseStateKey(sessionId), next);
+}
+
+function loadMessageCollapseStates(sessionId = state.activeId || 'global') {
+  if (state.messageCollapseStates.has(sessionId)) return state.messageCollapseStates.get(sessionId);
+  const states = storageJsonGet(collapseStateKey(sessionId), {});
+  const safeStates = states && typeof states === 'object' ? states : {};
+  state.messageCollapseStates.set(sessionId, safeStates);
+  return safeStates;
 }
 
 function saveSessionCache() {
@@ -367,6 +409,7 @@ function cleanupIdleResources() {
     state.messages.delete(id);
     state.lastSeq.delete(id);
     state.messagePages.delete(id);
+    state.messageCollapseStates.delete(id);
   }
 }
 
@@ -1596,9 +1639,12 @@ function upsertMessage(sessionId, message) {
   messageScheduler.scheduleSave(sessionId);
 
   if (renderedMessage.status) {
+    const nextRunning = renderedMessage.status === 'running' || renderedMessage.status === 'stopping';
     const changed = mergeSessionSnapshot({
       id: sessionId,
       status: renderedMessage.status,
+      isRunning: nextRunning,
+      canStop: renderedMessage.status === 'running',
       queuedCount: renderedMessage.queuedCount,
       updatedAt: renderedMessage.at
     });
