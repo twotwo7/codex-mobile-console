@@ -54,6 +54,7 @@ let state = {
 const clients = new Map();
 const running = new Map();
 const codexUsageCache = new Map();
+const codexMessagesCache = new Map();
 const clockTick = Number(process.env.CLK_TCK || 100);
 let totalRequests = 0;
 let activeRequests = 0;
@@ -1396,6 +1397,20 @@ async function readCodexMessages(codexSessionId) {
   const session = await findCodexSession(codexSessionId);
   if (!session?.file) return [];
 
+  let info;
+  try {
+    info = await stat(session.file);
+  } catch {
+    return [];
+  }
+  const cached = codexMessagesCache.get(session.file);
+  if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) {
+    return cached.messages.map((message) => ({
+      ...message,
+      starred: message.starred === true || state.starredMessages?.[message.id] === true
+    }));
+  }
+
   const raw = await readFile(session.file, 'utf8');
   const messages = [];
   let seq = -1000000;
@@ -1458,7 +1473,12 @@ async function readCodexMessages(codexSessionId) {
     });
   }
 
-  return messages;
+  codexMessagesCache.set(session.file, { mtimeMs: info.mtimeMs, size: info.size, messages });
+  if (codexMessagesCache.size > 20) {
+    const firstKey = codexMessagesCache.keys().next().value;
+    codexMessagesCache.delete(firstKey);
+  }
+  return messages.map((message) => ({ ...message }));
 }
 
 async function deleteCodexSessionFile(codexSessionId) {
@@ -1575,6 +1595,12 @@ function sameDisplayMessage(left, right) {
   return Math.abs(leftAt - rightAt) <= 5 * 60 * 1000;
 }
 
+function displayMessageDedupeKey(message) {
+  const text = displayMessageText(message);
+  if (!text) return '';
+  return `${message.role || ''}\0${text}`;
+}
+
 function mergeDisplayMessage(existing, incoming) {
   const preferExisting = !displayIsCodex(existing) && displayIsCodex(incoming);
   const base = preferExisting ? incoming : existing;
@@ -1600,17 +1626,24 @@ async function displayMessagePage(session, options = {}) {
   const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.min(50000, Math.floor(rawOffset))) : 0;
   const codexMessages = session.codexSessionId ? await readCodexMessages(session.codexSessionId) : [];
   const out = [];
+  const byDedupeKey = new Map();
   for (const message of [...codexMessages, ...(session.messages || [])]) {
     const next = {
       ...message,
       starred: message.starred === true || state.starredMessages?.[message.id] === true
     };
-    const index = out.findIndex((item) => sameDisplayMessage(item, next));
+    const dedupeKey = displayMessageDedupeKey(next);
+    const candidates = dedupeKey ? byDedupeKey.get(dedupeKey) || [] : [];
+    const index = candidates.find((candidateIndex) => sameDisplayMessage(out[candidateIndex], next)) ?? -1;
     if (index >= 0) {
       out[index] = mergeDisplayMessage(out[index], next);
       continue;
     }
     out.push(next);
+    if (dedupeKey) {
+      candidates.push(out.length - 1);
+      byDedupeKey.set(dedupeKey, candidates);
+    }
   }
   const sorted = out.sort(compareDisplayMessages);
   const total = sorted.length;
