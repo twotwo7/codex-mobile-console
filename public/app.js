@@ -2,7 +2,7 @@ import { createMessageScheduler } from './message-scheduler.js?v=1';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
-import { createMessageView } from './message-view.js?v=2';
+import { createMessageView } from './message-view.js?v=3';
 import { createPromptActions } from './prompt-actions.js?v=1';
 import { createQueueView } from './queue-view.js?v=1';
 import { createSkillView } from './skill-view.js?v=3';
@@ -203,7 +203,6 @@ const promptActions = createPromptActions({
 });
 
 const messageView = createMessageView({
-  editPrompt,
   getMessageCollapsed,
   openImageViewer,
   retryMessage: promptActions.retryMessage,
@@ -2115,13 +2114,6 @@ function updateFavoritesButton() {
   el.favoritesButton.setAttribute('aria-label', state.showStarredOnly ? '显示全部消息' : '只看收藏');
   el.favoritesButton.title = state.showStarredOnly ? '显示全部消息' : '只看收藏';
   el.favoritesButton.textContent = state.showStarredOnly ? '★' : '☆';
-}
-
-function editPrompt(text, elevated) {
-  el.promptInput.value = text;
-  el.elevatedRun.checked = Boolean(elevated);
-  autoSizePrompt();
-  el.promptInput.focus();
 }
 
 el.promptForm.addEventListener('submit', async (event) => {

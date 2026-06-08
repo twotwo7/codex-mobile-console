@@ -1146,22 +1146,6 @@ button:disabled {
   border-color: transparent;
 }
 
-.message-edit-icon {
-  position: absolute;
-  top: -8px;
-  left: -8px;
-  width: 26px;
-  min-width: 26px;
-  min-height: 26px;
-  padding: 0;
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  font-size: 13px;
-  line-height: 1;
-}
-
 .queue-panel {
   align-self: stretch;
   display: grid;

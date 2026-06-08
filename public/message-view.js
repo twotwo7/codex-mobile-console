@@ -61,7 +61,6 @@ export function createMessageView(actions) {
     }
 
     if (message.images?.length) article.append(renderMessageImages(message.images));
-    if (role === 'user') article.append(renderEditButton(message));
     return article;
   }
 
@@ -80,16 +79,6 @@ export function createMessageView(actions) {
       wrap.append(link);
     }
     return wrap;
-  }
-
-  function renderEditButton(message) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'message-edit-icon';
-    button.textContent = '✏️';
-    button.setAttribute('aria-label', '重新编辑这条输入');
-    button.addEventListener('click', () => actions.editPrompt(message.text || '', message.elevated === true));
-    return button;
   }
 
   function renderMessageMenu(message) {
