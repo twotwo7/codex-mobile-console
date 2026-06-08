@@ -69,7 +69,10 @@ const state = {
   localRuntimeSnapshotAt: 0,
   localRuntimeSessionId: '',
   skills: [],
-  skillsLoadedAt: 0
+  skillsLoadedAt: 0,
+  skillDetails: new Map(),
+  selectedSkillName: '',
+  drawerPage: 'sessions'
 };
 
 const INITIAL_HISTORY_LIMIT = 120;
@@ -105,6 +108,10 @@ const el = {
   drawerScrim: document.querySelector('#drawerScrim'),
   openDrawer: document.querySelector('#openDrawer'),
   closeDrawer: document.querySelector('#closeDrawer'),
+  drawerSessionsTab: document.querySelector('#drawerSessionsTab'),
+  drawerSkillsTab: document.querySelector('#drawerSkillsTab'),
+  drawerSessionsPage: document.querySelector('#drawerSessionsPage'),
+  drawerSkillsPage: document.querySelector('#drawerSkillsPage'),
   sessionList: document.querySelector('#sessionList'),
   newSessionButton: document.querySelector('#newSessionButton'),
   settingsButton: document.querySelector('#settingsButton'),
@@ -162,6 +169,10 @@ const el = {
   skillSearch: document.querySelector('#skillSearch'),
   refreshSkillsButton: document.querySelector('#refreshSkillsButton'),
   skillList: document.querySelector('#skillList'),
+  drawerSkillSearch: document.querySelector('#drawerSkillSearch'),
+  drawerRefreshSkillsButton: document.querySelector('#drawerRefreshSkillsButton'),
+  drawerSkillList: document.querySelector('#drawerSkillList'),
+  drawerSkillDetail: document.querySelector('#drawerSkillDetail'),
   runtimeDialog: document.querySelector('#runtimeDialog'),
   closeRuntimeDialog: document.querySelector('#closeRuntimeDialog'),
   runtimePanel: document.querySelector('#runtimePanel'),
@@ -357,6 +368,28 @@ function setAuthView(isAuthed) {
 function setDrawer(open) {
   el.sessionDrawer.classList.toggle('open', open);
   el.drawerScrim.hidden = !open;
+  if (open && state.drawerPage === 'skills') {
+    loadSkills().catch((error) => {
+      renderDrawerSkillError(skillErrorCopy(error));
+    });
+  }
+}
+
+function setDrawerPage(page) {
+  state.drawerPage = page === 'skills' ? 'skills' : 'sessions';
+  const showingSkills = state.drawerPage === 'skills';
+  el.drawerSessionsTab.classList.toggle('active', !showingSkills);
+  el.drawerSkillsTab.classList.toggle('active', showingSkills);
+  el.drawerSessionsTab.setAttribute('aria-selected', String(!showingSkills));
+  el.drawerSkillsTab.setAttribute('aria-selected', String(showingSkills));
+  el.drawerSessionsPage.classList.toggle('active', !showingSkills);
+  el.drawerSkillsPage.classList.toggle('active', showingSkills);
+  if (showingSkills) {
+    renderDrawerSkillList();
+    loadSkills().catch((error) => {
+      renderDrawerSkillError(skillErrorCopy(error));
+    });
+  }
 }
 
 function openModal(dialog) {
@@ -1565,17 +1598,146 @@ function renderSkillList() {
   }
 }
 
+function skillFilter(query) {
+  const normalized = String(query || '').trim().toLowerCase();
+  return state.skills.filter((skill) => {
+    const haystack = `${skill.name} ${skill.title} ${skill.description} ${skill.source}`.toLowerCase();
+    return !normalized || haystack.includes(normalized);
+  });
+}
+
+function sourceLabel(source) {
+  const labels = {
+    codex: 'Codex',
+    'codex-system': 'Codex 系统',
+    agents: 'Agents',
+    'agents-system': 'Agents 系统'
+  };
+  return labels[source] || source || '未知来源';
+}
+
+function renderDrawerSkillList() {
+  if (!el.drawerSkillList) return;
+  const skills = skillFilter(el.drawerSkillSearch.value);
+  el.drawerSkillList.innerHTML = '';
+  if (!skills.length) {
+    el.drawerSkillList.innerHTML = '<p class="skill-empty">没有匹配的 skill</p>';
+    renderDrawerSkillEmpty();
+    return;
+  }
+  if (!state.selectedSkillName || !skills.some((skill) => skill.name === state.selectedSkillName)) {
+    state.selectedSkillName = skills[0].name;
+  }
+  for (const skill of skills) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'drawer-skill-item';
+    item.classList.toggle('active', skill.name === state.selectedSkillName);
+    item.innerHTML = `
+      <span><strong>$${escapeHtml(skill.name)}</strong><em>${escapeHtml(sourceLabel(skill.source))}</em></span>
+      <small>${escapeHtml(summarizeText(skill.description || skill.shortDescription || skill.title || '无说明', 76))}</small>
+    `;
+    item.addEventListener('click', () => {
+      state.selectedSkillName = skill.name;
+      renderDrawerSkillList();
+    });
+    el.drawerSkillList.append(item);
+  }
+  if (state.drawerPage === 'skills' && state.selectedSkillName) {
+    loadSkillDetail(state.selectedSkillName).catch((error) => {
+      renderDrawerSkillError(error?.message || '加载失败');
+    });
+  }
+}
+
+function renderDrawerSkillEmpty() {
+  if (!el.drawerSkillDetail) return;
+  el.drawerSkillDetail.innerHTML = `
+    <div class="drawer-skill-empty">
+      <strong>没有可显示的 skill</strong>
+      <span>刷新列表，或检查服务器上的 skill 目录。</span>
+    </div>
+  `;
+}
+
+function renderDrawerSkillError(message) {
+  if (el.drawerSkillList && state.drawerPage === 'skills') {
+    el.drawerSkillList.innerHTML = `<p class="skill-empty">${escapeHtml(message || '加载失败')}</p>`;
+  }
+  if (!el.drawerSkillDetail) return;
+  el.drawerSkillDetail.innerHTML = `
+    <div class="drawer-skill-empty">
+      <strong>加载失败</strong>
+      <span>${escapeHtml(message || '未知错误')}</span>
+    </div>
+  `;
+}
+
+function renderDrawerSkillLoading(name) {
+  if (!el.drawerSkillDetail) return;
+  el.drawerSkillDetail.innerHTML = `
+    <div class="drawer-skill-empty">
+      <strong>$${escapeHtml(name)}</strong>
+      <span>正在读取 SKILL.md...</span>
+    </div>
+  `;
+}
+
+function renderDrawerSkillDetail(skill) {
+  if (!el.drawerSkillDetail || !skill) return;
+  const description = skill.description || skill.shortDescription || skill.title || '无说明';
+  const updated = skill.updatedAt ? formatTime(skill.updatedAt) : '';
+  el.drawerSkillDetail.innerHTML = `
+    <div class="drawer-skill-detail-head">
+      <div>
+        <strong>$${escapeHtml(skill.name)}</strong>
+        <span>${escapeHtml(sourceLabel(skill.source))}${skill.system ? ' · 系统' : ''}${updated ? ` · ${escapeHtml(updated)}` : ''}</span>
+      </div>
+      <button class="ghost-button inline" type="button" data-insert-skill="${escapeHtml(skill.name)}">插入</button>
+    </div>
+    <p class="drawer-skill-desc">${escapeHtml(description)}</p>
+    <dl class="drawer-skill-meta">
+      <dt>文件</dt>
+      <dd>${escapeHtml(skill.path || '')}</dd>
+    </dl>
+    <pre class="drawer-skill-markdown">${escapeHtml(skill.markdown || '')}</pre>
+  `;
+  el.drawerSkillDetail.querySelector('[data-insert-skill]')?.addEventListener('click', () => {
+    insertPromptText(`$${skill.name} `);
+  });
+}
+
+async function loadSkillDetail(name) {
+  if (!name) {
+    renderDrawerSkillEmpty();
+    return;
+  }
+  const cached = state.skillDetails.get(name);
+  if (cached) {
+    renderDrawerSkillDetail(cached);
+    return;
+  }
+  renderDrawerSkillLoading(name);
+  const data = await api(`/api/skills/${encodeURIComponent(name)}`);
+  const skill = data.skill;
+  state.skillDetails.set(name, skill);
+  if (state.selectedSkillName === name) renderDrawerSkillDetail(skill);
+}
+
 async function loadSkills(force = false) {
   const fresh = Date.now() - state.skillsLoadedAt < 60 * 1000;
   if (!force && state.skills.length && fresh) {
     renderSkillList();
+    renderDrawerSkillList();
     return;
   }
   el.skillList.textContent = '加载中...';
+  if (state.drawerPage === 'skills') el.drawerSkillList.textContent = '加载中...';
   const data = await api('/api/skills');
   state.skills = data.skills || [];
   state.skillsLoadedAt = Date.now();
   renderSkillList();
+  renderDrawerSkillList();
 }
 
 async function openSkillDialog() {
@@ -2375,6 +2537,8 @@ el.logoutButton.addEventListener('click', async () => {
 el.openDrawer.addEventListener('click', () => setDrawer(true));
 el.closeDrawer.addEventListener('click', () => setDrawer(false));
 el.drawerScrim.addEventListener('click', () => setDrawer(false));
+el.drawerSessionsTab.addEventListener('click', () => setDrawerPage('sessions'));
+el.drawerSkillsTab.addEventListener('click', () => setDrawerPage('skills'));
 el.newSessionButton.addEventListener('click', () => openModal(el.dialog));
 el.commandButton.addEventListener('click', () => {
   renderCommandList();
@@ -2387,6 +2551,13 @@ el.skillSearch.addEventListener('input', renderSkillList);
 el.refreshSkillsButton.addEventListener('click', () => {
   loadSkills(true).catch((error) => {
     el.skillList.textContent = skillErrorCopy(error);
+  });
+});
+el.drawerSkillSearch.addEventListener('input', renderDrawerSkillList);
+el.drawerRefreshSkillsButton.addEventListener('click', () => {
+  state.skillDetails.clear();
+  loadSkills(true).catch((error) => {
+    renderDrawerSkillError(skillErrorCopy(error));
   });
 });
 el.runtimeButton.addEventListener('click', openRuntimeDialog);

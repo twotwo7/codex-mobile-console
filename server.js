@@ -994,6 +994,18 @@ function parseSkillMarkdown(raw, fallbackName) {
   };
 }
 
+function publicSkill(skill) {
+  return {
+    name: skill.name,
+    title: skill.title,
+    description: skill.description,
+    shortDescription: skill.shortDescription,
+    source: skill.source,
+    system: skill.system,
+    updatedAt: skill.updatedAt
+  };
+}
+
 function skillSource(root, file) {
   const normalizedRoot = path.resolve(root);
   const normalizedFile = path.resolve(file);
@@ -1057,6 +1069,20 @@ async function listInstalledSkills() {
     if (a.system !== b.system) return a.system ? 1 : -1;
     return a.name.localeCompare(b.name);
   });
+}
+
+async function getInstalledSkill(name) {
+  const normalizedName = String(name || '').trim();
+  if (!/^[A-Za-z0-9._-]{1,120}$/.test(normalizedName)) return null;
+  const skills = await listInstalledSkills();
+  const skill = skills.find((item) => item.name === normalizedName);
+  if (!skill?.path) return null;
+  const raw = await readFile(skill.path, 'utf8');
+  return {
+    ...publicSkill(skill),
+    markdown: raw,
+    path: skill.path
+  };
 }
 
 async function readCodexThreadNames() {
@@ -1863,6 +1889,13 @@ async function handleApi(req, res, url) {
       roots: SKILL_ROOTS,
       skills: await listInstalledSkills()
     });
+  }
+
+  const skillMatch = url.pathname.match(/^\/api\/skills\/([^/]+)$/);
+  if (skillMatch && req.method === 'GET') {
+    const skill = await getInstalledSkill(decodeURIComponent(skillMatch[1]));
+    if (!skill) return json(res, 404, { error: 'skill_not_found' });
+    return json(res, 200, { skill });
   }
 
   if (url.pathname === '/api/admin/restart' && req.method === 'POST') {

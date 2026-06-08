@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=64">
+    <link rel="stylesheet" href="/styles.css?v=65">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -32,20 +32,34 @@
           </div>
           <button id="closeDrawer" class="icon-button" type="button" aria-label="关闭会话列表">×</button>
         </div>
-        <div class="drawer-action-row">
-          <button id="newSessionButton" class="new-session-button" type="button">新建</button>
-          <label class="compact-select-label">
-            <span>视图</span>
-            <select id="sessionViewMode" name="sessionViewMode">
-              <option value="recent">最近</option>
-              <option value="flat">平铺</option>
-              <option value="cwd">按目录</option>
-              <option value="trash">回收站</option>
-            </select>
-          </label>
-          <button id="settingsButton" class="drawer-settings-button" type="button">设置</button>
+        <div class="drawer-tabs" role="tablist" aria-label="侧栏页面">
+          <button id="drawerSessionsTab" class="active" type="button" aria-selected="true">会话</button>
+          <button id="drawerSkillsTab" type="button" aria-selected="false">Skills</button>
         </div>
-        <div id="sessionList" class="session-list"></div>
+        <section id="drawerSessionsPage" class="drawer-page active">
+          <div class="drawer-action-row">
+            <button id="newSessionButton" class="new-session-button" type="button">新建</button>
+            <label class="compact-select-label">
+              <span>视图</span>
+              <select id="sessionViewMode" name="sessionViewMode">
+                <option value="recent">最近</option>
+                <option value="flat">平铺</option>
+                <option value="cwd">按目录</option>
+                <option value="trash">回收站</option>
+              </select>
+            </label>
+            <button id="settingsButton" class="drawer-settings-button" type="button">设置</button>
+          </div>
+          <div id="sessionList" class="session-list"></div>
+        </section>
+        <section id="drawerSkillsPage" class="drawer-page">
+          <div class="drawer-skill-toolbar">
+            <input id="drawerSkillSearch" type="search" placeholder="搜索 skill..." autocomplete="off">
+            <button id="drawerRefreshSkillsButton" class="ghost-button inline" type="button">刷新</button>
+          </div>
+          <div id="drawerSkillList" class="drawer-skill-list">加载中...</div>
+          <article id="drawerSkillDetail" class="drawer-skill-detail">选择一个 skill 查看说明和实现。</article>
+        </section>
         <button id="logoutButton" class="ghost-button" type="button">退出登录</button>
       </aside>
 
@@ -306,6 +320,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=64" type="module"></script>
+    <script src="/app.js?v=65" type="module"></script>
   </body>
 </html>
