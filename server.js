@@ -14,13 +14,14 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const RESTART_MARKER_FILE = path.join(DATA_DIR, 'restart-marker.json');
 const PASSWORD_FILE = path.join(DATA_DIR, 'admin-password.txt');
+const SKILL_REGISTRY_FILE = path.join(DATA_DIR, 'skill-registry.json');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const CODEX_HOME = process.env.CODEX_HOME || '/root/.codex';
 const SKILL_ROOTS = (process.env.SKILL_ROOTS || `${path.join(CODEX_HOME, 'skills')},/root/.agents/skills`)
   .split(',')
   .map((item) => item.trim())
   .filter(Boolean);
-const CODEX_BIN = process.env.CODEX_BIN || '/root/.nvm/versions/node/v22.22.0/bin/codex';
+const CODEX_BIN = process.env.CODEX_BIN || '/usr/bin/codex';
 const CODEX_NODE = process.env.CODEX_NODE || process.execPath;
 const CODEX_BIN_DIR = path.dirname(CODEX_BIN);
 const COOKIE_NAME = 'cmc_session';
@@ -57,6 +58,21 @@ const clockTick = Number(process.env.CLK_TCK || 100);
 let totalRequests = 0;
 let activeRequests = 0;
 let packageMetaCache = null;
+let skillRegistry = {
+  version: 1,
+  roots: SKILL_ROOTS,
+  skills: [],
+  lastScanAt: '',
+  scanStatus: 'idle',
+  scanError: '',
+  lastSummaryAt: '',
+  summaryStatus: 'idle',
+  summaryError: ''
+};
+let skillScanPromise = null;
+let skillSummaryPromise = null;
+let skillMaintenanceTimer = null;
+const SKILL_SUMMARY_ENABLED = process.env.SKILL_SUMMARY_ENABLED === '1';
 
 async function exists(file) {
   try {
@@ -70,6 +86,7 @@ async function exists(file) {
 async function init() {
   await mkdir(DATA_DIR, { recursive: true });
   await mkdir(UPLOAD_DIR, { recursive: true });
+  await loadSkillRegistry();
   if (!(await exists(PASSWORD_FILE))) {
     const password = randomBytes(18).toString('base64url');
     await writeFile(PASSWORD_FILE, `${password}\n`, { mode: 0o600 });
@@ -96,6 +113,7 @@ async function init() {
   pruneAuthSessions();
   startStorageMaintenance();
   startRunMonitor();
+  startSkillMaintenance();
 }
 
 function normalizeStorageSettings(value = {}) {
@@ -994,6 +1012,57 @@ function parseSkillMarkdown(raw, fallbackName) {
   };
 }
 
+function defaultSkillRegistry() {
+  return {
+    version: 1,
+    roots: SKILL_ROOTS,
+    skills: [],
+    lastScanAt: '',
+    scanStatus: 'idle',
+    scanError: '',
+    lastSummaryAt: '',
+    summaryStatus: 'idle',
+    summaryError: ''
+  };
+}
+
+async function loadSkillRegistry() {
+  try {
+    const parsed = JSON.parse(await readFile(SKILL_REGISTRY_FILE, 'utf8'));
+    skillRegistry = {
+      ...defaultSkillRegistry(),
+      ...parsed,
+      roots: SKILL_ROOTS,
+      skills: Array.isArray(parsed.skills) ? parsed.skills : []
+    };
+  } catch {
+    skillRegistry = defaultSkillRegistry();
+  }
+}
+
+async function saveSkillRegistry() {
+  const tmp = `${SKILL_REGISTRY_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(skillRegistry, null, 2), { mode: 0o600 });
+  await rename(tmp, SKILL_REGISTRY_FILE);
+}
+
+function publicSkillRegistry() {
+  return {
+    roots: skillRegistry.roots,
+    skills: skillRegistry.skills,
+    lastScanAt: skillRegistry.lastScanAt,
+    scanStatus: skillRegistry.scanStatus,
+    scanError: skillRegistry.scanError,
+    lastSummaryAt: skillRegistry.lastSummaryAt,
+    summaryStatus: SKILL_SUMMARY_ENABLED ? skillRegistry.summaryStatus : 'disabled',
+    summaryError: skillRegistry.summaryError
+  };
+}
+
+function skillContentHash(raw) {
+  return createHash('sha256').update(String(raw || '')).digest('hex');
+}
+
 function skillSource(root, file) {
   const normalizedRoot = path.resolve(root);
   const normalizedFile = path.resolve(file);
@@ -1044,6 +1113,7 @@ async function listInstalledSkills() {
           source,
           system: source.includes('system'),
           path: file,
+          hash: skillContentHash(raw),
           updatedAt: new Date(info.mtimeMs).toISOString()
         };
         const existing = byName.get(skill.name);
@@ -1056,6 +1126,178 @@ async function listInstalledSkills() {
   return [...byName.values()].sort((a, b) => {
     if (a.system !== b.system) return a.system ? 1 : -1;
     return a.name.localeCompare(b.name);
+  });
+}
+
+function refreshSkillRegistry(options = {}) {
+  if (skillScanPromise) return skillScanPromise;
+  skillRegistry.scanStatus = 'scanning';
+  skillRegistry.scanError = '';
+  saveSkillRegistry().catch(() => {});
+  skillScanPromise = Promise.resolve()
+    .then(async () => {
+      const skills = await listInstalledSkills();
+      const previous = new Map((skillRegistry.skills || []).map((skill) => [`${skill.source}:${skill.name}`, skill]));
+      skillRegistry = {
+        ...skillRegistry,
+        version: 1,
+        roots: SKILL_ROOTS,
+        skills: skills.map((skill) => {
+          const old = previous.get(`${skill.source}:${skill.name}`);
+          return {
+            ...skill,
+            summary: old?.hash === skill.hash ? old.summary || null : null,
+            summaryStatus: old?.hash === skill.hash && old?.summary ? 'ready' : 'pending',
+            summaryUpdatedAt: old?.hash === skill.hash ? old?.summaryUpdatedAt || '' : ''
+          };
+        }),
+        lastScanAt: nowIso(),
+        scanStatus: 'idle',
+        scanError: ''
+      };
+      await saveSkillRegistry();
+      if (SKILL_SUMMARY_ENABLED && options.summarize === true) triggerSkillSummaryMaintenance();
+    })
+    .catch(async (error) => {
+      skillRegistry.scanStatus = 'error';
+      skillRegistry.scanError = String(error.message || error).slice(0, 300);
+      await saveSkillRegistry().catch(() => {});
+    })
+    .finally(() => {
+      skillScanPromise = null;
+    });
+  return skillScanPromise;
+}
+
+function startSkillMaintenance() {
+  clearInterval(skillMaintenanceTimer);
+  setTimeout(() => {
+    refreshSkillRegistry({ summarize: false }).catch(() => {});
+  }, 2000).unref();
+  skillMaintenanceTimer = setInterval(() => {
+    refreshSkillRegistry({ summarize: false }).catch(() => {});
+  }, 15 * 60 * 1000);
+  skillMaintenanceTimer.unref();
+}
+
+function triggerSkillSummaryMaintenance() {
+  if (skillSummaryPromise) return skillSummaryPromise;
+  skillSummaryPromise = Promise.resolve()
+    .then(async () => {
+      if (running.size > 0) return;
+      const pending = (skillRegistry.skills || []).find((skill) => skill.summaryStatus !== 'ready');
+      if (!pending) return;
+      skillRegistry.summaryStatus = 'summarizing';
+      skillRegistry.summaryError = '';
+      await saveSkillRegistry().catch(() => {});
+      const summary = await summarizeSkillWithCodex(pending);
+      skillRegistry.skills = (skillRegistry.skills || []).map((skill) => {
+        if (skill.source !== pending.source || skill.name !== pending.name) return skill;
+        return {
+          ...skill,
+          summary,
+          summaryStatus: 'ready',
+          summaryUpdatedAt: nowIso()
+        };
+      });
+      skillRegistry.lastSummaryAt = nowIso();
+      skillRegistry.summaryStatus = 'idle';
+      skillRegistry.summaryError = '';
+      await saveSkillRegistry();
+    })
+    .catch(async (error) => {
+      skillRegistry.summaryStatus = 'error';
+      skillRegistry.summaryError = String(error.message || error).slice(0, 300);
+      await saveSkillRegistry().catch(() => {});
+    })
+    .finally(() => {
+      skillSummaryPromise = null;
+    });
+  return skillSummaryPromise;
+}
+
+async function summarizeSkillWithCodex(skill) {
+  const raw = await readFile(skill.path, 'utf8');
+  const fallback = {
+    title: skill.title || skill.name,
+    overview: skill.description || skill.shortDescription || '暂无说明',
+    bullets: [
+      skill.description || skill.shortDescription || '读取本地 SKILL.md 指令，在匹配任务时执行。',
+      `来源：${skill.source}`
+    ]
+  };
+  const prompt = [
+    '请为下面这个 Codex skill 生成中文概要，只输出 JSON，不要输出 markdown。',
+    '格式：{"title":"一句话标题","overview":"80字以内介绍","bullets":["适用场景","使用方式","实现要点"]}',
+    '不要直接展示或大段复述 SKILL.md 原文。',
+    `skill: ${skill.name}`,
+    `source: ${skill.source}`,
+    `SKILL.md:\n${raw.slice(0, 18000)}`
+  ].join('\n\n');
+  try {
+    const output = await runCodexOneShot(prompt, { cwd: '/root/Projects', timeoutMs: 30000 });
+    const parsed = JSON.parse((output.match(/\{[\s\S]*\}/) || [output])[0]);
+    return {
+      title: String(parsed.title || fallback.title).slice(0, 100),
+      overview: String(parsed.overview || fallback.overview).slice(0, 220),
+      bullets: Array.isArray(parsed.bullets) ? parsed.bullets.map((item) => String(item).slice(0, 120)).slice(0, 4) : fallback.bullets,
+      generatedBy: 'codex-background',
+      generatedAt: nowIso()
+    };
+  } catch {
+    return {
+      ...fallback,
+      generatedBy: 'local-fallback',
+      generatedAt: nowIso()
+    };
+  }
+}
+
+function runCodexOneShot(prompt, options = {}) {
+  return new Promise((resolve, reject) => {
+    const command = CODEX_BIN.endsWith('.js') ? CODEX_NODE : CODEX_BIN;
+    const args = ['exec', '--json', '-C', options.cwd || '/root/Projects', '--skip-git-repo-check', '-'];
+    const commandArgs = CODEX_BIN.endsWith('.js') ? [CODEX_BIN, ...args] : args;
+    const child = spawn(command, commandArgs, {
+      cwd: options.cwd || '/root/Projects',
+      detached: false,
+      env: {
+        ...process.env,
+        PATH: `${CODEX_BIN_DIR}:${process.env.PATH || ''}`,
+        NO_COLOR: '1'
+      },
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      reject(new Error('codex_summary_timeout'));
+    }, options.timeoutMs || 30000);
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on('close', () => {
+      clearTimeout(timer);
+      const texts = [];
+      for (const line of stdout.split('\n')) {
+        try {
+          const event = JSON.parse(line);
+          const text = deriveMessageFromCodexEvent(event)?.text;
+          if (text) texts.push(text);
+        } catch {
+          if (line.trim()) texts.push(line.trim());
+        }
+      }
+      const output = texts.join('\n').trim();
+      if (!output && stderr.trim()) return reject(new Error(stderr.trim().slice(0, 300)));
+      resolve(output);
+    });
+    child.stdin.write(prompt);
+    child.stdin.end();
   });
 }
 
@@ -1859,9 +2101,15 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === '/api/skills' && req.method === 'GET') {
-    return json(res, 200, {
-      roots: SKILL_ROOTS,
-      skills: await listInstalledSkills()
+    return json(res, 200, publicSkillRegistry());
+  }
+
+  if (url.pathname === '/api/skills/refresh' && req.method === 'POST') {
+    refreshSkillRegistry({ summarize: false }).catch(() => {});
+    return json(res, 202, {
+      ok: true,
+      ...publicSkillRegistry(),
+      scanStatus: skillScanPromise ? 'scanning' : skillRegistry.scanStatus
     });
   }
 

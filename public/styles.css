@@ -817,6 +817,8 @@ button:disabled {
 .prompt-bar {
   display: grid;
   gap: 8px;
+  max-height: min(46svh, 360px);
+  overflow: auto;
   padding: 12px 14px calc(12px + env(safe-area-inset-bottom));
   border-top: 1px solid var(--line);
   background: var(--chrome-strong);
@@ -871,6 +873,7 @@ button:disabled {
 .image-preview-strip {
   display: flex;
   gap: 8px;
+  max-width: 100%;
   overflow-x: auto;
   padding-bottom: 2px;
 }
@@ -925,6 +928,8 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .image-quick-actions button {
@@ -1555,6 +1560,13 @@ button:disabled {
 
 .skill-toolbar input {
   min-width: 0;
+}
+
+.skill-status {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .skill-list {

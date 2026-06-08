@@ -161,6 +161,7 @@ const el = {
   closeSkillDialog: document.querySelector('#closeSkillDialog'),
   skillSearch: document.querySelector('#skillSearch'),
   refreshSkillsButton: document.querySelector('#refreshSkillsButton'),
+  skillStatus: document.querySelector('#skillStatus'),
   skillList: document.querySelector('#skillList'),
   runtimeDialog: document.querySelector('#runtimeDialog'),
   closeRuntimeDialog: document.querySelector('#closeRuntimeDialog'),
@@ -1541,7 +1542,12 @@ function renderCommandList() {
 function renderSkillList() {
   const query = String(el.skillSearch.value || '').trim().toLowerCase();
   const skills = state.skills.filter((skill) => {
-    const haystack = `${skill.name} ${skill.title} ${skill.description} ${skill.source}`.toLowerCase();
+    const summaryText = [
+      skill.summary?.title,
+      skill.summary?.overview,
+      ...(skill.summary?.bullets || [])
+    ].filter(Boolean).join(' ');
+    const haystack = `${skill.name} ${skill.title} ${skill.description} ${skill.source} ${summaryText}`.toLowerCase();
     return !query || haystack.includes(query);
   });
   el.skillList.innerHTML = '';
@@ -1553,9 +1559,11 @@ function renderSkillList() {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'skill-item';
+    const summary = skill.summary?.overview || skill.description || skill.shortDescription || skill.title || '暂无说明';
+    const status = skill.summaryStatus === 'ready' ? '已总结' : skill.source || '';
     item.innerHTML = `
-      <span class="skill-row"><strong>$${escapeHtml(skill.name)}</strong><em>${escapeHtml(skill.source || '')}</em></span>
-      <span>${escapeHtml(skill.description || skill.shortDescription || skill.title || '无说明')}</span>
+      <span class="skill-row"><strong>$${escapeHtml(skill.name)}</strong><em>${escapeHtml(status)}</em></span>
+      <span>${escapeHtml(summary)}</span>
     `;
     item.addEventListener('click', () => {
       insertPromptText(`$${skill.name} `);
@@ -1563,6 +1571,16 @@ function renderSkillList() {
     });
     el.skillList.append(item);
   }
+}
+
+function renderSkillStatus(data = {}) {
+  if (!el.skillStatus) return;
+  const scanned = data.lastScanAt ? `扫描 ${formatTime(data.lastScanAt)}` : '尚未完成扫描';
+  const scan = data.scanStatus && data.scanStatus !== 'idle' ? ` · ${data.scanStatus}` : '';
+  const summary = data.summaryStatus && !['idle', 'disabled'].includes(data.summaryStatus) ? ` · 总结 ${data.summaryStatus}` : '';
+  const count = Number.isFinite(Number(data.skills?.length)) ? ` · ${data.skills.length} 个` : '';
+  const error = data.scanError || data.summaryError;
+  el.skillStatus.textContent = `${scanned}${count}${scan}${summary}${error ? ` · ${error}` : ''}`;
 }
 
 async function loadSkills(force = false) {
@@ -1575,7 +1593,26 @@ async function loadSkills(force = false) {
   const data = await api('/api/skills');
   state.skills = data.skills || [];
   state.skillsLoadedAt = Date.now();
+  renderSkillStatus(data);
   renderSkillList();
+}
+
+async function refreshSkillsInBackground() {
+  el.refreshSkillsButton.disabled = true;
+  el.skillStatus.textContent = '已提交后台更新，列表会从缓存读取。';
+  try {
+    const data = await api('/api/skills/refresh', { method: 'POST' });
+    renderSkillStatus(data);
+    setTimeout(() => {
+      loadSkills(true).catch((error) => {
+        el.skillStatus.textContent = error.message || '刷新状态失败';
+      });
+    }, 1200);
+  } catch (error) {
+    el.skillStatus.textContent = error.message || '提交后台更新失败';
+  } finally {
+    el.refreshSkillsButton.disabled = false;
+  }
 }
 
 async function openSkillDialog() {
@@ -2378,9 +2415,7 @@ el.skillButton.addEventListener('click', openSkillDialog);
 el.closeSkillDialog.addEventListener('click', () => closeModal(el.skillDialog));
 el.skillSearch.addEventListener('input', renderSkillList);
 el.refreshSkillsButton.addEventListener('click', () => {
-  loadSkills(true).catch((error) => {
-    el.skillList.textContent = error.message || '加载失败';
-  });
+  refreshSkillsInBackground();
 });
 el.runtimeButton.addEventListener('click', openRuntimeDialog);
 el.closeRuntimeDialog.addEventListener('click', closeRuntimeDialog);
@@ -2486,7 +2521,7 @@ async function loadDirectories(dir) {
 
 function autoSizePrompt() {
   el.promptInput.style.height = 'auto';
-  const maxHeight = Math.min(Math.round(window.innerHeight * 0.4), 320);
+  const maxHeight = Math.min(Math.round(window.innerHeight * 0.28), 180);
   el.promptInput.style.height = `${Math.min(el.promptInput.scrollHeight, maxHeight)}px`;
 }
 
