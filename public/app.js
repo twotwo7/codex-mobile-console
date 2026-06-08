@@ -958,13 +958,6 @@ function renderMessages(sessionId, options = {}) {
   el.messagePane.innerHTML = '';
   const olderControl = renderOlderMessagesControl(sessionId);
   if (olderControl) el.messagePane.append(olderControl);
-  const allMessages = state.showStarredOnly ? messages : loadMessages(sessionId);
-  if (!state.showStarredOnly && allMessages.length > messages.length) {
-    const clipped = document.createElement('div');
-    clipped.className = 'session-loading compact';
-    clipped.textContent = `仅渲染最近 ${messages.length} 条，向上可加载更早内容`;
-    el.messagePane.append(clipped);
-  }
   if (state.showStarredOnly && !messages.length) {
     el.messagePane.append(renderFavoriteEmpty());
   }
@@ -1026,7 +1019,11 @@ function renderOlderMessagesControl(sessionId) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'older-messages-button';
-  button.textContent = page.loading ? '加载中...' : `加载更早 · ${page.offset}/${page.total || '?'}`;
+  const shown = displayMessages(sessionId).length;
+  const total = Number(page.total || 0);
+  button.textContent = page.loading ? '加载中...' : '加载更早';
+  button.title = total ? `当前显示 ${shown} 条，共 ${total} 条` : `当前显示 ${shown} 条`;
+  button.setAttribute('aria-label', page.loading ? '正在加载更早消息' : `${button.title}，加载更早消息`);
   button.disabled = page.loading === true;
   button.addEventListener('click', () => loadOlderMessages(sessionId));
   return button;
