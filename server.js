@@ -397,50 +397,6 @@ function publicSession(session) {
   };
 }
 
-function pendingSupplements(session) {
-  return (session.messages || []).filter((message) => message.role === 'supplement' && message.used !== true);
-}
-
-function promptWithSupplements(session, prompt) {
-  const supplements = pendingSupplements(session);
-  if (!supplements.length) return { prompt, supplements, imagePaths: [] };
-  const supplementText = supplements
-    .map((message, index) => {
-      const imageCount = message.images?.length ? `（含图片 ${message.images.length} 张）` : '';
-      return `${index + 1}. ${message.text}${imageCount}`;
-    })
-    .join('\n');
-  return {
-    prompt: `${prompt}\n\n补充信息：\n${supplementText}`,
-    supplements,
-    imagePaths: supplements.flatMap((message) => (message.images || []).map((image) => image.path).filter(Boolean))
-  };
-}
-
-function markSupplementsUsed(supplements, runMessageId) {
-  const usedAt = nowIso();
-  for (const message of supplements || []) {
-    message.used = true;
-    message.usedAt = usedAt;
-    message.usedBy = runMessageId || '';
-    message.runState = 'completed';
-    message.delivery = 'completed';
-  }
-}
-
-function restoreSupplementsUsedBy(session, runMessageId) {
-  if (!runMessageId) return;
-  for (const message of session.messages || []) {
-    if (message.role !== 'supplement' || message.usedBy !== runMessageId) continue;
-    message.used = false;
-    delete message.usedAt;
-    delete message.usedBy;
-    message.runState = 'submitted';
-    message.delivery = 'supplement';
-    broadcastEvent(session.id, 'message_update', message);
-  }
-}
-
 function parseProcStat(raw) {
   const end = raw.lastIndexOf(')');
   if (end < 0) return null;
@@ -1989,15 +1945,10 @@ function runCodex(session, prompt, options = {}) {
     });
 
     if (next?.prompt) {
-      const prepared = promptWithSupplements(session, next.prompt);
-      markSupplementsUsed(prepared.supplements, next.messageId);
       scheduleSave();
-      runCodex(session, prepared.prompt, {
+      runCodex(session, next.prompt, {
         elevated: next.elevated,
-        imagePaths: [
-          ...(next.images || []).map((image) => image.path),
-          ...(prepared.imagePaths || [])
-        ],
+        imagePaths: (next.images || []).map((image) => image.path),
         messageId: next.messageId,
         clientMessageId: next.clientMessageId
       });
@@ -2437,24 +2388,11 @@ async function handleApi(req, res, url) {
     const body = await readJson(req, 32 * 1024 * 1024);
     const prompt = String(body.prompt || '').trim();
     const elevated = body.elevated === true;
-    const mode = body.mode === 'supplement' ? 'supplement' : 'run';
     const clientMessageId = String(body.clientMessageId || '').trim().slice(0, 120);
     const queueId = clientMessageId || randomUUID();
     const images = await savePromptImages(body.images || []);
     if (!prompt && !images.length) return json(res, 400, { error: 'empty_prompt' });
     const effectivePrompt = prompt || '请分析这张图片。';
-    if (mode === 'supplement') {
-      const message = addMessage(session, {
-        role: 'supplement',
-        text: effectivePrompt,
-        elevated,
-        clientMessageId,
-        images,
-        runState: 'submitted',
-        delivery: 'supplement'
-      });
-      return json(res, 202, { session: publicSession(session), supplement: true, message });
-    }
     const userMessage = addMessage(session, {
       role: 'user',
       text: effectivePrompt,
@@ -2471,15 +2409,10 @@ async function handleApi(req, res, url) {
       scheduleSave();
       return json(res, 202, { session: publicSession(session), queued: true });
     }
-    const prepared = promptWithSupplements(session, effectivePrompt);
-    markSupplementsUsed(prepared.supplements, userMessage.id);
     try {
-      runCodex(session, prepared.prompt, {
+      runCodex(session, effectivePrompt, {
         elevated,
-        imagePaths: [
-          ...images.map((image) => image.path),
-          ...(prepared.imagePaths || [])
-        ],
+        imagePaths: images.map((image) => image.path),
         messageId: userMessage.id,
         clientMessageId
       });
@@ -2492,44 +2425,6 @@ async function handleApi(req, res, url) {
   }
 
   const queueMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/queue\/([^/]+)$/);
-  if (queueMatch && req.method === 'POST') {
-    const session = state.sessions[decodeURIComponent(queueMatch[1])];
-    if (!session) return json(res, 404, { error: 'session_not_found' });
-    const queueId = decodeURIComponent(queueMatch[2]);
-    const index = (session.queue || []).findIndex((item) => item.id === queueId || item.clientMessageId === queueId);
-    if (index < 0) return json(res, 404, { error: 'queue_item_not_found', session: publicSession(session) });
-    const [removed] = session.queue.splice(index, 1);
-    restoreSupplementsUsedBy(session, removed?.messageId);
-    let message = (session.messages || []).find((item) => item.id === removed?.messageId || item.clientMessageId === removed?.clientMessageId);
-    if (message) {
-      message.role = 'supplement';
-      message.text = removed.displayPrompt || message.text || removed.prompt || '';
-      message.images = removed.images || message.images || [];
-      message.runState = 'submitted';
-      message.delivery = 'supplement';
-      message.pending = false;
-      message.failed = false;
-      message.used = false;
-      message.convertedFromQueue = true;
-      delete message.completedAt;
-      broadcastEvent(session.id, 'message_update', message);
-    } else {
-      message = addMessage(session, {
-        role: 'supplement',
-        text: removed.displayPrompt || removed.prompt || '',
-        elevated: removed.elevated === true,
-        clientMessageId: removed.clientMessageId || '',
-        images: removed.images || [],
-        runState: 'submitted',
-        delivery: 'supplement',
-        convertedFromQueue: true
-      });
-    }
-    session.updatedAt = nowIso();
-    scheduleSave();
-    return json(res, 200, { ok: true, session: publicSession(session), message });
-  }
-
   if (queueMatch && req.method === 'DELETE') {
     const session = state.sessions[decodeURIComponent(queueMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });

@@ -1282,18 +1282,6 @@ button:disabled {
   border: 1px solid var(--line);
 }
 
-.queue-supplement-button {
-  width: 26px;
-  min-width: 26px;
-  min-height: 26px;
-  padding: 0;
-  border: 1px solid var(--line);
-  background: var(--surface-2);
-  color: var(--accent-strong);
-  font-size: 16px;
-  line-height: 1;
-}
-
 .favorite-empty {
   align-self: center;
   padding: 10px 12px;

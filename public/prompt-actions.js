@@ -14,7 +14,6 @@ export function createPromptActions(options) {
     state,
     storageSet,
     updateFavoritesButton,
-    updateMessage,
     upsertMessage
   } = options;
 
@@ -50,16 +49,16 @@ export function createPromptActions(options) {
     renderPendingImages();
   }
 
-  function optimisticMessage({ clientMessageId, elevated, images, mode, prompt }) {
+  function optimisticMessage({ clientMessageId, elevated, images, prompt }) {
     return {
       at: new Date().toISOString(),
-      role: mode === 'supplement' ? 'supplement' : 'user',
+      role: 'user',
       text: prompt || '请分析这张图片。',
       elevated,
       clientMessageId,
       images: images.map((image) => ({ name: image.name, type: image.type, dataUrl: image.data })),
       retryImages: images,
-      delivery: mode === 'supplement' ? 'supplement' : 'sending',
+      delivery: 'sending',
       pending: true
     };
   }
@@ -85,7 +84,6 @@ export function createPromptActions(options) {
   async function sendPrompt(rawPrompt, opts = {}) {
     const prompt = String(rawPrompt || '').trim();
     const images = opts.images ? [...opts.images] : [...state.pendingImages];
-    const mode = opts.mode === 'supplement' ? 'supplement' : 'run';
     if ((!prompt && !images.length) || !state.activeId) return;
 
     const sessionId = state.activeId;
@@ -99,18 +97,18 @@ export function createPromptActions(options) {
     const elevated = Boolean(el.elevatedRun.checked);
     const clientMessageId = createClientMessageId();
     setSendState('sending');
-    upsertMessage(sessionId, optimisticMessage({ clientMessageId, elevated, images, mode, prompt }));
+    upsertMessage(sessionId, optimisticMessage({ clientMessageId, elevated, images, prompt }));
     scrollMessagesToBottom();
 
     try {
       const data = await api(`/api/sessions/${sessionId}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ prompt, elevated, clientMessageId, images, mode })
+        body: JSON.stringify({ prompt, elevated, clientMessageId, images })
       });
       markLocalClientMessage(sessionId, clientMessageId, {
         pending: false,
-        delivery: data.supplement === true ? 'supplement' : data.queued === true ? 'queued' : 'sent',
-        runState: data.supplement === true ? 'submitted' : data.queued === true ? 'queued' : 'submitted'
+        delivery: data.queued === true ? 'queued' : 'sent',
+        runState: data.queued === true ? 'queued' : 'submitted'
       });
       if (mergeSessionSnapshot(data.session)) renderSessions();
       renderActive({ messages: false });
@@ -156,30 +154,10 @@ export function createPromptActions(options) {
     }
   }
 
-  async function supplementQueuedPrompt(queueId) {
-    const session = getActiveSession();
-    if (!session || !queueId) return;
-    try {
-      const data = await api(`/api/sessions/${session.id}/queue/${encodeURIComponent(queueId)}`, { method: 'POST' });
-      if (data.message) updateMessage(session.id, data.message);
-      if (data.session) {
-        if (mergeSessionSnapshot(data.session)) renderSessions();
-        renderActive({ messages: false });
-      }
-    } catch (error) {
-      upsertMessage(session.id, {
-        at: new Date().toISOString(),
-        role: 'system',
-        text: error.message || '补入失败'
-      });
-    }
-  }
-
   return {
     cancelQueuedPrompt,
     retryMessage,
     sendPrompt,
-    setSendState,
-    supplementQueuedPrompt
+    setSendState
   };
 }
