@@ -27,6 +27,7 @@ const state = {
   messages: new Map(),
   messagePages: new Map(),
   turnRenderLimits: new Map(),
+  retainedTurnBodies: new Map(),
   messageCollapseStates: new Map(),
   turnCollapseStates: new Map(),
   latestTurnIds: new Map(),
@@ -64,6 +65,8 @@ const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
 const MAX_BROWSER_CACHED_MESSAGES = 360;
 const DEFAULT_RENDERED_TURNS = 10;
+const MAX_RETAINED_TURN_BODIES = 4;
+const TURN_BODY_IDLE_TTL_MS = 45_000;
 const MOBILE_MESSAGE_CHUNK = 18;
 const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
@@ -451,7 +454,9 @@ function cleanupIdleResources() {
     state.lastSeq.delete(id);
     state.messagePages.delete(id);
     state.messageCollapseStates.delete(id);
+    state.retainedTurnBodies.delete(id);
   }
+  pruneRetainedTurnBodies({ forceExpired: true });
 }
 
 function scheduleResourceCleanup() {
@@ -1123,22 +1128,153 @@ function renderConversationTurn(sessionId, turn) {
   summary.addEventListener('click', () => {
     const collapsed = !section.classList.contains('collapsed');
     setTurnCollapsed(sessionId, turn.id, collapsed);
-    messageScheduler.scheduleRender(sessionId, {
-      stickToBottom: collapsed ? shouldStickToBottom(sessionId) : false,
-      delay: 0
-    });
+    setTurnExpandedState(sessionId, section, turn, !collapsed);
   });
   section.append(summary);
 
-  if (turn.collapsed) return section;
+  if (!turn.collapsed) attachTurnBody(sessionId, section, turn);
+  return section;
+}
 
+function createTurnBody(turn) {
   const body = document.createElement('div');
   body.className = 'turn-body';
   for (const message of turn.messages) {
     body.append(messageView.renderMessage(message, { animate: false }));
   }
-  section.append(body);
-  return section;
+  return body;
+}
+
+function turnBodyCache(sessionId) {
+  if (!state.retainedTurnBodies.has(sessionId)) state.retainedTurnBodies.set(sessionId, new Map());
+  return state.retainedTurnBodies.get(sessionId);
+}
+
+function turnMessageSignature(turn) {
+  return turn.messages.map((message) => [
+    message.id || '',
+    message.clientMessageId || '',
+    message.seq || '',
+    message.role || '',
+    message.at || '',
+    String(message.text || '').length,
+    message.groupCount || 1,
+    message.pending ? 'p' : '',
+    message.failed ? 'f' : '',
+    message.streaming ? 's' : ''
+  ].join(':')).join('|');
+}
+
+function retainTurnBody(sessionId, turnId, body, turn, expanded) {
+  if (!sessionId || !turnId || !body) return;
+  const cache = turnBodyCache(sessionId);
+  cache.set(turnId, {
+    body,
+    signature: turnMessageSignature(turn),
+    expanded: expanded === true,
+    lastUsedAt: Date.now()
+  });
+  pruneRetainedTurnBodies();
+}
+
+function takeRetainedTurnBody(sessionId, turn) {
+  const entry = state.retainedTurnBodies.get(sessionId)?.get(turn.id);
+  if (!entry) return null;
+  if (entry.signature !== turnMessageSignature(turn)) {
+    entry.body.remove();
+    state.retainedTurnBodies.get(sessionId)?.delete(turn.id);
+    return null;
+  }
+  entry.lastUsedAt = Date.now();
+  return entry.body;
+}
+
+function attachTurnBody(sessionId, section, turn) {
+  let body = section.querySelector(':scope > .turn-body') || takeRetainedTurnBody(sessionId, turn);
+  if (!body) body = createTurnBody(turn);
+  body.hidden = false;
+  if (body.parentElement !== section) section.append(body);
+  retainTurnBody(sessionId, turn.id, body, turn, true);
+}
+
+function detachTurnBody(sessionId, section, turn) {
+  const body = section.querySelector(':scope > .turn-body');
+  if (!body) return;
+  body.remove();
+  retainTurnBody(sessionId, turn.id, body, turn, false);
+}
+
+function setTurnExpandedState(sessionId, section, turn, expanded) {
+  section.classList.toggle('collapsed', !expanded);
+  const button = section.querySelector('.turn-summary-button');
+  const icon = section.querySelector('.turn-toggle-icon');
+  if (button) button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  if (icon) icon.textContent = expanded ? '▾' : '▸';
+  if (expanded) attachTurnBody(sessionId, section, turn);
+  else detachTurnBody(sessionId, section, turn);
+  pruneRetainedTurnBodies();
+}
+
+function pruneRetainedTurnBodies(options = {}) {
+  const now = Date.now();
+  const all = [];
+  for (const [sessionId, cache] of state.retainedTurnBodies.entries()) {
+    if (sessionId !== state.activeId) {
+      for (const entry of cache.values()) entry.body.remove();
+      state.retainedTurnBodies.delete(sessionId);
+      continue;
+    }
+    for (const [turnId, entry] of cache.entries()) all.push({ sessionId, turnId, entry });
+  }
+
+  for (const item of all) {
+    const connected = item.entry.body.isConnected;
+    const expired = now - item.entry.lastUsedAt > TURN_BODY_IDLE_TTL_MS;
+    if (options.forceExpired && !connected && expired) {
+      item.entry.body.remove();
+      state.retainedTurnBodies.get(item.sessionId)?.delete(item.turnId);
+    }
+  }
+
+  const retained = [];
+  for (const [sessionId, cache] of state.retainedTurnBodies.entries()) {
+    for (const [turnId, entry] of cache.entries()) retained.push({ sessionId, turnId, entry });
+  }
+  const overflow = retained
+    .filter((item) => !item.entry.body.isConnected || item.entry.expanded !== true)
+    .sort((a, b) => a.entry.lastUsedAt - b.entry.lastUsedAt);
+  while (retained.length > MAX_RETAINED_TURN_BODIES && overflow.length) {
+    const item = overflow.shift();
+    item.entry.body.remove();
+    state.retainedTurnBodies.get(item.sessionId)?.delete(item.turnId);
+    const index = retained.indexOf(item);
+    if (index >= 0) retained.splice(index, 1);
+  }
+
+  const expandedOverflow = retained
+    .filter((item) => item.entry.body.isConnected && item.entry.expanded === true)
+    .sort((a, b) => a.entry.lastUsedAt - b.entry.lastUsedAt);
+  while (retained.length > MAX_RETAINED_TURN_BODIES && expandedOverflow.length) {
+    const item = expandedOverflow.shift();
+    collapseRetainedTurn(item);
+    const index = retained.indexOf(item);
+    if (index >= 0) retained.splice(index, 1);
+  }
+}
+
+function collapseRetainedTurn(item) {
+  const section = el.messagePane.querySelector(`.conversation-turn[data-turn-id="${CSS.escape(item.turnId)}"]`);
+  if (section) {
+    section.classList.add('collapsed');
+    const button = section.querySelector('.turn-summary-button');
+    const icon = section.querySelector('.turn-toggle-icon');
+    if (button) button.setAttribute('aria-expanded', 'false');
+    if (icon) icon.textContent = '▸';
+  }
+  item.entry.body.remove();
+  item.entry.expanded = false;
+  item.entry.lastUsedAt = Date.now();
+  setTurnCollapsed(item.sessionId, item.turnId, true);
 }
 
 function autoCollapsePreviousTurns(sessionId, turns) {
@@ -2502,6 +2638,7 @@ document.addEventListener('visibilitychange', () => {
   clearTimeout(state.foregroundRefreshTimer);
   if (document.hidden) {
     messageScheduler.flushSaves();
+    pruneRetainedTurnBodies({ forceExpired: true });
     return;
   }
   if (!document.hidden) {
