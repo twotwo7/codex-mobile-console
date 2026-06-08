@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=30">
+    <link rel="stylesheet" href="/styles.css?v=61">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -40,6 +40,7 @@
               <option value="recent">最近</option>
               <option value="flat">平铺</option>
               <option value="cwd">按目录</option>
+              <option value="trash">回收站</option>
             </select>
           </label>
           <button id="settingsButton" class="drawer-settings-button" type="button">设置</button>
@@ -57,6 +58,8 @@
             <strong id="activeTitle">Codex Console</strong>
             <span id="activeMeta">未选择会话</span>
           </div>
+          <button id="favoritesButton" class="top-favorite-button" type="button" aria-label="只看收藏" aria-pressed="false">☆</button>
+          <button id="runtimeButton" class="top-runtime-button" type="button">运行时</button>
           <span id="connectionBadge" class="connection-badge">离线</span>
         </header>
 
@@ -72,7 +75,6 @@
           <div class="prompt-tools">
             <button id="stopButton" class="stop-button" type="button" hidden>停止</button>
             <button id="commandButton" class="command-button" type="button">命令</button>
-            <button id="favoritesButton" class="command-button" type="button" aria-pressed="false">收藏</button>
             <button id="imageButton" class="command-button" type="button">图片</button>
             <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
           </div>
@@ -143,33 +145,76 @@
 
     <dialog id="settingsDialog" class="session-dialog">
       <div class="dialog-head">
-        <h2>界面设置</h2>
+        <h2>设置</h2>
         <button class="icon-button" type="button" id="closeSettingsDialog" aria-label="关闭界面设置">×</button>
       </div>
+      <div class="settings-tabs" role="tablist" aria-label="设置分类">
+        <button class="active" type="button" data-settings-tab="ui">界面</button>
+        <button type="button" data-settings-tab="run">运行</button>
+        <button type="button" data-settings-tab="storage">存储</button>
+      </div>
       <div class="settings-form">
-        <label>
-          主题
-          <select id="themeSelect" name="theme">
-            <option value="graphite">石墨</option>
-            <option value="daylight">日光</option>
-            <option value="terminal">终端</option>
-            <option value="ocean">深海</option>
-          </select>
-        </label>
-        <label>
-          历史
-          <input id="historyLimitInput" name="historyLimit" type="number" min="0" max="5000" step="50" inputmode="numeric" list="historyLimitPresets" placeholder="500">
-          <datalist id="historyLimitPresets">
-            <option value="200"></option>
-            <option value="500"></option>
-            <option value="1000"></option>
-            <option value="0"></option>
-          </datalist>
-        </label>
-        <label class="settings-checkbox">
-          <input id="elevatedRun" type="checkbox">
-          <span>提权执行</span>
-        </label>
+        <section class="settings-page active" data-settings-page="ui">
+          <p class="settings-page-note">界面显示和历史窗口。</p>
+          <label>
+            主题
+            <select id="themeSelect" name="theme">
+              <option value="graphite">石墨</option>
+              <option value="daylight">日光</option>
+              <option value="terminal">终端</option>
+              <option value="ocean">深海</option>
+            </select>
+          </label>
+          <label>
+            历史
+            <input id="historyLimitInput" name="historyLimit" type="number" min="0" max="5000" step="50" inputmode="numeric" list="historyLimitPresets" placeholder="200">
+            <datalist id="historyLimitPresets">
+              <option value="200"></option>
+              <option value="500"></option>
+              <option value="1000"></option>
+              <option value="0"></option>
+            </datalist>
+          </label>
+        </section>
+        <section class="settings-page" data-settings-page="run">
+          <p class="settings-page-note">Codex 执行默认项。</p>
+          <label class="settings-checkbox">
+            <input id="elevatedRun" type="checkbox">
+            <span>提权执行</span>
+          </label>
+          <div id="runSettingsState" class="settings-state-row">提权默认关闭</div>
+        </section>
+        <section class="settings-page storage-panel" data-settings-page="storage">
+          <p class="settings-page-note">上传图片、运行缓存和磁盘状态。</p>
+          <div class="storage-head">
+            <strong>存储</strong>
+            <button id="refreshStorageButton" class="ghost-button inline" type="button">刷新</button>
+          </div>
+          <div id="storageStats" class="storage-stats">加载中...</div>
+          <label class="settings-checkbox">
+            <input id="autoCleanupToggle" type="checkbox">
+            <span>自动清理</span>
+          </label>
+          <div class="field-grid">
+            <label>
+              图片保留天数
+              <input id="uploadRetentionDaysInput" type="number" min="0" max="3650" step="1" inputmode="numeric">
+            </label>
+            <label>
+              图片上限 MB
+              <input id="maxUploadMbInput" type="number" min="0" max="102400" step="100" inputmode="numeric">
+            </label>
+          </div>
+          <label>
+            运行缓存保留天数
+            <input id="runtimeRetentionDaysInput" type="number" min="0" max="3650" step="1" inputmode="numeric">
+          </label>
+          <div class="storage-actions">
+            <button id="saveStorageButton" type="button">保存</button>
+            <button id="cleanupUploadsButton" class="ghost-button inline" type="button">清理孤儿图片</button>
+            <button id="cleanupRuntimeButton" class="ghost-button inline" type="button">清理运行缓存</button>
+          </div>
+        </section>
       </div>
     </dialog>
 
@@ -179,6 +224,14 @@
         <button class="icon-button" type="button" id="closeCommandDialog" aria-label="关闭命令选择">×</button>
       </div>
       <div id="commandList" class="command-list"></div>
+    </dialog>
+
+    <dialog id="runtimeDialog" class="session-dialog runtime-dialog">
+      <div class="dialog-head">
+        <h2>运行时</h2>
+        <button class="icon-button" type="button" id="closeRuntimeDialog" aria-label="关闭运行时信息">×</button>
+      </div>
+      <div id="runtimePanel" class="runtime-panel">未选择会话</div>
     </dialog>
 
     <div id="imageViewer" class="image-viewer" hidden>
@@ -240,6 +293,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=30" type="module"></script>
+    <script src="/app.js?v=61" type="module"></script>
   </body>
 </html>

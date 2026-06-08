@@ -12,7 +12,7 @@ const state = {
   activeId: localStorage.getItem('cmc.activeId') || '',
   sessionViewMode: localStorage.getItem('cmc.sessionViewMode') || 'recent',
   theme: localStorage.getItem('cmc.theme') || 'graphite',
-  historyLimit: localStorage.getItem('cmc.historyLimit') || '500',
+  historyLimit: localStorage.getItem('cmc.historyLimit') || '200',
   elevated: localStorage.getItem('cmc.elevated') === '1',
   showStarredOnly: localStorage.getItem('cmc.showStarredOnly') === '1',
   pendingImages: [],
@@ -20,12 +20,29 @@ const state = {
   directoryPath: '/root/Projects',
   expandedCwds: new Set(storedExpandedCwds),
   messages: new Map(),
+  messagePages: new Map(),
   lastSeq: new Map(),
   eventSource: null,
   contextRefreshTimer: null,
   contextRefreshInFlight: false,
-  online: navigator.onLine
+  foregroundRefreshTimer: null,
+  runtimeTimer: null,
+  renderJobId: 0,
+  renderingMessages: false,
+  userScrolledDuringRender: false,
+  suppressScrollTracking: false,
+  loadingOlder: false,
+  cleanupTimer: null,
+  online: navigator.onLine,
+  localRuntimeSnapshot: null,
+  localRuntimeSnapshotAt: 0,
+  localRuntimeSessionId: ''
 };
+
+const INITIAL_HISTORY_LIMIT = 120;
+const HISTORY_PAGE_SIZE = 120;
+const MAX_CACHED_SESSIONS = 2;
+const MAX_LOCAL_MESSAGES = 800;
 
 const CODEX_COMMANDS = [
   { name: '/status', detail: '查看会话状态', value: '/status' },
@@ -68,6 +85,7 @@ const el = {
   promptInput: document.querySelector('#promptInput'),
   commandButton: document.querySelector('#commandButton'),
   favoritesButton: document.querySelector('#favoritesButton'),
+  runtimeButton: document.querySelector('#runtimeButton'),
   imageButton: document.querySelector('#imageButton'),
   imageInput: document.querySelector('#imageInput'),
   imagePreviewStrip: document.querySelector('#imagePreviewStrip'),
@@ -90,9 +108,24 @@ const el = {
   chooseDirectoryButton: document.querySelector('#chooseDirectoryButton'),
   settingsDialog: document.querySelector('#settingsDialog'),
   closeSettingsDialog: document.querySelector('#closeSettingsDialog'),
+  settingsTabs: [...document.querySelectorAll('[data-settings-tab]')],
+  settingsPages: [...document.querySelectorAll('[data-settings-page]')],
+  storageStats: document.querySelector('#storageStats'),
+  autoCleanupToggle: document.querySelector('#autoCleanupToggle'),
+  runSettingsState: document.querySelector('#runSettingsState'),
+  uploadRetentionDaysInput: document.querySelector('#uploadRetentionDaysInput'),
+  runtimeRetentionDaysInput: document.querySelector('#runtimeRetentionDaysInput'),
+  maxUploadMbInput: document.querySelector('#maxUploadMbInput'),
+  refreshStorageButton: document.querySelector('#refreshStorageButton'),
+  saveStorageButton: document.querySelector('#saveStorageButton'),
+  cleanupUploadsButton: document.querySelector('#cleanupUploadsButton'),
+  cleanupRuntimeButton: document.querySelector('#cleanupRuntimeButton'),
   commandDialog: document.querySelector('#commandDialog'),
   closeCommandDialog: document.querySelector('#closeCommandDialog'),
   commandList: document.querySelector('#commandList'),
+  runtimeDialog: document.querySelector('#runtimeDialog'),
+  closeRuntimeDialog: document.querySelector('#closeRuntimeDialog'),
+  runtimePanel: document.querySelector('#runtimePanel'),
   imageViewer: document.querySelector('#imageViewer'),
   closeImageViewer: document.querySelector('#closeImageViewer'),
   imageViewerImg: document.querySelector('#imageViewerImg')
@@ -103,9 +136,14 @@ el.themeSelect.value = state.theme;
 el.historyLimitInput.value = state.historyLimit;
 el.elevatedRun.checked = state.elevated;
 el.sessionViewMode.value = state.sessionViewMode;
+updateRunSettingsState();
 
 function cacheKey(id) {
   return `cmc.messages.${id}`;
+}
+
+function pageCacheKey(id) {
+  return `cmc.messagePage.${id}`;
 }
 
 function saveSessionCache() {
@@ -126,10 +164,16 @@ function loadCachedSessions() {
 
 function saveMessages(id) {
   try {
-    localStorage.setItem(cacheKey(id), JSON.stringify((state.messages.get(id) || []).map(cacheSafeMessage)));
+    const messages = trimMessagesForStorage(mergeMessages([], state.messages.get(id) || []));
+    localStorage.setItem(cacheKey(id), JSON.stringify(messages.map(cacheSafeMessage)));
   } catch {
     // Large pasted screenshots should not break the live UI if browser storage is full.
   }
+}
+
+function trimMessagesForStorage(messages) {
+  if (!Array.isArray(messages) || messages.length <= MAX_LOCAL_MESSAGES) return messages || [];
+  return messages.slice(-MAX_LOCAL_MESSAGES);
 }
 
 function cacheSafeMessage(message) {
@@ -144,14 +188,114 @@ function loadMessages(id) {
   if (state.messages.has(id)) return state.messages.get(id);
   try {
     const messages = JSON.parse(localStorage.getItem(cacheKey(id)) || '[]');
-    state.messages.set(id, messages);
-    state.lastSeq.set(id, lastRealSeq(messages));
-    return messages;
+    const merged = trimMessagesForStorage(mergeMessages([], messages));
+    state.messages.set(id, merged);
+    state.lastSeq.set(id, lastRealSeq(merged));
+    loadMessagePage(id);
+    return merged;
   } catch {
     state.messages.set(id, []);
     state.lastSeq.set(id, 0);
     return [];
   }
+}
+
+function loadMessagePage(id) {
+  if (state.messagePages.has(id)) return state.messagePages.get(id);
+  try {
+    const page = JSON.parse(localStorage.getItem(pageCacheKey(id)) || 'null');
+    if (page && typeof page === 'object') {
+      state.messagePages.set(id, { ...page, loading: false });
+      return state.messagePages.get(id);
+    }
+  } catch {
+    // Ignore stale page metadata.
+  }
+  return null;
+}
+
+function firstPageLimit() {
+  const configured = Number(state.historyLimit || 200);
+  if (!Number.isFinite(configured) || configured <= 0) return INITIAL_HISTORY_LIMIT;
+  return Math.max(20, Math.min(INITIAL_HISTORY_LIMIT, configured));
+}
+
+function maxHistoryLimit() {
+  const configured = Number(state.historyLimit || 200);
+  if (!Number.isFinite(configured) || configured <= 0) return MAX_LOCAL_MESSAGES;
+  return Math.max(20, Math.min(MAX_LOCAL_MESSAGES, configured));
+}
+
+function setMessagePage(sessionId, page, options = {}) {
+  const current = loadMessagePage(sessionId) || {};
+  const incomingOffset = Number(page?.nextOffset || 0);
+  const offset = options.preserveOffset ? Math.max(Number(current.offset || 0), incomingOffset) : incomingOffset;
+  const total = Number(page?.total ?? current.total ?? 0);
+  const loaded = state.messages.get(sessionId)?.length || 0;
+  const hasMore = page?.hasMore === true && loaded < maxHistoryLimit();
+  const next = {
+    offset,
+    total,
+    hasMore: options.preserveOffset && current.offset > incomingOffset ? current.hasMore === true && loaded < maxHistoryLimit() : hasMore,
+    loading: false
+  };
+  if (page?.session) {
+    next.sessionUpdatedAt = page.session.updatedAt || '';
+    next.lastSeq = page.session.lastSeq || 0;
+  } else {
+    next.sessionUpdatedAt = current.sessionUpdatedAt || '';
+    next.lastSeq = current.lastSeq || 0;
+  }
+  state.messagePages.set(sessionId, next);
+  try {
+    localStorage.setItem(pageCacheKey(sessionId), JSON.stringify(next));
+  } catch {
+    // Page metadata is an optimization only.
+  }
+}
+
+function isMessageCacheFresh(sessionId, session) {
+  if (!session?.updatedAt) return false;
+  const page = loadMessagePage(sessionId);
+  const messages = loadMessages(sessionId);
+  return Boolean(messages.length)
+    && page?.sessionUpdatedAt === session.updatedAt
+    && Number(page?.offset || 0) >= Math.min(firstPageLimit(), messages.length);
+}
+
+function cleanupIdleResources() {
+  for (const id of [...state.messages.keys()]) {
+    if (id === state.activeId) continue;
+    state.messages.delete(id);
+    state.lastSeq.delete(id);
+    state.messagePages.delete(id);
+  }
+}
+
+function scheduleResourceCleanup() {
+  clearTimeout(state.cleanupTimer);
+  state.cleanupTimer = setTimeout(cleanupIdleResources, 30000);
+}
+
+function messageKey(message) {
+  if (message.clientMessageId) return `client:${message.clientMessageId}`;
+  if (message.id) return `id:${message.id}`;
+  if (message.seq) return `seq:${message.seq}`;
+  return `${message.role || ''}\0${message.at || ''}\0${String(message.text || '').slice(0, 120)}`;
+}
+
+function mergeMessages(existing, incoming) {
+  const byKey = new Map();
+  for (const message of [...(existing || []), ...(incoming || [])]) {
+    const key = messageKey(message);
+    const next = { ...(byKey.get(key) || {}), ...message };
+    if (message.id || message.seq) {
+      next.pending = false;
+      next.failed = false;
+    }
+    byKey.set(key, next);
+  }
+  return [...byKey.values()].sort(compareMessages);
 }
 
 async function api(path, options = {}) {
@@ -165,6 +309,8 @@ async function api(path, options = {}) {
   if (!res.ok) {
     const error = new Error(data.error || data.message || `HTTP ${res.status}`);
     error.status = res.status;
+    error.code = data.error || '';
+    error.detail = data.message || '';
     throw error;
   }
   return data;
@@ -212,8 +358,18 @@ function formatTime(iso) {
 function renderSessions() {
   el.sessionList.innerHTML = '';
 
-  const sessions = [...state.sessions].sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  const sessions = [...state.sessions]
+    .filter((session) => state.sessionViewMode === 'trash' ? Boolean(session.trashedAt) : !session.trashedAt)
+    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
   const visible = state.sessionViewMode === 'recent' ? sessions.slice(0, 20) : sessions;
+
+  if (!visible.length) {
+    const empty = document.createElement('div');
+    empty.className = 'session-empty';
+    empty.textContent = state.sessionViewMode === 'trash' ? '回收站为空' : '暂无会话';
+    el.sessionList.append(empty);
+    return;
+  }
 
   if (state.sessionViewMode === 'cwd') {
     const groups = new Map();
@@ -258,13 +414,49 @@ function renderSessionButton(session) {
 
   const button = document.createElement('button');
   button.type = 'button';
-  button.className = `session-item ${session.id === state.activeId ? 'active' : ''} ${session.source === 'codex' ? 'external' : ''}`.trim();
+  button.className = `session-item ${session.id === state.activeId ? 'active' : ''} ${session.source === 'codex' ? 'external' : ''} ${session.trashedAt ? 'trashed' : ''}`.trim();
   button.innerHTML = `
     <strong>${escapeHtml(session.title)}</strong>
-    <span>${escapeHtml(session.source === 'codex' ? '全局 Codex' : session.status || 'idle')} · ${escapeHtml(formatTime(session.updatedAt))}</span>
+    <span>${escapeHtml(session.trashedAt ? '回收站' : session.source === 'codex' ? '全局 Codex' : session.status || 'idle')} · ${escapeHtml(formatTime(session.trashedAt || session.updatedAt))}</span>
     <span>${escapeHtml(session.cwd || '')}</span>
   `;
-  button.addEventListener('click', () => selectSession(session.id));
+  if (!session.trashedAt) button.addEventListener('click', () => selectSession(session.id));
+
+  if (session.trashedAt) {
+    row.classList.add('trashed');
+    const restoreButton = document.createElement('button');
+    restoreButton.type = 'button';
+    restoreButton.className = 'session-restore-button';
+    restoreButton.textContent = '还';
+    restoreButton.setAttribute('aria-label', `还原会话 ${session.title || session.id}`);
+    restoreButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      restoreSession(session);
+    });
+
+    const deleteButton = document.createElement('button');
+    deleteButton.type = 'button';
+    deleteButton.className = 'session-delete-button';
+    deleteButton.textContent = '删';
+    deleteButton.setAttribute('aria-label', `永久删除会话 ${session.title || session.id}`);
+    deleteButton.addEventListener('click', (event) => {
+      event.stopPropagation();
+      deleteSession(session);
+    });
+
+    row.append(button, restoreButton, deleteButton);
+    return row;
+  }
+
+  const forkButton = document.createElement('button');
+  forkButton.type = 'button';
+  forkButton.className = 'session-fork-button';
+  forkButton.textContent = '分';
+  forkButton.setAttribute('aria-label', `Fork 会话 ${session.title || session.id}`);
+  forkButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    forkSession(session);
+  });
 
   const renameButton = document.createElement('button');
   renameButton.type = 'button';
@@ -286,14 +478,14 @@ function renderSessionButton(session) {
     deleteSession(session);
   });
 
-  row.append(button, renameButton, deleteButton);
+  row.append(button, forkButton, renameButton, deleteButton);
   return row;
 }
 
 function renderActive(options = {}) {
   const shouldRenderMessages = options.messages !== false;
   const session = state.sessions.find((item) => item.id === state.activeId);
-  const isRunning = session && (session.status === 'running' || session.status === 'stopping');
+  const isRunning = isRunStatus(session?.status);
   el.emptyState.hidden = Boolean(session);
   el.messagePane.hidden = !session;
   el.promptInput.disabled = !session;
@@ -311,10 +503,11 @@ function renderActive(options = {}) {
   el.activeTitle.textContent = session.title;
   el.activeMeta.textContent = session.cwd || '';
   setBadge(isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线', isRunning ? 'running' : state.online ? 'online' : '');
-  if (shouldRenderMessages) renderMessages(session.id);
+  if (shouldRenderMessages) renderMessages(session.id, { stickToBottom: options.stickToBottom ?? isNearMessageBottom() });
   else {
     updateQueuePanel();
     updateRunIndicator();
+    syncStreamingMarkers();
   }
   updateFavoritesButton();
 }
@@ -323,17 +516,123 @@ function getActiveSession() {
   return state.sessions.find((item) => item.id === state.activeId);
 }
 
+function isRunStatus(status) {
+  return status === 'running' || status === 'stopping';
+}
+
+function isActiveSessionRunning() {
+  return isRunStatus(getActiveSession()?.status);
+}
+
+function syncStreamingMarkers() {
+  if (isActiveSessionRunning()) return;
+  for (const node of el.messagePane.querySelectorAll('.message.streaming')) {
+    node.classList.remove('streaming');
+  }
+}
+
+function mergeSessionSnapshot(nextSession) {
+  if (!nextSession?.id) return false;
+  const patch = Object.fromEntries(Object.entries(nextSession).filter(([, value]) => value !== undefined));
+  const index = state.sessions.findIndex((item) => item.id === nextSession.id);
+  if (index < 0) {
+    state.sessions.unshift(patch);
+    saveSessionCache();
+    return true;
+  }
+
+  const current = state.sessions[index];
+  const next = { ...current, ...patch };
+  const scalarKeys = [
+    'source',
+    'title',
+    'cwd',
+    'model',
+    'sandbox',
+    'approval',
+    'codexSessionId',
+    'status',
+    'trashedAt',
+    'createdAt',
+    'updatedAt',
+    'lastSeq',
+    'queuedCount'
+  ];
+  const changed = scalarKeys.some((key) => current[key] !== next[key])
+    || JSON.stringify(current.queue || []) !== JSON.stringify(next.queue || []);
+  if (!changed) return false;
+
+  state.sessions = state.sessions.map((item) => item.id === next.id ? next : item);
+  saveSessionCache();
+  return true;
+}
+
 function renderMessages(sessionId, options = {}) {
   const stickToBottom = options.stickToBottom ?? true;
   const messages = displayMessages(sessionId);
+  const renderJobId = ++state.renderJobId;
+  state.renderingMessages = true;
+  state.userScrolledDuringRender = false;
+  const previousBottomOffset = Math.max(0, el.messagePane.scrollHeight - el.messagePane.scrollTop);
   el.messagePane.innerHTML = '';
-  for (const message of messages) {
-    el.messagePane.append(renderMessage(message, { animate: false }));
+  const olderControl = renderOlderMessagesControl(sessionId);
+  if (olderControl) el.messagePane.append(olderControl);
+  if (state.showStarredOnly && !messages.length) {
+    el.messagePane.append(renderFavoriteEmpty());
   }
-  if (state.showStarredOnly && !messages.length) el.messagePane.append(renderFavoriteEmpty());
-  updateQueuePanel();
-  updateRunIndicator();
-  if (stickToBottom) scrollMessagesToBottom();
+
+  const setMessageScrollTop = (value) => {
+    state.suppressScrollTracking = true;
+    el.messagePane.scrollTop = value;
+    requestAnimationFrame(() => {
+      state.suppressScrollTracking = false;
+    });
+  };
+
+  const restoreScroll = (finalChunk = false) => {
+    if (state.userScrolledDuringRender) return;
+    if (stickToBottom) {
+      scrollMessagesToBottom();
+      return;
+    }
+    if (!finalChunk && el.messagePane.scrollHeight < previousBottomOffset) return;
+    setMessageScrollTop(Math.max(0, el.messagePane.scrollHeight - previousBottomOffset));
+  };
+
+  const chunkSize = messages.length <= 500 ? Math.max(1, messages.length) : 50;
+  let index = 0;
+  const renderChunk = () => {
+    if (renderJobId !== state.renderJobId || state.activeId !== sessionId) return;
+    const fragment = document.createDocumentFragment();
+    const end = Math.min(index + chunkSize, messages.length);
+    for (; index < end; index += 1) {
+      fragment.append(renderMessage(messages[index], { animate: false }));
+    }
+    el.messagePane.append(fragment);
+    if (index < messages.length) {
+      restoreScroll(false);
+      requestAnimationFrame(renderChunk);
+    } else {
+      restoreScroll(true);
+      updateQueuePanel();
+      updateRunIndicator();
+      if (renderJobId === state.renderJobId) state.renderingMessages = false;
+    }
+  };
+  renderChunk();
+}
+
+function renderOlderMessagesControl(sessionId) {
+  if (state.showStarredOnly) return null;
+  const page = state.messagePages.get(sessionId);
+  if (!page?.hasMore) return null;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'older-messages-button';
+  button.textContent = page.loading ? '加载中...' : `加载更早 · ${page.offset}/${page.total || '?'}`;
+  button.disabled = page.loading === true;
+  button.addEventListener('click', () => loadOlderMessages(sessionId));
+  return button;
 }
 
 function renderMessage(message, options = {}) {
@@ -351,6 +650,7 @@ function renderMessage(message, options = {}) {
   const role = message.role || 'system';
   const collapsible = isCollapsibleMessage(message);
   const defaultCollapsed = isDefaultCollapsedMessage(message);
+  const deferredText = collapsible && defaultCollapsed;
   const actions = role === 'assistant' ? extractOptionActions(message.text || '') : [];
   article.innerHTML = `
     <div class="message-head">
@@ -358,12 +658,12 @@ function renderMessage(message, options = {}) {
       <span>${escapeHtml(formatTime(message.at))}</span>
     </div>
     <div class="message-summary">${escapeHtml(summarizeMessage(message))}</div>
-    <pre class="message-text">${escapeHtml(message.text || '')}</pre>
+    <pre class="message-text"${deferredText ? '' : ' data-loaded="1"'}>${deferredText ? '' : escapeHtml(message.text || '')}</pre>
   `;
   const delivery = deliveryLabel(message);
   if (delivery) {
     const status = document.createElement('span');
-    status.className = `message-delivery ${message.failed ? 'failed' : message.pending ? 'pending' : message.delivery || ''}`.trim();
+    status.className = `message-delivery ${message.failed ? 'failed' : message.pending ? 'pending' : message.runState || message.delivery || ''}`.trim();
     status.textContent = delivery;
     article.querySelector('.message-head').append(status);
   }
@@ -378,6 +678,11 @@ function renderMessage(message, options = {}) {
     button.setAttribute('aria-label', defaultCollapsed ? '展开消息' : '折叠消息');
     button.addEventListener('click', () => {
       const collapsed = article.classList.toggle('collapsed');
+      const textNode = article.querySelector('.message-text');
+      if (!collapsed && textNode && !textNode.dataset.loaded) {
+        textNode.textContent = message.text || '';
+        textNode.dataset.loaded = '1';
+      }
       button.textContent = collapsed ? '▸' : '▾';
       button.setAttribute('aria-label', collapsed ? '展开消息' : '折叠消息');
     });
@@ -499,8 +804,17 @@ function renderMessageMenu(message) {
 function deliveryLabel(message) {
   if (message.failed) return '失败';
   if (message.pending) return '发送中';
-  if (message.delivery === 'queued') return '已排队';
-  if (message.delivery === 'sent') return '已发送';
+  const stateLabel = message.runState || message.delivery;
+  if (stateLabel === 'queued') return '已排队';
+  if (stateLabel === 'submitted') return '已提交';
+  if (stateLabel === 'running') return '运行中';
+  if (stateLabel === 'stopping') return '停止中';
+  if (stateLabel === 'completed') return '已完成';
+  if (stateLabel === 'failed') return '失败';
+  if (stateLabel === 'stopped') return '已停止';
+  if (stateLabel === 'recovered') return '已恢复';
+  if (stateLabel === 'supplement') return '已补充';
+  if (stateLabel === 'sent') return '已发送';
   return '';
 }
 
@@ -554,7 +868,7 @@ function mergeDisplayMessages(messages) {
       previous.id = previous.id || message.id;
       previous.ids = [...(previous.ids || [previous.id]).filter(Boolean), message.id].filter(Boolean);
       previous.starred = previous.starred === true || message.starred === true;
-      previous.streaming = message.streaming === true || previous.streaming === true;
+      previous.streaming = shouldShowStreamingCursor(message, messages);
       previous.groupCount = (previous.groupCount || 1) + 1;
       continue;
     }
@@ -563,10 +877,14 @@ function mergeDisplayMessages(messages) {
       ids: message.id ? [message.id] : [],
       groupCount: 1,
       groupFormatted: false,
-      streaming: message.role === 'assistant' && isLatestAssistant(message, messages) && getActiveSession()?.status === 'running'
+      streaming: shouldShowStreamingCursor(message, messages)
     });
   }
   return out;
+}
+
+function shouldShowStreamingCursor(message, messages) {
+  return message.role === 'assistant' && isLatestAssistant(message, messages) && isActiveSessionRunning();
 }
 
 function formatMergedMessagePart(message) {
@@ -589,14 +907,27 @@ function renderFavoriteEmpty() {
   return empty;
 }
 
+function renderSessionLoading(text = '加载会话...') {
+  state.renderingMessages = false;
+  state.userScrolledDuringRender = false;
+  el.emptyState.hidden = true;
+  el.messagePane.hidden = false;
+  el.messagePane.innerHTML = `<div class="session-loading">${escapeHtml(text)}</div>`;
+  removeQueuePanel();
+  removeRunIndicator();
+}
+
 function renderRunIndicator(session) {
   const indicator = document.createElement('div');
   indicator.className = 'run-indicator';
   indicator.dataset.runIndicator = '1';
-  const queued = session?.queuedCount ? ` · 队列 ${session.queuedCount}` : '';
+  const waiting = session?.queuedCount ? ` · 待执行 ${session.queuedCount} 条` : '';
+  const label = session?.status === 'stopping'
+    ? '正在停止当前输入'
+    : `Codex 正在处理当前输入${waiting}`;
   indicator.innerHTML = `
     <span class="run-orbit" aria-hidden="true"><i></i><i></i><i></i></span>
-    <span>${session?.status === 'stopping' ? '正在停止' : `Codex 运行中${queued}`}</span>
+    <span>${label}</span>
   `;
   return indicator;
 }
@@ -618,13 +949,14 @@ function renderQueuePanel(session) {
   const panel = document.createElement('div');
   panel.className = 'queue-panel';
   panel.dataset.queuePanel = '1';
-  panel.innerHTML = `<div class="queue-head"><strong>队列 ${session.queue.length}</strong><span>当前完成后继续</span></div>`;
+  panel.innerHTML = `<div class="queue-head"><strong>待执行 ${session.queue.length} 条</strong><span>点 ↪ 补当前会话</span></div>`;
   for (const item of session.queue || []) {
     const row = document.createElement('div');
     row.className = 'queue-item';
     row.innerHTML = `
-      <span>${escapeHtml(`${summarizeText(item.prompt || '', 64)}${item.imageCount ? ` · 图片 ${item.imageCount}` : ''}`)}</span>
+      <span>${escapeHtml(`${summarizeText(item.displayPrompt || item.prompt || '', 64)}${item.imageCount ? ` · 图片 ${item.imageCount}` : ''}`)}</span>
       <div class="queue-images"></div>
+      <button class="queue-supplement-button" type="button" aria-label="把这条排队输入直接补充到当前会话" title="补充到当前会话">↪</button>
       <button class="queue-cancel-button" type="button" aria-label="取消这条排队输入">×</button>
     `;
     const imageWrap = row.querySelector('.queue-images');
@@ -637,6 +969,7 @@ function renderQueuePanel(session) {
       button.addEventListener('click', () => openImageViewer(image.url, image.name || '排队图片'));
       imageWrap.append(button);
     }
+    row.querySelector('.queue-supplement-button').addEventListener('click', () => supplementQueuedPrompt(item.id));
     row.querySelector('.queue-cancel-button').addEventListener('click', () => cancelQueuedPrompt(item.id));
     panel.append(row);
   }
@@ -663,7 +996,11 @@ function isNearMessageBottom() {
 
 function scrollMessagesToBottom() {
   requestAnimationFrame(() => {
+    state.suppressScrollTracking = true;
     el.messagePane.scrollTop = el.messagePane.scrollHeight;
+    requestAnimationFrame(() => {
+      state.suppressScrollTracking = false;
+    });
   });
 }
 
@@ -709,8 +1046,339 @@ function imageSizeFromDataUrl(dataUrl) {
 
 function formatBytes(bytes) {
   if (!Number.isFinite(bytes)) return '';
+  if (bytes <= 0) return '0B';
   if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))}KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function renderStorageStats(data) {
+  const settings = data.settings || {};
+  el.autoCleanupToggle.checked = settings.autoCleanup === true;
+  el.uploadRetentionDaysInput.value = settings.uploadRetentionDays ?? 30;
+  el.runtimeRetentionDaysInput.value = settings.runtimeRetentionDays ?? 7;
+  el.maxUploadMbInput.value = settings.maxUploadMb ?? 1024;
+  const diskText = data.disk
+    ? `${formatBytes(data.disk.freeBytes)} 可用 / ${formatBytes(data.disk.totalBytes)}`
+    : '未知';
+  el.storageStats.innerHTML = `
+    <span>data ${escapeHtml(formatBytes(data.dataBytes))}</span>
+    <span>图片 ${escapeHtml(formatBytes(data.uploadBytes))} · ${data.uploadCount || 0} 张</span>
+    <span>孤儿 ${escapeHtml(formatBytes(data.orphanUploadBytes))} · ${data.orphanUploadCount || 0} 张</span>
+    <span>运行缓存 ${escapeHtml(formatBytes(data.runtimeBytes))}</span>
+    <span>state ${escapeHtml(formatBytes(data.stateBytes))}</span>
+    <span>磁盘 ${escapeHtml(diskText)}</span>
+  `;
+}
+
+async function loadStorageStats() {
+  el.storageStats.textContent = '加载中...';
+  const data = await api('/api/storage');
+  renderStorageStats(data);
+}
+
+async function saveStorageSettings() {
+  el.saveStorageButton.disabled = true;
+  try {
+    const data = await api('/api/storage', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        autoCleanup: el.autoCleanupToggle.checked,
+        uploadRetentionDays: Number(el.uploadRetentionDaysInput.value || 0),
+        runtimeRetentionDays: Number(el.runtimeRetentionDaysInput.value || 0),
+        maxUploadMb: Number(el.maxUploadMbInput.value || 0)
+      })
+    });
+    renderStorageStats(data);
+  } finally {
+    el.saveStorageButton.disabled = false;
+  }
+}
+
+async function runStorageCleanup(mode) {
+  const button = mode === 'runtime' ? el.cleanupRuntimeButton : el.cleanupUploadsButton;
+  button.disabled = true;
+  try {
+    const data = await api('/api/storage/cleanup', {
+      method: 'POST',
+      body: JSON.stringify({ mode })
+    });
+    renderStorageStats(data.storage);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+function formatDuration(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '0s';
+  const seconds = Math.floor(ms / 1000);
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  return [
+    hours ? `${hours}h` : '',
+    minutes || hours ? `${minutes}m` : '',
+    `${rest}s`
+  ].filter(Boolean).join(' ');
+}
+
+function shortCommand(cmdline) {
+  const text = (cmdline || []).join(' ').replace(/\s+/g, ' ').trim();
+  return summarizeText(text || '-', 160);
+}
+
+function formatNumber(value) {
+  const number = Number(value || 0);
+  if (!Number.isFinite(number)) return '0';
+  return number.toLocaleString('zh-CN');
+}
+
+function localStorageStats() {
+  let bytes = 0;
+  let cmcKeys = 0;
+  for (let index = 0; index < localStorage.length; index += 1) {
+    const key = localStorage.key(index) || '';
+    const value = localStorage.getItem(key) || '';
+    bytes += (key.length + value.length) * 2;
+    if (key.startsWith('cmc.')) cmcKeys += 1;
+  }
+  return { keys: localStorage.length, cmcKeys, bytes };
+}
+
+async function browserRuntimeInfo(sessionId) {
+  const now = Date.now();
+  if (state.localRuntimeSnapshot && state.localRuntimeSessionId === sessionId && now - state.localRuntimeSnapshotAt < 5000) {
+    return state.localRuntimeSnapshot;
+  }
+  const [storageEstimate, cacheNames] = await Promise.all([
+    navigator.storage?.estimate ? navigator.storage.estimate().catch(() => null) : null,
+    window.caches?.keys ? caches.keys().catch(() => []) : []
+  ]);
+  const local = localStorageStats();
+  const messages = sessionId ? loadMessages(sessionId) : [];
+  const page = sessionId ? loadMessagePage(sessionId) : null;
+  const snapshot = {
+    online: navigator.onLine,
+    visibility: document.visibilityState || '',
+    platform: navigator.userAgentData?.platform || navigator.platform || '',
+    serviceWorker: 'serviceWorker' in navigator
+      ? navigator.serviceWorker.controller ? '已接管' : '未接管'
+      : '不支持',
+    cacheNames,
+    storageUsageBytes: storageEstimate?.usage,
+    storageQuotaBytes: storageEstimate?.quota,
+    localStorageBytes: local.bytes,
+    localStorageKeys: local.keys,
+    cmcLocalStorageKeys: local.cmcKeys,
+    memoryLimitBytes: performance.memory?.jsHeapSizeLimit || 0,
+    memoryUsedBytes: performance.memory?.usedJSHeapSize || 0,
+    cachedSessionCount: state.messages.size,
+    currentCachedMessages: messages.length,
+    currentLastSeq: state.lastSeq.get(sessionId) || 0,
+    pageOffset: page?.offset || 0,
+    pageTotal: page?.total || 0,
+    pageHasMore: page?.hasMore === true,
+    pendingImages: state.pendingImages.length,
+    renderingMessages: state.renderingMessages,
+    updatedAt: new Date().toISOString()
+  };
+  state.localRuntimeSnapshot = snapshot;
+  state.localRuntimeSnapshotAt = now;
+  state.localRuntimeSessionId = sessionId;
+  return snapshot;
+}
+
+function storageRatioText(usage, quota) {
+  if (!Number.isFinite(usage) || !Number.isFinite(quota) || quota <= 0) return '未知';
+  return `${formatBytes(usage)} / ${formatBytes(quota)} · ${Math.round((usage / quota) * 100)}%`;
+}
+
+function renderTokenUsage(data) {
+  const usage = data.codexUsage;
+  if (!usage?.available) {
+    return `
+      <div class="runtime-section">
+        <strong>Codex 会话</strong>
+        <p>${usage?.codexSessionId ? '暂未找到 token_count 记录。' : '当前会话还没有绑定 Codex 原始会话。'}</p>
+      </div>
+    `;
+  }
+  const total = usage.totalTokenUsage || {};
+  const last = usage.lastTokenUsage || {};
+  return `
+    <div class="runtime-section">
+      <strong>Codex 会话</strong>
+      <div class="runtime-meter"><i style="width:${Math.min(100, usage.contextPercent || 0)}%"></i></div>
+      <div class="runtime-grid compact">
+        <span>上下文 <strong>${formatNumber(usage.contextTokens)}</strong></span>
+        <span>窗口 <strong>${formatNumber(usage.modelContextWindow)}</strong></span>
+        <span>剩余 <strong>${formatNumber(usage.contextRemaining)}</strong></span>
+        <span>占用 <strong>${usage.contextPercent || 0}%</strong></span>
+      </div>
+      <p>累计 ${formatNumber(total.totalTokens)} token · 输入 ${formatNumber(total.inputTokens)} · 输出 ${formatNumber(total.outputTokens)}</p>
+      <span>最近一轮 ${formatNumber(last.totalTokens)} · 缓存输入 ${formatNumber(last.cachedInputTokens)} · 自动压缩剩余为估算</span>
+    </div>
+  `;
+}
+
+function renderServiceRuntime(data) {
+  const service = data.service || {};
+  const diskText = service.disk
+    ? `${formatBytes(service.disk.freeBytes)} / ${formatBytes(service.disk.totalBytes)}`
+    : '未知';
+  return `
+    <div class="runtime-section">
+      <strong>服务状态</strong>
+      <div class="runtime-grid compact">
+        <span>服务 <strong>${escapeHtml(service.version ? `v${service.version}` : service.name || '-')}</strong></span>
+        <span>PID <strong>${service.pid || '-'}</strong></span>
+        <span>启动 <strong>${escapeHtml(formatDuration(service.uptimeMs || 0))}</strong></span>
+        <span>SSE <strong>${service.sseClients || 0}</strong></span>
+        <span>运行 <strong>${service.runningSessions || 0}</strong></span>
+        <span>请求 <strong>${service.activeRequests || 0}/${formatNumber(service.totalRequests || 0)}</strong></span>
+        <span>RSS <strong>${escapeHtml(formatBytes(service.memory?.rssBytes || 0))}</strong></span>
+        <span>堆 <strong>${escapeHtml(formatBytes(service.memory?.heapUsedBytes || 0))}</strong></span>
+      </div>
+      <span>Node ${escapeHtml(service.node || '-')} · ${escapeHtml(service.host || '-')}:${service.port || '-'} · 磁盘 ${escapeHtml(diskText)}</span>
+    </div>
+  `;
+}
+
+function renderBrowserRuntime(local) {
+  const cacheText = local.cacheNames?.length ? local.cacheNames.slice(-2).join(', ') : '无';
+  const heapText = local.memoryLimitBytes
+    ? `${formatBytes(local.memoryUsedBytes)} / ${formatBytes(local.memoryLimitBytes)}`
+    : '浏览器未开放';
+  return `
+    <div class="runtime-section">
+      <strong>浏览器本地</strong>
+      <div class="runtime-grid compact">
+        <span>网络 <strong>${local.online ? '在线' : '离线'}</strong></span>
+        <span>页面 <strong>${escapeHtml(local.visibility || '-')}</strong></span>
+        <span>SW <strong>${escapeHtml(local.serviceWorker)}</strong></span>
+        <span>缓存 <strong>${local.cacheNames?.length || 0}</strong></span>
+        <span>存储 <strong>${escapeHtml(storageRatioText(local.storageUsageBytes, local.storageQuotaBytes))}</strong></span>
+        <span>local <strong>${escapeHtml(formatBytes(local.localStorageBytes || 0))}</strong></span>
+        <span>消息 <strong>${local.currentCachedMessages}/${local.pageTotal || 0}</strong></span>
+        <span>分页 <strong>${local.pageOffset || 0}${local.pageHasMore ? '+' : ''}</strong></span>
+      </div>
+      <span>localStorage ${local.cmcLocalStorageKeys}/${local.localStorageKeys} 项 · JS 堆 ${escapeHtml(heapText)} · ${escapeHtml(cacheText)}</span>
+    </div>
+  `;
+}
+
+async function renderRuntimePanel(data) {
+  const active = data.activeRun;
+  const processes = data.processes || [];
+  const local = await browserRuntimeInfo(data.session?.id || state.activeId);
+  el.runtimePanel.innerHTML = `
+    <div class="runtime-section">
+      <strong>Codex 运行时</strong>
+      <div class="runtime-grid compact">
+        <span>状态 <strong>${data.running ? '运行中' : '未运行'}</strong></span>
+        <span>PID <strong>${data.pid || '-'}</strong></span>
+        <span>进程 <strong>${data.processCount || 0}</strong></span>
+        <span>内存 <strong>${formatBytes((data.memoryKb || 0) * 1024)}</strong></span>
+        <span>CPU <strong>${formatDuration(data.cpuMs || 0)}</strong></span>
+        <span>时长 <strong>${formatDuration(data.uptimeMs || 0)}</strong></span>
+      </div>
+    </div>
+    ${renderBrowserRuntime(local)}
+    ${renderServiceRuntime(data)}
+    ${renderTokenUsage(data)}
+    <div class="runtime-section">
+      <strong>当前输入</strong>
+      <p>${escapeHtml(active?.prompt || '无运行中的输入')}</p>
+      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0}` : '')}</span>
+    </div>
+    <div class="runtime-section">
+      <strong>队列</strong>
+      <p>${data.queue?.length ? `${data.queue.length} 条等待执行` : '无排队输入'}</p>
+    </div>
+    <div class="runtime-process-list">
+      ${processes.length ? processes.map((item) => `
+        <div class="runtime-process" style="--depth:${item.depth || 0}">
+          <span>PID ${item.pid} · ${escapeHtml(item.state || '-')} · ${formatBytes((item.memoryKb || 0) * 1024)}</span>
+          <strong>${escapeHtml(item.name || '-')}</strong>
+          <code>${escapeHtml(shortCommand(item.cmdline))}</code>
+          <small>${escapeHtml(item.cwd || '')}</small>
+        </div>
+      `).join('') : '<p class="runtime-empty">没有关联的 Codex 子进程。</p>'}
+    </div>
+    <small class="runtime-checked">更新 ${escapeHtml(formatTime(data.checkedAt))}</small>
+  `;
+}
+
+function runtimeErrorCopy(error) {
+  if (error?.status === 404 && error?.code === 'session_not_found') {
+    return {
+      title: '会话不存在',
+      detail: '当前选择的会话在服务端已不存在，可能已经被删除、移入回收站，或本地缓存还没同步。'
+    };
+  }
+  if (error?.status === 404 && error?.code === 'not_found') {
+    return {
+      title: '运行时接口不可用',
+      detail: '后端可能还没重启到包含运行时功能的版本。等安全重启完成后再试，或先刷新会话列表。'
+    };
+  }
+  if (error?.status === 401) {
+    return {
+      title: '登录已失效',
+      detail: '请重新登录后再查看运行时。'
+    };
+  }
+  return {
+    title: '运行时加载失败',
+    detail: error?.message || '暂时无法获取运行时信息。'
+  };
+}
+
+function renderRuntimeError(error) {
+  const copy = runtimeErrorCopy(error);
+  el.runtimePanel.innerHTML = `
+    <div class="runtime-section">
+      <strong>${escapeHtml(copy.title)}</strong>
+      <p>${escapeHtml(copy.detail)}</p>
+      <button class="ghost-button inline" type="button" data-runtime-refresh>刷新会话</button>
+    </div>
+  `;
+  el.runtimePanel.querySelector('[data-runtime-refresh]')?.addEventListener('click', async () => {
+    el.runtimePanel.textContent = '刷新中...';
+    await refreshSessions();
+    await loadRuntimeInfo().catch(renderRuntimeError);
+  });
+}
+
+async function loadRuntimeInfo() {
+  const session = getActiveSession();
+  if (!session) {
+    el.runtimePanel.textContent = '未选择会话';
+    return;
+  }
+  const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/runtime`);
+  await renderRuntimePanel(data);
+  if (data.session && mergeSessionSnapshot(data.session)) {
+    renderSessions();
+    renderActive({ messages: false });
+  }
+}
+
+function openRuntimeDialog() {
+  if (!state.activeId) return;
+  openModal(el.runtimeDialog);
+  clearInterval(state.runtimeTimer);
+  el.runtimePanel.textContent = '加载中...';
+  loadRuntimeInfo().catch(renderRuntimeError);
+  state.runtimeTimer = setInterval(() => {
+    if (!el.runtimeDialog.open) return;
+    loadRuntimeInfo().catch(renderRuntimeError);
+  }, 2000);
+}
+
+function closeRuntimeDialog() {
+  clearInterval(state.runtimeTimer);
+  state.runtimeTimer = null;
+  closeModal(el.runtimeDialog);
 }
 
 function loadImage(dataUrl) {
@@ -797,6 +1465,12 @@ function setSendState(mode) {
   el.sendButton.textContent = state.sending ? '发送中' : '发送';
 }
 
+function updateRunSettingsState() {
+  el.runSettingsState.textContent = el.elevatedRun.checked
+    ? '提权默认开启'
+    : '提权默认关闭';
+}
+
 function renderCommandList() {
   el.commandList.innerHTML = '';
   for (const command of CODEX_COMMANDS) {
@@ -860,44 +1534,44 @@ function extractOptionActions(text) {
 
 function upsertMessage(sessionId, message) {
   const messages = loadMessages(sessionId);
-  let replaced = false;
+  let replacedIndex = -1;
   if (message.clientMessageId) {
-    const localIndex = messages.findIndex((item) => item.clientMessageId === message.clientMessageId && item.pending);
-    if (localIndex >= 0) {
-      messages[localIndex] = message;
-      replaced = true;
-    }
+    replacedIndex = messages.findIndex((item) => item.clientMessageId === message.clientMessageId);
   }
-  if (!replaced) {
+  if (replacedIndex < 0) {
     const seq = Number(message.seq || 0);
-    if (seq > 0 && messages.some((item) => Number(item.seq || 0) === seq)) return;
-    messages.push(message);
+    replacedIndex = seq > 0 ? messages.findIndex((item) => Number(item.seq || 0) === seq) : -1;
+  }
+  const incoming = (message.id || message.seq) ? { ...message, pending: false, failed: false } : message;
+  let renderedMessage = incoming;
+  if (replacedIndex >= 0) {
+    renderedMessage = { ...messages[replacedIndex], ...incoming };
+    messages[replacedIndex] = renderedMessage;
+  } else {
+    messages.push(incoming);
   }
   messages.sort(compareMessages);
   state.lastSeq.set(sessionId, lastRealSeq(messages));
   saveMessages(sessionId);
 
-  if (message.status) {
-    state.sessions = state.sessions.map((item) => item.id === sessionId ? {
-      ...item,
-      status: message.status,
-      queuedCount: message.queuedCount ?? item.queuedCount,
-      updatedAt: message.at || item.updatedAt
-    } : item);
-    saveSessionCache();
-    renderSessions();
+  if (renderedMessage.status) {
+    const changed = mergeSessionSnapshot({
+      id: sessionId,
+      status: renderedMessage.status,
+      queuedCount: renderedMessage.queuedCount,
+      updatedAt: renderedMessage.at
+    });
+    if (changed) renderSessions();
   }
 
   if (sessionId === state.activeId) {
     const stickToBottom = isNearMessageBottom();
-    const nextNode = renderMessage(message);
-    const existing = message.clientMessageId
-      ? [...el.messagePane.children].find((node) => node.dataset?.clientMessageId === message.clientMessageId)
-      : null;
+    const nextNode = renderMessage(renderedMessage);
+    const existing = findRenderedMessageNode(renderedMessage);
     removeRunIndicator();
     removeQueuePanel();
     if (existing) existing.replaceWith(nextNode);
-    else if (message.role === 'assistant' || message.role === 'tool') {
+    else if (renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
       renderMessages(sessionId, { stickToBottom });
       return;
     } else {
@@ -907,6 +1581,46 @@ function upsertMessage(sessionId, message) {
     updateRunIndicator();
     if (stickToBottom) scrollMessagesToBottom();
     renderActive({ messages: false });
+  }
+}
+
+function findRenderedMessageNode(message) {
+  return [...el.messagePane.querySelectorAll('.message')].find((node) => {
+    const ids = (node.dataset.messageIds || '').split(',').filter(Boolean);
+    return (message.id && (node.dataset.messageId === message.id || ids.includes(message.id)))
+      || (message.clientMessageId && node.dataset.clientMessageId === message.clientMessageId)
+      || (message.seq && Number(node.dataset.seq || 0) === Number(message.seq || 0));
+  });
+}
+
+function updateMessage(sessionId, message) {
+  const messages = loadMessages(sessionId);
+  const index = messages.findIndex((item) => (
+    (message.id && item.id === message.id)
+    || (message.clientMessageId && item.clientMessageId === message.clientMessageId)
+    || (message.seq && Number(item.seq || 0) === Number(message.seq || 0))
+  ));
+  if (index < 0) {
+    upsertMessage(sessionId, message);
+    return;
+  }
+  const updatedMessage = { ...messages[index], ...message };
+  messages[index] = updatedMessage;
+  messages.sort(compareMessages);
+  state.lastSeq.set(sessionId, lastRealSeq(messages));
+  saveMessages(sessionId);
+  if (sessionId === state.activeId) {
+    const node = findRenderedMessageNode(message);
+    if (node) {
+      const stickToBottom = isNearMessageBottom();
+      node.replaceWith(renderMessage(updatedMessage, { animate: false }));
+      updateQueuePanel();
+      updateRunIndicator();
+      if (stickToBottom) scrollMessagesToBottom();
+      renderActive({ messages: false });
+    } else {
+      renderActive();
+    }
   }
 }
 
@@ -932,25 +1646,30 @@ function escapeHtml(value) {
     .replaceAll("'", '&#039;');
 }
 
-async function refreshSessions() {
+async function refreshSessions(options = {}) {
   try {
     const data = await api('/api/sessions');
     state.sessions = data.sessions || [];
     saveSessionCache();
-    const firstWebSession = state.sessions.find((item) => item.source !== 'codex');
+    const firstWebSession = state.sessions.find((item) => item.source !== 'codex' && !item.trashedAt);
     if (!state.activeId && firstWebSession) state.activeId = firstWebSession.id;
-    if (state.activeId && !state.sessions.some((item) => item.id === state.activeId)) {
+    if (state.activeId && !state.sessions.some((item) => item.id === state.activeId && !item.trashedAt)) {
       state.activeId = firstWebSession?.id || '';
     }
     localStorage.setItem('cmc.activeId', state.activeId);
     renderSessions();
-    renderActive();
-    if (state.activeId) await loadSession(state.activeId);
+    if (state.activeId && options.messages !== false) {
+      renderActive({ messages: false });
+      renderSessionLoading();
+      await loadSession(state.activeId, { showLoading: false });
+    } else {
+      renderActive({ messages: false });
+    }
   } catch (error) {
     if (error.status === 401) throw error;
     loadCachedSessions();
     renderSessions();
-    renderActive();
+    renderActive({ messages: options.messages !== false });
   }
 }
 
@@ -959,24 +1678,93 @@ window.cmcAfterLogin = async function cmcAfterLogin() {
   await refreshSessions();
 };
 
-async function loadSession(id) {
+async function loadSession(id, options = {}) {
+  if (options.showLoading !== false && state.activeId === id) {
+    renderActive({ messages: false });
+    renderSessionLoading();
+  }
   try {
-    const data = await api(`/api/sessions/${id}?limit=${encodeURIComponent(state.historyLimit)}`);
-    const session = data.session;
-    state.sessions = state.sessions.map((item) => item.id === id ? session : item);
-    state.messages.set(id, data.messages || []);
-    state.lastSeq.set(id, lastRealSeq(data.messages || []));
+    const knownSession = state.sessions.find((item) => item.id === id);
+    if (options.full !== true && isMessageCacheFresh(id, knownSession)) {
+      renderSessions();
+      renderActive({ stickToBottom: true });
+      connectEvents(id);
+      startContextRefreshLoop();
+      scheduleResourceCleanup();
+      return;
+    }
+    const limit = options.full === true ? maxHistoryLimit() : firstPageLimit();
+    const data = await api(`/api/sessions/${id}?limit=${encodeURIComponent(limit)}&offset=0`);
+    const session = data.session || { id };
+    mergeSessionSnapshot(session);
+    const cached = loadMessages(id);
+    const merged = options.full === true
+      ? mergeMessages([], data.messages || [])
+      : mergeMessages(cached, data.messages || []);
+    const trimmed = trimMessagesForStorage(merged);
+    state.messages.set(id, trimmed);
+    state.lastSeq.set(id, lastRealSeq(trimmed));
+    setMessagePage(id, data, { preserveOffset: options.full !== true });
     saveSessionCache();
     saveMessages(id);
     renderSessions();
-    renderActive();
+    renderActive({ stickToBottom: true });
     connectEvents(id);
     startContextRefreshLoop();
+    scheduleResourceCleanup();
   } catch {
     loadMessages(id);
-    renderActive();
+    renderActive({ stickToBottom: true });
     connectEvents(id);
     startContextRefreshLoop();
+  }
+}
+
+async function loadOlderMessages(sessionId) {
+  const session = state.sessions.find((item) => item.id === sessionId);
+  const page = state.messagePages.get(sessionId);
+  if (!session || !page?.hasMore || page.loading || state.loadingOlder) return;
+  const loaded = loadMessages(sessionId).length;
+  const remaining = Math.max(0, maxHistoryLimit() - loaded);
+  if (remaining <= 0) {
+    state.messagePages.set(sessionId, { ...page, hasMore: false });
+    renderActive({ messages: false });
+    return;
+  }
+
+  state.loadingOlder = true;
+  state.messagePages.set(sessionId, { ...page, loading: true });
+  renderActive({ messages: false });
+  const previousHeight = el.messagePane.scrollHeight;
+  try {
+    const limit = Math.min(HISTORY_PAGE_SIZE, remaining);
+    const data = await api(`/api/sessions/${sessionId}?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(page.offset || 0)}`);
+    if (data.session) mergeSessionSnapshot(data.session);
+    const merged = mergeMessages(data.messages || [], loadMessages(sessionId));
+    state.messages.set(sessionId, trimMessagesForStorage(merged));
+    state.lastSeq.set(sessionId, lastRealSeq(merged));
+    setMessagePage(sessionId, {
+      ...data,
+      hasMore: data.hasMore === true && merged.length < maxHistoryLimit()
+    });
+    saveMessages(sessionId);
+    if (state.activeId === sessionId) {
+      renderSessions();
+      renderActive({ stickToBottom: false });
+      requestAnimationFrame(() => {
+        state.suppressScrollTracking = true;
+        el.messagePane.scrollTop = Math.max(0, el.messagePane.scrollHeight - previousHeight);
+        requestAnimationFrame(() => {
+          state.suppressScrollTracking = false;
+        });
+      });
+    }
+  } catch (error) {
+    state.messagePages.set(sessionId, { ...page, loading: false });
+    if (state.activeId === sessionId) renderActive({ messages: false });
+  } finally {
+    state.loadingOlder = false;
+    scheduleResourceCleanup();
   }
 }
 
@@ -985,23 +1773,27 @@ async function refreshActiveContext() {
   if (!session?.codexSessionId || !state.online || state.contextRefreshInFlight) return;
   state.contextRefreshInFlight = true;
   try {
-    const data = await api(`/api/sessions/${session.id}?limit=${encodeURIComponent(state.historyLimit)}`);
+    const data = await api(`/api/sessions/${session.id}?limit=${encodeURIComponent(firstPageLimit())}&offset=0`);
     const nextMessages = data.messages || [];
     const currentMessages = loadMessages(session.id);
     const currentLast = currentMessages.at(-1);
     const nextLast = nextMessages.at(-1);
-    const changed = currentMessages.length !== nextMessages.length
+    const mergedMessages = mergeMessages(currentMessages, nextMessages);
+    const changed = currentMessages.length !== mergedMessages.length
       || currentLast?.at !== nextLast?.at
       || currentLast?.text !== nextLast?.text;
-    state.sessions = state.sessions.map((item) => item.id === session.id ? data.session : item);
+    const sessionChanged = mergeSessionSnapshot(data.session);
     if (changed) {
-      state.messages.set(session.id, nextMessages);
-      state.lastSeq.set(session.id, lastRealSeq(nextMessages));
-      saveSessionCache();
+      state.messages.set(session.id, trimMessagesForStorage(mergedMessages));
+      state.lastSeq.set(session.id, lastRealSeq(mergedMessages));
+      const page = state.messagePages.get(session.id);
+      if (!page) setMessagePage(session.id, data);
       saveMessages(session.id);
+    }
+    if (changed || sessionChanged) {
       if (state.activeId === session.id) {
         renderSessions();
-        renderActive();
+        renderActive({ messages: changed });
       }
     }
   } catch {
@@ -1026,13 +1818,25 @@ function connectEvents(id) {
   const source = new EventSource(`/api/events?sessionId=${encodeURIComponent(id)}&after=${after}`);
   state.eventSource = source;
 
-  source.addEventListener('hello', () => {
+  source.addEventListener('hello', (event) => {
     state.online = true;
-    renderActive();
+    let sessionChanged = false;
+    try {
+      const data = JSON.parse(event.data || '{}');
+      sessionChanged = data.session ? mergeSessionSnapshot(data.session) : false;
+    } catch {
+      // A malformed hello should not break the reconnect path.
+    }
+    if (sessionChanged) renderSessions();
+    renderActive({ messages: false });
   });
 
   source.addEventListener('message', (event) => {
     upsertMessage(id, JSON.parse(event.data));
+  });
+
+  source.addEventListener('message_update', (event) => {
+    updateMessage(id, JSON.parse(event.data));
   });
 
   source.onerror = () => {
@@ -1055,8 +1859,9 @@ async function selectSession(id) {
   localStorage.setItem('cmc.activeId', id);
   setDrawer(false);
   renderSessions();
-  renderActive();
-  await loadSession(id);
+  renderActive({ messages: false });
+  renderSessionLoading();
+  await loadSession(id, { showLoading: false });
 }
 
 async function importExternalSession(codexSessionId) {
@@ -1078,20 +1883,59 @@ async function importExternalSession(codexSessionId) {
   }
 }
 
+async function forkSession(session) {
+  if (!session?.id) return;
+  if (['running', 'stopping'].includes(session.status)) {
+    alert('会话正在运行，停止或等待结束后再 fork。');
+    return;
+  }
+  try {
+    setBadge('Fork 中');
+    const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/fork`, {
+      method: 'POST',
+      body: JSON.stringify({ title: session.title || '' })
+    });
+    if (data.session) {
+      mergeSessionSnapshot(data.session);
+      state.activeId = data.session.id;
+      localStorage.setItem('cmc.activeId', state.activeId);
+      saveSessionCache();
+      setDrawer(false);
+      renderSessions();
+      await loadSession(state.activeId, { full: true });
+    }
+  } catch (error) {
+    const messages = {
+      session_running: '会话正在运行，停止或等待结束后再 fork。',
+      codex_session_missing: '当前会话还没有绑定 Codex 原始会话，先运行一次后再 fork。',
+      codex_session_not_found: '没有找到 Codex 原始会话文件，无法 fork。'
+    };
+    alert(messages[error.code] || error.detail || error.message || 'Fork 失败');
+    renderActive({ messages: false });
+  }
+}
+
 async function deleteSession(session) {
-  const deletesCodex = Boolean(session.codexSessionId);
-  const label = deletesCodex
-    ? '真实删除这个 Codex 原始会话文件？这会从 /root/.codex/sessions 删除历史，无法从本应用恢复。'
-    : '删除这个会话在本应用里的记录？';
+  const permanent = Boolean(session.trashedAt);
+  const deletesCodex = permanent && Boolean(session.codexSessionId);
+  const label = permanent
+    ? deletesCodex
+      ? '永久删除这个 Codex 原始会话文件？这会从 /root/.codex/sessions 删除历史，无法恢复。'
+      : '永久删除这个会话记录？无法恢复。'
+    : '将这个会话移入回收站？';
   if (!confirm(label)) return;
   try {
-    await api(`/api/sessions/${encodeURIComponent(session.id)}`, {
+    const data = await api(`/api/sessions/${encodeURIComponent(session.id)}`, {
       method: 'DELETE',
-      body: JSON.stringify({ deleteCodex: deletesCodex })
+      body: JSON.stringify({ permanent, deleteCodex: deletesCodex })
     });
-    state.sessions = state.sessions.filter((item) => item.id !== session.id);
+    if (permanent) {
+      state.sessions = state.sessions.filter((item) => item.id !== session.id);
+    } else if (data.session) {
+      mergeSessionSnapshot(data.session);
+    }
     if (state.activeId === session.id) {
-      state.activeId = state.sessions.find((item) => item.source !== 'codex')?.id || '';
+      state.activeId = state.sessions.find((item) => item.source !== 'codex' && !item.trashedAt)?.id || '';
       localStorage.setItem('cmc.activeId', state.activeId);
       if (state.eventSource) state.eventSource.close();
       state.eventSource = null;
@@ -1105,6 +1949,17 @@ async function deleteSession(session) {
   }
 }
 
+async function restoreSession(session) {
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/restore`, { method: 'POST' });
+    if (data.session) mergeSessionSnapshot(data.session);
+    renderSessions();
+    renderActive();
+  } catch (error) {
+    alert(error.message || '还原失败');
+  }
+}
+
 async function renameSession(session) {
   const title = prompt('新的会话名称', session.title || '');
   if (title === null) return;
@@ -1115,11 +1970,10 @@ async function renameSession(session) {
       method: 'PATCH',
       body: JSON.stringify({ title: nextTitle })
     });
-    state.sessions = state.sessions.map((item) => item.id === session.id ? { ...item, ...(data.session || {}), title: nextTitle } : item);
+    mergeSessionSnapshot({ ...(data.session || {}), id: session.id, title: nextTitle });
     if (state.activeId === session.id) {
       el.activeTitle.textContent = nextTitle;
     }
-    saveSessionCache();
     renderSessions();
   } catch (error) {
     alert(error.message || '改名失败');
@@ -1148,6 +2002,7 @@ if (!el.loginForm.dataset.fallbackBound) {
 async function sendPrompt(rawPrompt, opts = {}) {
   const prompt = String(rawPrompt || '').trim();
   const images = opts.images ? [...opts.images] : [...state.pendingImages];
+  const mode = opts.mode === 'supplement' ? 'supplement' : 'run';
   if ((!prompt && !images.length) || !state.activeId) return;
   const sessionId = state.activeId;
   if (state.showStarredOnly) {
@@ -1168,13 +2023,13 @@ async function sendPrompt(rawPrompt, opts = {}) {
   setSendState('sending');
   const optimisticMessage = {
     at: new Date().toISOString(),
-    role: 'user',
+    role: mode === 'supplement' ? 'supplement' : 'user',
     text: prompt || '请分析这张图片。',
     elevated,
     clientMessageId,
     images: images.map((image) => ({ name: image.name, type: image.type, dataUrl: image.data })),
     retryImages: images,
-    delivery: 'sending',
+    delivery: mode === 'supplement' ? 'supplement' : 'sending',
     pending: true
   };
   upsertMessage(sessionId, optimisticMessage);
@@ -1182,14 +2037,14 @@ async function sendPrompt(rawPrompt, opts = {}) {
   try {
     const data = await api(`/api/sessions/${sessionId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({ prompt, elevated, clientMessageId, images })
+      body: JSON.stringify({ prompt, elevated, clientMessageId, images, mode })
     });
     updateLocalClientMessage(sessionId, clientMessageId, {
-      pending: data.queued === true,
-      delivery: data.queued === true ? 'queued' : 'sent'
+      pending: false,
+      delivery: data.supplement === true ? 'supplement' : data.queued === true ? 'queued' : 'sent',
+      runState: data.supplement === true ? 'submitted' : data.queued === true ? 'queued' : 'submitted'
     });
-    state.sessions = state.sessions.map((item) => item.id === sessionId ? data.session : item);
-    renderSessions();
+    if (mergeSessionSnapshot(data.session)) renderSessions();
     renderActive({ messages: false });
   } catch (error) {
     if (state.activeId === sessionId && !el.promptInput.value && !state.pendingImages.length) {
@@ -1237,16 +2092,16 @@ function retryMessage(message) {
 
 async function stopCurrentRun() {
   if (!state.activeId) return;
+  const sessionId = state.activeId;
   el.stopButton.disabled = true;
   try {
-    const data = await api(`/api/sessions/${state.activeId}/stop`, { method: 'POST' });
+    const data = await api(`/api/sessions/${sessionId}/stop`, { method: 'POST' });
     if (data.session) {
-      state.sessions = state.sessions.map((item) => item.id === state.activeId ? data.session : item);
-      renderSessions();
-      renderActive();
+      if (mergeSessionSnapshot(data.session)) renderSessions();
+      renderActive({ messages: false });
     }
   } catch (error) {
-    upsertMessage(state.activeId, {
+    upsertMessage(sessionId, {
       at: new Date().toISOString(),
       role: 'system',
       text: error.message || '停止失败'
@@ -1260,9 +2115,7 @@ async function cancelQueuedPrompt(queueId) {
   try {
     const data = await api(`/api/sessions/${session.id}/queue/${encodeURIComponent(queueId)}`, { method: 'DELETE' });
     if (data.session) {
-      state.sessions = state.sessions.map((item) => item.id === session.id ? data.session : item);
-      saveSessionCache();
-      renderSessions();
+      if (mergeSessionSnapshot(data.session)) renderSessions();
       renderActive({ messages: false });
     }
   } catch (error) {
@@ -1271,6 +2124,21 @@ async function cancelQueuedPrompt(queueId) {
       role: 'system',
       text: error.message || '取消排队失败'
     });
+  }
+}
+
+async function supplementQueuedPrompt(queueId) {
+  const session = getActiveSession();
+  if (!session || !queueId) return;
+  try {
+    const data = await api(`/api/sessions/${session.id}/queue/${encodeURIComponent(queueId)}`, { method: 'POST' });
+    if (data.message) updateMessage(session.id, data.message);
+    if (data.session) {
+      if (mergeSessionSnapshot(data.session)) renderSessions();
+      renderActive({ messages: false });
+    }
+  } catch (error) {
+    alert(error.message || '补入失败');
   }
 }
 
@@ -1310,7 +2178,9 @@ function applyLocalStarred(sessionId, ids, starred) {
 function updateFavoritesButton() {
   el.favoritesButton.classList.toggle('active', state.showStarredOnly);
   el.favoritesButton.setAttribute('aria-pressed', String(state.showStarredOnly));
-  el.favoritesButton.textContent = state.showStarredOnly ? '全部' : '收藏';
+  el.favoritesButton.setAttribute('aria-label', state.showStarredOnly ? '显示全部消息' : '只看收藏');
+  el.favoritesButton.title = state.showStarredOnly ? '显示全部消息' : '只看收藏';
+  el.favoritesButton.textContent = state.showStarredOnly ? '★' : '☆';
 }
 
 function editPrompt(text, elevated) {
@@ -1363,8 +2233,8 @@ el.themeSelect.addEventListener('change', () => {
 });
 
 el.historyLimitInput.addEventListener('change', async () => {
-  const value = Math.max(0, Math.min(5000, Number(el.historyLimitInput.value || 500)));
-  state.historyLimit = String(Number.isFinite(value) ? value : 500);
+  const value = Math.max(0, Math.min(5000, Number(el.historyLimitInput.value || 200)));
+  state.historyLimit = String(Number.isFinite(value) ? value : 200);
   el.historyLimitInput.value = state.historyLimit;
   localStorage.setItem('cmc.historyLimit', state.historyLimit);
   if (state.activeId) await loadSession(state.activeId);
@@ -1373,6 +2243,7 @@ el.historyLimitInput.addEventListener('change', async () => {
 el.elevatedRun.addEventListener('change', () => {
   state.elevated = el.elevatedRun.checked;
   localStorage.setItem('cmc.elevated', state.elevated ? '1' : '0');
+  updateRunSettingsState();
 });
 
 el.sessionViewMode.addEventListener('change', () => {
@@ -1413,8 +2284,48 @@ el.commandButton.addEventListener('click', () => {
   openModal(el.commandDialog);
 });
 el.closeCommandDialog.addEventListener('click', () => closeModal(el.commandDialog));
-el.settingsButton.addEventListener('click', () => openModal(el.settingsDialog));
+el.runtimeButton.addEventListener('click', openRuntimeDialog);
+el.closeRuntimeDialog.addEventListener('click', closeRuntimeDialog);
+el.runtimeDialog.addEventListener('close', () => {
+  clearInterval(state.runtimeTimer);
+  state.runtimeTimer = null;
+});
+function selectSettingsPage(page) {
+  for (const tab of el.settingsTabs) {
+    const active = tab.dataset.settingsTab === page;
+    tab.classList.toggle('active', active);
+    tab.setAttribute('aria-selected', String(active));
+  }
+  for (const panel of el.settingsPages) {
+    panel.classList.toggle('active', panel.dataset.settingsPage === page);
+  }
+  if (page === 'storage') {
+    loadStorageStats().catch((error) => {
+      el.storageStats.textContent = error.message || '加载失败';
+    });
+  }
+}
+
+el.settingsButton.addEventListener('click', () => {
+  openModal(el.settingsDialog);
+  selectSettingsPage('ui');
+});
 el.closeSettingsDialog.addEventListener('click', () => closeModal(el.settingsDialog));
+for (const tab of el.settingsTabs) {
+  tab.addEventListener('click', () => selectSettingsPage(tab.dataset.settingsTab));
+}
+el.refreshStorageButton.addEventListener('click', () => loadStorageStats().catch((error) => {
+  el.storageStats.textContent = error.message || '刷新失败';
+}));
+el.saveStorageButton.addEventListener('click', () => saveStorageSettings().catch((error) => {
+  el.storageStats.textContent = error.message || '保存失败';
+}));
+el.cleanupUploadsButton.addEventListener('click', () => runStorageCleanup('orphanUploads').catch((error) => {
+  el.storageStats.textContent = error.message || '清理失败';
+}));
+el.cleanupRuntimeButton.addEventListener('click', () => runStorageCleanup('runtime').catch((error) => {
+  el.storageStats.textContent = error.message || '清理失败';
+}));
 el.closeImageViewer.addEventListener('click', closeImageViewer);
 el.imageViewer.addEventListener('click', (event) => {
   if (event.target === el.imageViewer) closeImageViewer();
@@ -1483,9 +2394,23 @@ function autoSizePrompt() {
 
 el.promptInput.addEventListener('input', autoSizePrompt);
 
+el.messagePane.addEventListener('scroll', () => {
+  if (state.renderingMessages && !state.suppressScrollTracking) {
+    state.userScrolledDuringRender = true;
+  }
+  if (
+    !state.suppressScrollTracking
+    && !state.renderingMessages
+    && el.messagePane.scrollTop < 48
+    && state.activeId
+  ) {
+    loadOlderMessages(state.activeId);
+  }
+}, { passive: true });
+
 window.addEventListener('online', () => {
   state.online = true;
-  refreshSessions().catch(() => {});
+  refreshSessions({ messages: false }).catch(() => {});
   if (state.activeId) connectEvents(state.activeId);
   startContextRefreshLoop();
 });
@@ -1494,11 +2419,16 @@ window.addEventListener('offline', () => {
   state.online = false;
   if (state.eventSource) state.eventSource.close();
   clearInterval(state.contextRefreshTimer);
-  renderActive();
+  renderActive({ messages: false });
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (!document.hidden) refreshActiveContext();
+  clearTimeout(state.foregroundRefreshTimer);
+  if (!document.hidden) {
+    state.foregroundRefreshTimer = setTimeout(() => {
+      refreshActiveContext();
+    }, 600);
+  }
 });
 
 if ('serviceWorker' in navigator) {

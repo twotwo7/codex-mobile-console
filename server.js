@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { mkdir, readFile, writeFile, stat, rename, readdir, unlink } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, readFile, writeFile, stat, rename, readdir, unlink, statfs, readlink } from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +12,7 @@ const PORT = Number(process.env.PORT || 7072);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
+const RESTART_MARKER_FILE = path.join(DATA_DIR, 'restart-marker.json');
 const PASSWORD_FILE = path.join(DATA_DIR, 'admin-password.txt');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const CODEX_HOME = process.env.CODEX_HOME || '/root/.codex';
@@ -20,6 +21,14 @@ const CODEX_NODE = process.env.CODEX_NODE || process.execPath;
 const CODEX_BIN_DIR = path.dirname(CODEX_BIN);
 const COOKIE_NAME = 'cmc_session';
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+const RUNTIME_DIR = path.join(__dirname, 'runtime');
+const SERVICE_STARTED_AT = new Date().toISOString();
+const DEFAULT_STORAGE_SETTINGS = {
+  autoCleanup: false,
+  uploadRetentionDays: 30,
+  runtimeRetentionDays: 7,
+  maxUploadMb: 1024
+};
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -39,6 +48,11 @@ let state = {
 };
 const clients = new Map();
 const running = new Map();
+const codexUsageCache = new Map();
+const clockTick = Number(process.env.CLK_TCK || 100);
+let totalRequests = 0;
+let activeRequests = 0;
+let packageMetaCache = null;
 
 async function exists(file) {
   try {
@@ -64,31 +78,140 @@ async function init() {
     state.hiddenCodexSessions ||= {};
     state.codexSessionTitles ||= {};
     state.starredMessages ||= {};
+    state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.nextSeq ||= 1;
   } else {
     state.hiddenCodexSessions ||= {};
     state.codexSessionTitles ||= {};
     state.starredMessages ||= {};
+    state.storageSettings = normalizeStorageSettings(state.storageSettings);
     await saveState();
   }
-  reconcileRunningSessions();
+  const restartMarker = await consumeRestartMarker();
+  reconcileRunningSessions(restartMarker);
   pruneAuthSessions();
+  startStorageMaintenance();
+  startRunMonitor();
 }
 
-function reconcileRunningSessions() {
+function normalizeStorageSettings(value = {}) {
+  return {
+    autoCleanup: value.autoCleanup === true,
+    uploadRetentionDays: clampInteger(value.uploadRetentionDays, 0, 3650, DEFAULT_STORAGE_SETTINGS.uploadRetentionDays),
+    runtimeRetentionDays: clampInteger(value.runtimeRetentionDays, 0, 3650, DEFAULT_STORAGE_SETTINGS.runtimeRetentionDays),
+    maxUploadMb: clampInteger(value.maxUploadMb, 0, 102400, DEFAULT_STORAGE_SETTINGS.maxUploadMb)
+  };
+}
+
+function clampInteger(value, min, max, fallback) {
+  const next = Number(value);
+  if (!Number.isFinite(next)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(next)));
+}
+
+async function writeRestartMarker(reason = 'manual') {
+  const marker = {
+    version: 1,
+    reason,
+    requestedAt: nowIso(),
+    pid: process.pid,
+    running: [...running.keys()]
+  };
+  const tmp = `${RESTART_MARKER_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(marker, null, 2), { mode: 0o600 });
+  await rename(tmp, RESTART_MARKER_FILE);
+  return marker;
+}
+
+async function consumeRestartMarker() {
+  try {
+    const marker = JSON.parse(await readFile(RESTART_MARKER_FILE, 'utf8'));
+    await unlink(RESTART_MARKER_FILE).catch(() => {});
+    return marker;
+  } catch {
+    return null;
+  }
+}
+
+function summarizeRunPrompt(activeRun) {
+  const prompt = String(activeRun?.prompt || '').replace(/\s+/g, ' ').trim();
+  if (!prompt) return '';
+  return prompt.length > 180 ? `${prompt.slice(0, 180)}...` : prompt;
+}
+
+function reconcileRunningSessions(restartMarker = null) {
+  const planned = Boolean(restartMarker);
   for (const session of Object.values(state.sessions || {})) {
+    session.messages ||= [];
+    session.queue ||= [];
     if (session.status === 'running' || session.status === 'stopping') {
-      session.status = 'error';
+      const activeRun = session.activeRun;
+      const promptSummary = summarizeRunPrompt(activeRun);
+      session.status = planned ? 'idle' : 'error';
+      if (activeRun?.messageId) {
+        updateMessageRunState(session, activeRun.messageId, planned ? 'recovered' : 'failed', {
+          delivery: planned ? 'recovered' : 'failed'
+        });
+      }
+      delete session.activeRun;
       addMessage(session, {
         role: 'system',
-        text: 'Service restarted while Codex was running. Send the prompt again to continue.',
-        status: 'error'
+        text: [
+          planned
+            ? 'Service restarted with a recovery marker. The session was restored to an operable state.'
+            : 'Service restarted unexpectedly while Codex was running. The session status was reconciled.',
+          promptSummary ? `Interrupted prompt: ${promptSummary}` : '',
+          'The interrupted prompt was not replayed automatically to avoid repeating file changes or commands.'
+        ].filter(Boolean).join('\n'),
+        status: session.status,
+        queuedCount: session.queue.length
       });
     }
   }
 }
 
+function updateMessageRunState(session, messageId, runState, extra = {}) {
+  if (!messageId) return null;
+  const message = (session.messages || []).find((item) => item.id === messageId || item.clientMessageId === messageId);
+  if (!message) return null;
+  message.runState = runState;
+  message.completedAt = ['completed', 'failed', 'stopped', 'recovered'].includes(runState) ? nowIso() : message.completedAt;
+  Object.assign(message, extra);
+  scheduleSave();
+  broadcastEvent(session.id, 'message_update', message);
+  return message;
+}
+
+function incompleteRunMessages(session) {
+  return (session.messages || []).filter((message) => (
+    message.role === 'user'
+    && ['submitted', 'running', 'queued', 'stopping'].includes(message.runState)
+  ));
+}
+
+function recoverStaleSession(session, reason = 'monitor') {
+  session.messages ||= [];
+  session.queue ||= [];
+  const activeMessageId = session.activeRun?.messageId;
+  for (const message of incompleteRunMessages(session)) {
+    const isQueued = session.queue.some((item) => item.clientMessageId === message.clientMessageId || item.messageId === message.id);
+    if (isQueued) continue;
+    updateMessageRunState(session, message.id, 'recovered', { delivery: 'recovered' });
+  }
+  delete session.activeRun;
+  session.status = 'idle';
+  session.updatedAt = nowIso();
+  addMessage(session, {
+    role: 'system',
+    text: `Recovered stale run state (${reason}). No Codex process was active for this session.`,
+    status: 'idle',
+    queuedCount: session.queue.length,
+    recoveredMessageId: activeMessageId || ''
+  });
+}
+
 let saveTimer = null;
+let restartRequested = false;
 function scheduleSave() {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => saveState().catch(console.error), 100);
@@ -98,6 +221,11 @@ async function saveState() {
   const tmp = `${STATE_FILE}.tmp`;
   await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
   await rename(tmp, STATE_FILE);
+}
+
+async function prepareForShutdown(reason = 'signal') {
+  if (running.size > 0) await writeRestartMarker(reason);
+  await saveState();
 }
 
 function nowIso() {
@@ -181,6 +309,8 @@ function safeCompare(a, b) {
 }
 
 function publicSession(session) {
+  session.messages ||= [];
+  session.queue ||= [];
   return {
     id: session.id,
     source: session.source || 'web',
@@ -191,13 +321,15 @@ function publicSession(session) {
     approval: session.approval,
     codexSessionId: session.codexSessionId || '',
     status: session.status,
+    trashedAt: session.trashedAt || '',
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
     lastSeq: session.lastSeq || 0,
-    queuedCount: session.queue?.length || 0,
-    queue: (session.queue || []).map((item) => ({
+    queuedCount: session.queue.length,
+    queue: session.queue.map((item) => ({
       id: item.id,
       prompt: item.prompt,
+      displayPrompt: item.displayPrompt || item.prompt,
       elevated: item.elevated === true,
       imageCount: item.images?.length || 0,
       images: (item.images || []).map((image) => ({
@@ -207,7 +339,281 @@ function publicSession(session) {
       })),
       createdAt: item.createdAt
     })),
-    messageCount: session.messages?.length || 0
+    messageCount: session.messages.length
+  };
+}
+
+function pendingSupplements(session) {
+  return (session.messages || []).filter((message) => message.role === 'supplement' && message.used !== true);
+}
+
+function promptWithSupplements(session, prompt) {
+  const supplements = pendingSupplements(session);
+  if (!supplements.length) return { prompt, supplements, imagePaths: [] };
+  const supplementText = supplements
+    .map((message, index) => {
+      const imageCount = message.images?.length ? `（含图片 ${message.images.length} 张）` : '';
+      return `${index + 1}. ${message.text}${imageCount}`;
+    })
+    .join('\n');
+  return {
+    prompt: `${prompt}\n\n补充信息：\n${supplementText}`,
+    supplements,
+    imagePaths: supplements.flatMap((message) => (message.images || []).map((image) => image.path).filter(Boolean))
+  };
+}
+
+function markSupplementsUsed(supplements, runMessageId) {
+  const usedAt = nowIso();
+  for (const message of supplements || []) {
+    message.used = true;
+    message.usedAt = usedAt;
+    message.usedBy = runMessageId || '';
+    message.runState = 'completed';
+    message.delivery = 'completed';
+  }
+}
+
+function restoreSupplementsUsedBy(session, runMessageId) {
+  if (!runMessageId) return;
+  for (const message of session.messages || []) {
+    if (message.role !== 'supplement' || message.usedBy !== runMessageId) continue;
+    message.used = false;
+    delete message.usedAt;
+    delete message.usedBy;
+    message.runState = 'submitted';
+    message.delivery = 'supplement';
+    broadcastEvent(session.id, 'message_update', message);
+  }
+}
+
+function parseProcStat(raw) {
+  const end = raw.lastIndexOf(')');
+  if (end < 0) return null;
+  const pid = Number(raw.slice(0, raw.indexOf(' ')));
+  const comm = raw.slice(raw.indexOf('(') + 1, end);
+  const rest = raw.slice(end + 2).trim().split(/\s+/);
+  return {
+    pid,
+    comm,
+    state: rest[0],
+    ppid: Number(rest[1]),
+    pgrp: Number(rest[2]),
+    session: Number(rest[3]),
+    ttyNr: Number(rest[4]),
+    utime: Number(rest[11]),
+    stime: Number(rest[12]),
+    starttime: Number(rest[19]),
+    rssPages: Number(rest[21])
+  };
+}
+
+async function readProcessInfo(pid) {
+  try {
+    const [statRaw, statusRaw, cmdlineRaw] = await Promise.all([
+      readFile(`/proc/${pid}/stat`, 'utf8'),
+      readFile(`/proc/${pid}/status`, 'utf8').catch(() => ''),
+      readFile(`/proc/${pid}/cmdline`).catch(() => Buffer.alloc(0))
+    ]);
+    const parsed = parseProcStat(statRaw);
+    if (!parsed) return null;
+    const status = Object.fromEntries(statusRaw.split('\n').map((line) => {
+      const index = line.indexOf(':');
+      return index > 0 ? [line.slice(0, index), line.slice(index + 1).trim()] : null;
+    }).filter(Boolean));
+    const cmdline = cmdlineRaw.toString('utf8').split('\0').filter(Boolean);
+    let cwd = '';
+    try {
+      cwd = await readlink(`/proc/${pid}/cwd`);
+    } catch {
+      cwd = '';
+    }
+    const cpuMs = Math.round(((parsed.utime + parsed.stime) / clockTick) * 1000);
+    return {
+      pid,
+      ppid: parsed.ppid,
+      pgrp: parsed.pgrp,
+      state: parsed.state,
+      name: status.Name || parsed.comm,
+      cmdline,
+      cwd,
+      threads: Number(status.Threads || 0),
+      memoryKb: Number(String(status.VmRSS || '').match(/\d+/)?.[0] || 0),
+      cpuMs
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function processChildrenMap() {
+  const entries = await readdir('/proc', { withFileTypes: true });
+  const map = new Map();
+  await Promise.all(entries
+    .filter((entry) => entry.isDirectory() && /^\d+$/.test(entry.name))
+    .map(async (entry) => {
+      try {
+        const raw = await readFile(`/proc/${entry.name}/stat`, 'utf8');
+        const parsed = parseProcStat(raw);
+        if (!parsed) return;
+        if (!map.has(parsed.ppid)) map.set(parsed.ppid, []);
+        map.get(parsed.ppid).push(parsed.pid);
+      } catch {
+        // Process disappeared while scanning.
+      }
+    }));
+  return map;
+}
+
+async function processTree(rootPid) {
+  if (!rootPid) return [];
+  const children = await processChildrenMap();
+  const seen = new Set();
+  const ordered = [];
+  const visit = (pid, depth) => {
+    if (!pid || seen.has(pid)) return;
+    seen.add(pid);
+    ordered.push({ pid, depth });
+    for (const childPid of children.get(pid) || []) visit(childPid, depth + 1);
+  };
+  visit(rootPid, 0);
+  const infos = await Promise.all(ordered.map(async (item) => ({
+    ...item,
+    ...(await readProcessInfo(item.pid))
+  })));
+  return infos.filter((item) => item.name);
+}
+
+function normalizeUsage(value = {}) {
+  return {
+    inputTokens: Number(value.input_tokens || 0),
+    cachedInputTokens: Number(value.cached_input_tokens || 0),
+    outputTokens: Number(value.output_tokens || 0),
+    reasoningOutputTokens: Number(value.reasoning_output_tokens || 0),
+    totalTokens: Number(value.total_tokens || 0)
+  };
+}
+
+function parseCodexUsageLine(item, current = {}) {
+  const payload = item.payload || {};
+  if (item.type === 'turn_context') {
+    return {
+      ...current,
+      model: payload.model || current.model || '',
+      effort: payload.effort || current.effort || '',
+      summary: payload.summary || current.summary || ''
+    };
+  }
+  if (payload.type === 'task_started') {
+    return {
+      ...current,
+      modelContextWindow: Number(payload.model_context_window || current.modelContextWindow || 0)
+    };
+  }
+  if (payload.type !== 'token_count') return current;
+
+  const info = payload.info || {};
+  const modelContextWindow = Number(info.model_context_window || current.modelContextWindow || 0);
+  const last = normalizeUsage(info.last_token_usage);
+  const total = normalizeUsage(info.total_token_usage);
+  const contextTokens = last.inputTokens || 0;
+  const contextRemaining = modelContextWindow ? Math.max(0, modelContextWindow - contextTokens) : 0;
+  const contextPercent = modelContextWindow ? Math.min(100, Math.round((contextTokens / modelContextWindow) * 1000) / 10) : 0;
+  return {
+    ...current,
+    available: true,
+    updatedAt: item.timestamp || current.updatedAt || '',
+    modelContextWindow,
+    contextTokens,
+    contextRemaining,
+    contextPercent,
+    lastTokenUsage: last,
+    totalTokenUsage: total,
+    compactEstimate: {
+      thresholdKnown: false,
+      remainingTokens: contextRemaining,
+      note: 'Codex exposes context window and current request tokens, but not the exact auto-compact threshold.'
+    },
+    rateLimits: payload.rate_limits || current.rateLimits || null
+  };
+}
+
+async function codexUsageInfo(codexSessionId) {
+  if (!codexSessionId) return null;
+  const codexSession = await findCodexSession(codexSessionId);
+  if (!codexSession?.file) return null;
+  let info;
+  try {
+    info = await stat(codexSession.file);
+  } catch {
+    return null;
+  }
+  const cached = codexUsageCache.get(codexSession.file);
+  if (cached && cached.mtimeMs === info.mtimeMs && cached.size === info.size) return cached.value;
+
+  const raw = await readFile(codexSession.file, 'utf8');
+  let value = {
+    available: false,
+    codexSessionId,
+    sessionFile: codexSession.file,
+    fileBytes: info.size,
+    fileUpdatedAt: new Date(info.mtimeMs).toISOString(),
+    model: '',
+    effort: '',
+    summary: '',
+    modelContextWindow: 0,
+    contextTokens: 0,
+    contextRemaining: 0,
+    contextPercent: 0,
+    lastTokenUsage: null,
+    totalTokenUsage: null,
+    compactEstimate: null,
+    rateLimits: null
+  };
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      value = parseCodexUsageLine(JSON.parse(line), value);
+    } catch {
+      // Ignore malformed historical lines.
+    }
+  }
+  codexUsageCache.set(codexSession.file, { mtimeMs: info.mtimeMs, size: info.size, value });
+  return value;
+}
+
+async function runtimeInfo(session) {
+  const child = running.get(session.id);
+  const rootPid = child?.pid || 0;
+  const startedAt = session.activeRun?.startedAt || '';
+  const uptimeMs = startedAt ? Math.max(0, Date.now() - Date.parse(startedAt)) : 0;
+  const [processes, codexUsage, service] = await Promise.all([
+    processTree(rootPid),
+    codexUsageInfo(session.codexSessionId),
+    serviceRuntimeInfo()
+  ]);
+  return {
+    session: publicSession(session),
+    running: Boolean(child),
+    pid: rootPid,
+    killed: child?.killed === true,
+    exitCode: child?.exitCode ?? null,
+    signalCode: child?.signalCode ?? null,
+    activeRun: session.activeRun ? {
+      ...session.activeRun,
+      prompt: summarizeRunPrompt(session.activeRun),
+      imageCount: session.activeRun.imagePaths?.length || 0,
+      imagePaths: undefined
+    } : null,
+    queue: session.queue || [],
+    uptimeMs,
+    processCount: processes.length,
+    memoryKb: processes.reduce((sum, item) => sum + (item.memoryKb || 0), 0),
+    cpuMs: processes.reduce((sum, item) => sum + (item.cpuMs || 0), 0),
+    processes,
+    codexUsage,
+    service,
+    checkedAt: nowIso()
   };
 }
 
@@ -222,6 +628,7 @@ function publicExternalSession(session) {
     approval: '',
     codexSessionId: session.codexSessionId,
     status: 'external',
+    trashedAt: state.hiddenCodexSessions?.[session.codexSessionId] || '',
     createdAt: session.createdAt || session.updatedAt,
     updatedAt: session.updatedAt,
     lastSeq: 0,
@@ -289,6 +696,249 @@ async function savePromptImages(images) {
   return saved;
 }
 
+async function collectFiles(root, out = []) {
+  let entries = [];
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) await collectFiles(full, out);
+    else if (entry.isFile()) {
+      try {
+        const info = await stat(full);
+        out.push({ path: full, name: entry.name, size: info.size, mtimeMs: info.mtimeMs });
+      } catch {
+        // Ignore files that disappear during scanning.
+      }
+    }
+  }
+  return out;
+}
+
+async function directoryBytes(root) {
+  const files = await collectFiles(root);
+  return files.reduce((sum, file) => sum + file.size, 0);
+}
+
+function referencedUploadNames() {
+  const refs = new Set();
+  const addImage = (image) => {
+    if (!image) return;
+    if (image.fileName) refs.add(image.fileName);
+    if (image.path) refs.add(path.basename(image.path));
+    if (image.url) refs.add(path.basename(decodeURIComponent(String(image.url).split('/').pop() || '')));
+  };
+  for (const session of Object.values(state.sessions || {})) {
+    for (const message of session.messages || []) for (const image of message.images || []) addImage(image);
+    for (const item of session.queue || []) for (const image of item.images || []) addImage(image);
+  }
+  return refs;
+}
+
+async function storageStats() {
+  const [dataBytes, uploadFiles, runtimeBytes] = await Promise.all([
+    directoryBytes(DATA_DIR),
+    collectFiles(UPLOAD_DIR),
+    directoryBytes(RUNTIME_DIR)
+  ]);
+  let stateBytes = 0;
+  try {
+    stateBytes = (await stat(STATE_FILE)).size;
+  } catch {
+    stateBytes = 0;
+  }
+  let disk = null;
+  try {
+    const info = await statfs(__dirname);
+    disk = {
+      totalBytes: info.blocks * info.bsize,
+      freeBytes: info.bavail * info.bsize
+    };
+  } catch {
+    disk = null;
+  }
+  const refs = referencedUploadNames();
+  const uploadBytes = uploadFiles.reduce((sum, file) => sum + file.size, 0);
+  const orphanFiles = uploadFiles.filter((file) => !refs.has(file.name));
+  return {
+    settings: normalizeStorageSettings(state.storageSettings),
+    dataBytes,
+    uploadBytes,
+    uploadCount: uploadFiles.length,
+    orphanUploadBytes: orphanFiles.reduce((sum, file) => sum + file.size, 0),
+    orphanUploadCount: orphanFiles.length,
+    runtimeBytes,
+    stateBytes,
+    disk,
+    updatedAt: nowIso()
+  };
+}
+
+async function packageMeta() {
+  if (packageMetaCache) return packageMetaCache;
+  try {
+    const pkg = JSON.parse(await readFile(path.join(__dirname, 'package.json'), 'utf8'));
+    packageMetaCache = {
+      name: String(pkg.name || 'codex-mobile-console'),
+      version: String(pkg.version || '')
+    };
+  } catch {
+    packageMetaCache = { name: 'codex-mobile-console', version: '' };
+  }
+  return packageMetaCache;
+}
+
+async function serviceRuntimeInfo() {
+  const [pkg, diskInfo] = await Promise.all([
+    packageMeta(),
+    statfs(__dirname).catch(() => null)
+  ]);
+  const memory = process.memoryUsage();
+  const disk = diskInfo ? {
+    totalBytes: diskInfo.blocks * diskInfo.bsize,
+    freeBytes: diskInfo.bavail * diskInfo.bsize
+  } : null;
+  return {
+    name: pkg.name,
+    version: pkg.version,
+    pid: process.pid,
+    node: process.version,
+    host: HOST,
+    port: PORT,
+    startedAt: SERVICE_STARTED_AT,
+    uptimeMs: Math.round(process.uptime() * 1000),
+    memory: {
+      rssBytes: memory.rss,
+      heapUsedBytes: memory.heapUsed,
+      heapTotalBytes: memory.heapTotal,
+      externalBytes: memory.external
+    },
+    activeRequests,
+    totalRequests,
+    sseClients: [...clients.values()].reduce((sum, set) => sum + set.size, 0),
+    runningSessions: running.size,
+    sessionCount: Object.keys(state.sessions || {}).length,
+    authSessionCount: Object.keys(state.authSessions || {}).length,
+    dataDir: DATA_DIR,
+    codexHome: CODEX_HOME,
+    codexBin: CODEX_BIN,
+    disk
+  };
+}
+
+async function cleanupStorage(mode = 'all', options = {}) {
+  const settings = normalizeStorageSettings(state.storageSettings);
+  const result = {
+    mode,
+    deletedFiles: 0,
+    deletedBytes: 0,
+    skippedReferencedUploads: 0,
+    autoCleanup: options.auto === true
+  };
+  if (mode === 'all' || mode === 'orphanUploads' || mode === 'uploads') {
+    const uploadResult = await cleanupUploads(settings, options);
+    Object.assign(result, {
+      deletedFiles: result.deletedFiles + uploadResult.deletedFiles,
+      deletedBytes: result.deletedBytes + uploadResult.deletedBytes,
+      skippedReferencedUploads: uploadResult.skippedReferencedUploads
+    });
+  }
+  if (mode === 'all' || mode === 'runtime') {
+    const runtimeResult = await cleanupRuntime(settings, options);
+    result.deletedFiles += runtimeResult.deletedFiles;
+    result.deletedBytes += runtimeResult.deletedBytes;
+  }
+  return result;
+}
+
+async function cleanupUploads(settings, options = {}) {
+  const refs = referencedUploadNames();
+  const files = await collectFiles(UPLOAD_DIR);
+  const now = Date.now();
+  const maxBytes = settings.maxUploadMb > 0 ? settings.maxUploadMb * 1024 * 1024 : Infinity;
+  const retentionMs = settings.uploadRetentionDays > 0 ? settings.uploadRetentionDays * 24 * 60 * 60 * 1000 : Infinity;
+  const candidates = files
+    .filter((file) => !refs.has(file.name))
+    .filter((file) => options.manual === true || now - file.mtimeMs > retentionMs)
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  let totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+  const overLimit = totalBytes > maxBytes;
+  const selected = [];
+  for (const file of candidates) {
+    if (options.manual === true || overLimit || now - file.mtimeMs > retentionMs) {
+      selected.push(file);
+      totalBytes -= file.size;
+      if (!options.manual && totalBytes <= maxBytes && retentionMs === Infinity) break;
+    }
+  }
+  const result = { deletedFiles: 0, deletedBytes: 0, skippedReferencedUploads: files.length - candidates.length };
+  for (const file of selected) {
+    try {
+      await unlink(file.path);
+      result.deletedFiles += 1;
+      result.deletedBytes += file.size;
+    } catch {
+      // Ignore files already gone.
+    }
+  }
+  return result;
+}
+
+async function cleanupRuntime(settings, options = {}) {
+  const files = await collectFiles(RUNTIME_DIR);
+  const retentionMs = options.manual === true || settings.runtimeRetentionDays <= 0
+    ? 0
+    : settings.runtimeRetentionDays * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const result = { deletedFiles: 0, deletedBytes: 0 };
+  for (const file of files) {
+    if (retentionMs && now - file.mtimeMs <= retentionMs) continue;
+    try {
+      await unlink(file.path);
+      result.deletedFiles += 1;
+      result.deletedBytes += file.size;
+    } catch {
+      // Ignore files already gone.
+    }
+  }
+  return result;
+}
+
+let storageMaintenanceTimer = null;
+function startStorageMaintenance() {
+  clearInterval(storageMaintenanceTimer);
+  storageMaintenanceTimer = setInterval(() => {
+    if (normalizeStorageSettings(state.storageSettings).autoCleanup) {
+      cleanupStorage('all', { auto: true }).catch(console.error);
+    }
+  }, 24 * 60 * 60 * 1000);
+  storageMaintenanceTimer.unref();
+  if (normalizeStorageSettings(state.storageSettings).autoCleanup) {
+    cleanupStorage('all', { auto: true }).catch(console.error);
+  }
+}
+
+let runMonitorTimer = null;
+function startRunMonitor() {
+  clearInterval(runMonitorTimer);
+  runMonitorTimer = setInterval(() => {
+    for (const session of Object.values(state.sessions || {})) {
+      const hasChild = running.has(session.id);
+      const hasQueue = (session.queue || []).length > 0;
+      const staleStatus = ['running', 'stopping'].includes(session.status) && !hasChild;
+      const staleMessages = incompleteRunMessages(session).some((message) => {
+        if (message.runState === 'queued') return !hasQueue;
+        return !hasChild;
+      });
+      if (staleStatus || staleMessages) recoverStaleSession(session, 'monitor');
+    }
+  }, 10000);
+  runMonitorTimer.unref();
+}
+
 function stableMessageId(...parts) {
   return createHash('sha1').update(parts.map((part) => String(part || '')).join('\0')).digest('hex').slice(0, 24);
 }
@@ -331,6 +981,14 @@ async function readCodexThreadNames() {
     // The index is optional; session files are the source of truth.
   }
   return names;
+}
+
+function codexSessionFilePath(codexSessionId, date = new Date()) {
+  const year = String(date.getUTCFullYear());
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const stamp = date.toISOString().replace(/\.\d{3}Z$/, '').replaceAll(':', '-');
+  return path.join(CODEX_HOME, 'sessions', year, month, day, `rollout-${stamp}-${codexSessionId}.jsonl`);
 }
 
 async function walkFiles(root, out = [], limit = 800) {
@@ -472,7 +1130,90 @@ async function deleteCodexSessionFile(codexSessionId) {
   return true;
 }
 
+function forkTitle(title = '') {
+  const base = String(title || '').trim() || 'Codex session';
+  return `${base.replace(/\s+fork(?: \d+)?$/i, '')} fork`.slice(0, 80);
+}
+
+async function forkCodexSession(codexSessionId, title = '') {
+  const source = await findCodexSession(codexSessionId);
+  if (!source?.file) return null;
+
+  const sessionsRoot = path.resolve(CODEX_HOME, 'sessions');
+  const sourceFile = path.resolve(source.file);
+  if (!sourceFile.startsWith(`${sessionsRoot}${path.sep}`)) throw new Error('invalid_codex_session_path');
+
+  const newCodexSessionId = randomUUID();
+  const createdAt = new Date();
+  const newFile = codexSessionFilePath(newCodexSessionId, createdAt);
+  await mkdir(path.dirname(newFile), { recursive: true });
+
+  const raw = await readFile(sourceFile, 'utf8');
+  let rewroteMeta = false;
+  const lines = raw.split('\n').map((line) => {
+    if (!line.trim()) return line;
+    try {
+      const item = JSON.parse(line);
+      if (item.type !== 'session_meta') return line;
+      item.timestamp = createdAt.toISOString();
+      item.payload ||= {};
+      item.payload.id = newCodexSessionId;
+      item.payload.timestamp = createdAt.toISOString();
+      item.payload.forked_from = codexSessionId;
+      item.payload.forked_from_id = codexSessionId;
+      rewroteMeta = true;
+      return JSON.stringify(item);
+    } catch {
+      return line;
+    }
+  });
+  if (!rewroteMeta) throw new Error('codex_session_meta_not_found');
+
+  await writeFile(newFile, lines.join('\n'), { mode: 0o600 });
+  let shellSnapshotCount = 0;
+  const snapshotDir = path.join(CODEX_HOME, 'shell_snapshots');
+  try {
+    await mkdir(snapshotDir, { recursive: true });
+    const snapshots = await readdir(snapshotDir, { withFileTypes: true });
+    await Promise.all(snapshots
+      .filter((entry) => entry.isFile() && entry.name.startsWith(`${codexSessionId}.`) && entry.name.endsWith('.sh'))
+      .slice(0, 200)
+      .map(async (entry) => {
+        const suffix = entry.name.slice(codexSessionId.length);
+        await copyFile(path.join(snapshotDir, entry.name), path.join(snapshotDir, `${newCodexSessionId}${suffix}`));
+        shellSnapshotCount += 1;
+      }));
+  } catch {
+    shellSnapshotCount = 0;
+  }
+  const nextTitle = forkTitle(title || source.title);
+  state.codexSessionTitles ||= {};
+  state.codexSessionTitles[newCodexSessionId] = nextTitle;
+  await appendFile(
+    path.join(CODEX_HOME, 'session_index.jsonl'),
+    `${JSON.stringify({ id: newCodexSessionId, thread_name: nextTitle, updated_at: createdAt.toISOString() })}\n`,
+    { mode: 0o600 }
+  );
+  return {
+    codexSessionId: newCodexSessionId,
+    title: nextTitle,
+    cwd: source.cwd,
+    file: newFile,
+    shellSnapshotCount,
+    sourceCodexSessionId: codexSessionId
+  };
+}
+
 async function displayMessages(session, limit = 500) {
+  const page = await displayMessagePage(session, { limit, offset: 0 });
+  return page.messages;
+}
+
+async function displayMessagePage(session, options = {}) {
+  const rawLimit = Number(options.limit ?? 500);
+  const rawOffset = Number(options.offset ?? 0);
+  const limit = Number.isFinite(rawLimit) ? Math.max(0, Math.min(5000, Math.floor(rawLimit))) : 500;
+  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.min(50000, Math.floor(rawOffset))) : 0;
   const codexMessages = session.codexSessionId ? await readCodexMessages(session.codexSessionId) : [];
   const out = [];
   const seen = new Map();
@@ -501,20 +1242,30 @@ async function displayMessages(session, limit = 500) {
     const byTime = Date.parse(a.at || '') - Date.parse(b.at || '');
     return byTime || (a.seq || 0) - (b.seq || 0);
   });
-  return limit > 0 ? sorted.slice(-limit) : sorted;
+  const total = sorted.length;
+  const end = Math.max(0, total - offset);
+  const start = limit > 0 ? Math.max(0, end - limit) : 0;
+  const messages = sorted.slice(start, end);
+  return {
+    messages,
+    limit,
+    offset,
+    loaded: messages.length,
+    total,
+    nextOffset: offset + messages.length,
+    hasMore: start > 0
+  };
 }
 
 async function listCodexSessions() {
   const names = await readCodexThreadNames();
   const files = await walkFiles(path.join(CODEX_HOME, 'sessions'));
   const imported = new Set(Object.values(state.sessions || {}).map((session) => session.codexSessionId).filter(Boolean));
-  const hidden = new Set(Object.keys(state.hiddenCodexSessions || {}));
   const byId = new Map();
   for (const file of files) {
     try {
       const session = await readCodexSessionFile(file, names);
       if (!session || imported.has(session.codexSessionId)) continue;
-      if (hidden.has(session.codexSessionId)) continue;
       const existing = byId.get(session.codexSessionId);
       if (!existing || String(session.updatedAt) > String(existing.updatedAt)) {
         byId.set(session.codexSessionId, session);
@@ -528,7 +1279,7 @@ async function listCodexSessions() {
     .map(publicExternalSession);
 }
 
-async function importCodexSession(codexSessionId) {
+async function importCodexSession(codexSessionId, options = {}) {
   const existing = Object.values(state.sessions || {}).find((session) => session.codexSessionId === codexSessionId);
   if (existing) return existing;
 
@@ -542,7 +1293,7 @@ async function importCodexSession(codexSessionId) {
   state.sessions[id] = {
     id,
     source: 'web',
-    title: state.codexSessionTitles?.[codexSessionId] || external.title || `Codex ${codexSessionId.slice(0, 8)}`,
+    title: options.title || state.codexSessionTitles?.[codexSessionId] || external.title || `Codex ${codexSessionId.slice(0, 8)}`,
     cwd: external.cwd || '/root/Projects',
     model: '',
     sandbox: 'workspace-write',
@@ -556,7 +1307,7 @@ async function importCodexSession(codexSessionId) {
   };
   addMessage(state.sessions[id], {
     role: 'system',
-    text: `Imported Codex thread ${codexSessionId}. Loaded ${history.length} saved messages.`
+    text: options.systemText || `Imported Codex thread ${codexSessionId}. Loaded ${history.length} saved messages.`
   });
   return state.sessions[id];
 }
@@ -580,6 +1331,7 @@ async function listDirectories(dir) {
 }
 
 function addMessage(session, message) {
+  session.messages ||= [];
   const entry = {
     seq: state.nextSeq++,
     id: randomUUID(),
@@ -595,14 +1347,55 @@ function addMessage(session, message) {
 }
 
 function broadcast(sessionId, message) {
+  broadcastEvent(sessionId, 'message', message);
+}
+
+function broadcastEvent(sessionId, event, data) {
   const set = clients.get(sessionId);
   if (!set) return;
-  const line = `event: message\ndata: ${JSON.stringify(message)}\n\n`;
-  for (const res of set) res.write(line);
+  const line = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
+  for (const res of [...set]) {
+    if (res.destroyed || res.writableEnded) {
+      set.delete(res);
+      continue;
+    }
+    try {
+      res.write(line);
+    } catch {
+      set.delete(res);
+    }
+  }
+  if (set.size === 0) clients.delete(sessionId);
 }
 
 function sendSse(res, event, data) {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  if (res.destroyed || res.writableEnded) return false;
+  try {
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function requestServiceRestart(reason = 'api') {
+  await writeRestartMarker(reason);
+  restartRequested = true;
+  if (running.size > 0) return { queued: true, running: running.size };
+  scheduleServiceRestart();
+  return { queued: false, running: 0 };
+}
+
+function scheduleServiceRestart() {
+  if (!restartRequested || running.size > 0) return;
+  restartRequested = false;
+  setTimeout(() => {
+    const child = spawn('/bin/systemctl', ['restart', 'codex-mobile-console.service'], {
+      detached: true,
+      stdio: 'ignore'
+    });
+    child.unref();
+  }, 250).unref();
 }
 
 function buildCodexArgs(session, prompt, options = {}) {
@@ -712,6 +1505,15 @@ function runCodex(session, prompt, options = {}) {
   if (running.has(session.id)) throw new Error('session_running');
 
   session.queue ||= [];
+  session.activeRun = {
+    prompt,
+    elevated: options.elevated === true,
+    imagePaths: options.imagePaths || [],
+    messageId: options.messageId || '',
+    clientMessageId: options.clientMessageId || '',
+    startedAt: nowIso()
+  };
+  updateMessageRunState(session, options.messageId || options.clientMessageId, 'running', { delivery: 'running' });
   session.status = 'running';
   session.updatedAt = nowIso();
   scheduleSave();
@@ -756,6 +1558,8 @@ function runCodex(session, prompt, options = {}) {
   child.on('error', (error) => {
     running.delete(session.id);
     session.status = 'error';
+    updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, 'failed', { delivery: 'failed' });
+    delete session.activeRun;
     addMessage(session, {
       role: 'system',
       text: `Failed to start Codex: ${error.message}`,
@@ -769,23 +1573,40 @@ function runCodex(session, prompt, options = {}) {
     if (stdoutBuffer.trim()) handleCodexLine(session, stdoutBuffer);
     running.delete(session.id);
     const wasStopping = session.status === 'stopping';
+    const next = !wasStopping ? session.queue?.shift() : null;
+    const nextStatus = next?.prompt ? 'running' : code === 0 || wasStopping ? 'idle' : 'error';
+    const finalRunState = wasStopping ? 'stopped' : code === 0 ? 'completed' : 'failed';
+    updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, finalRunState, {
+      delivery: finalRunState
+    });
+    session.status = nextStatus;
+    session.updatedAt = nowIso();
     addMessage(session, {
       role: 'system',
-      text: wasStopping ? 'Codex run stopped.' : code === 0 ? 'Codex run finished.' : `Codex exited with code ${code}.`,
-      status: code === 0 || wasStopping ? 'idle' : 'error',
+      text: next?.prompt ? 'Codex run finished. Starting next queued prompt.' : wasStopping ? 'Codex run stopped.' : code === 0 ? 'Codex run finished.' : `Codex exited with code ${code}.`,
+      status: nextStatus,
       queuedCount: session.queue?.length || 0
     });
 
-    const next = !wasStopping ? session.queue?.shift() : null;
     if (next?.prompt) {
+      const prepared = promptWithSupplements(session, next.prompt);
+      markSupplementsUsed(prepared.supplements, next.messageId);
       scheduleSave();
-      runCodex(session, next.prompt, { elevated: next.elevated, imagePaths: (next.images || []).map((image) => image.path) });
+      runCodex(session, prepared.prompt, {
+        elevated: next.elevated,
+        imagePaths: [
+          ...(next.images || []).map((image) => image.path),
+          ...(prepared.imagePaths || [])
+        ],
+        messageId: next.messageId,
+        clientMessageId: next.clientMessageId
+      });
       return;
     }
 
-    session.status = code === 0 || wasStopping ? 'idle' : 'error';
-    session.updatedAt = nowIso();
+    delete session.activeRun;
     scheduleSave();
+    scheduleServiceRestart();
   });
 }
 
@@ -797,6 +1618,10 @@ function stopRunningSession(session) {
   session.updatedAt = nowIso();
   const queuedCount = session.queue?.length || 0;
   if (queuedCount) session.queue = [];
+  updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, 'stopping', { delivery: 'stopping' });
+  for (const message of incompleteRunMessages(session)) {
+    if (message.runState === 'queued') updateMessageRunState(session, message.id, 'stopped', { delivery: 'stopped' });
+  }
   addMessage(session, {
     role: 'system',
     text: queuedCount ? `Stop requested. Cleared ${queuedCount} queued prompt${queuedCount === 1 ? '' : 's'}.` : 'Stop requested.',
@@ -912,6 +1737,34 @@ async function handleApi(req, res, url) {
     return json(res, 200, { ok: true, expiresAt: auth.session.expiresAt });
   }
 
+  if (url.pathname === '/api/storage' && req.method === 'GET') {
+    return json(res, 200, await storageStats());
+  }
+
+  if (url.pathname === '/api/storage' && req.method === 'PATCH') {
+    const body = await readJson(req);
+    state.storageSettings = normalizeStorageSettings({
+      ...state.storageSettings,
+      ...body
+    });
+    scheduleSave();
+    startStorageMaintenance();
+    return json(res, 200, await storageStats());
+  }
+
+  if (url.pathname === '/api/storage/cleanup' && req.method === 'POST') {
+    const body = await readJson(req);
+    const mode = ['all', 'orphanUploads', 'runtime'].includes(body.mode) ? body.mode : 'all';
+    const result = await cleanupStorage(mode, { manual: true });
+    return json(res, 200, { ok: true, result, storage: await storageStats() });
+  }
+
+  if (url.pathname === '/api/admin/restart' && req.method === 'POST') {
+    const body = req.method === 'POST' ? await readJson(req).catch(() => ({})) : {};
+    const result = await requestServiceRestart(String(body.reason || 'api').slice(0, 80));
+    return json(res, 202, { ok: true, ...result });
+  }
+
   const uploadMatch = url.pathname.match(/^\/api\/uploads\/([^/]+)$/);
   if (uploadMatch && req.method === 'GET') {
     const fileName = decodeURIComponent(uploadMatch[1]);
@@ -1025,8 +1878,81 @@ async function handleApi(req, res, url) {
     const session = state.sessions[sessionId];
     if (!session) return json(res, 404, { error: 'session_not_found' });
     const rawLimit = Number(url.searchParams.get('limit') ?? 500);
+    const rawOffset = Number(url.searchParams.get('offset') ?? 0);
     const limit = Number.isFinite(rawLimit) ? Math.max(0, Math.min(5000, Math.floor(rawLimit))) : 500;
-    return json(res, 200, { session: publicSession(session), messages: await displayMessages(session, limit), limit });
+    const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.min(50000, Math.floor(rawOffset))) : 0;
+    const page = await displayMessagePage(session, { limit, offset });
+    return json(res, 200, { session: publicSession(session), ...page });
+  }
+
+  const runtimeMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runtime$/);
+  if (runtimeMatch && req.method === 'GET') {
+    const session = state.sessions[decodeURIComponent(runtimeMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    return json(res, 200, await runtimeInfo(session));
+  }
+
+  const forkMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/fork$/);
+  if (forkMatch && req.method === 'POST') {
+    const sessionId = decodeURIComponent(forkMatch[1]);
+    const body = await readJson(req).catch(() => ({}));
+    let codexSessionId = '';
+    let sourceTitle = '';
+    let sourceSession = null;
+
+    if (sessionId.startsWith('codex:')) {
+      codexSessionId = sessionId.slice('codex:'.length);
+      const external = await findCodexSession(codexSessionId);
+      if (!external) return json(res, 404, { error: 'codex_session_not_found' });
+      sourceTitle = state.codexSessionTitles?.[codexSessionId] || external.title || '';
+    } else {
+      sourceSession = state.sessions[sessionId];
+      if (!sourceSession) return json(res, 404, { error: 'session_not_found' });
+      if (running.has(sessionId) || ['running', 'stopping'].includes(sourceSession.status)) {
+        return json(res, 409, { error: 'session_running', message: '会话正在运行，停止或等待结束后再 fork。' });
+      }
+      codexSessionId = sourceSession.codexSessionId || '';
+      sourceTitle = sourceSession.title || '';
+      if (!codexSessionId) {
+        return json(res, 409, { error: 'codex_session_missing', message: '当前会话还没有绑定 Codex 原始会话，先运行一次后再 fork。' });
+      }
+    }
+
+    const forked = await forkCodexSession(codexSessionId, String(body.title || sourceTitle || ''));
+    if (!forked) return json(res, 404, { error: 'codex_session_not_found' });
+    const session = await importCodexSession(forked.codexSessionId, {
+      title: forked.title,
+      systemText: `Forked Codex thread ${codexSessionId} into ${forked.codexSessionId}.`
+    });
+    if (!session) return json(res, 500, { error: 'fork_import_failed' });
+    session.model = sourceSession?.model || session.model || '';
+    session.sandbox = sourceSession?.sandbox || session.sandbox || 'workspace-write';
+    session.approval = sourceSession?.approval || session.approval || 'on-request';
+    session.updatedAt = nowIso();
+    scheduleSave();
+    return json(res, 201, { ok: true, forked, session: publicSession(session) });
+  }
+
+  const restoreMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/restore$/);
+  if (restoreMatch && req.method === 'POST') {
+    const sessionId = decodeURIComponent(restoreMatch[1]);
+    if (sessionId.startsWith('codex:')) {
+      const codexSessionId = sessionId.slice('codex:'.length);
+      delete state.hiddenCodexSessions?.[codexSessionId];
+      scheduleSave();
+      const external = await findCodexSession(codexSessionId);
+      return json(res, 200, {
+        ok: true,
+        session: publicExternalSession(external || { codexSessionId, title: state.codexSessionTitles?.[codexSessionId] || `Codex ${codexSessionId.slice(0, 8)}`, cwd: '', updatedAt: nowIso(), createdAt: nowIso() })
+      });
+    }
+
+    const session = state.sessions[sessionId];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    delete session.trashedAt;
+    session.updatedAt = nowIso();
+    scheduleSave();
+    return json(res, 200, { ok: true, session: publicSession(session) });
   }
 
   if (sessionMatch && req.method === 'DELETE') {
@@ -1034,23 +1960,41 @@ async function handleApi(req, res, url) {
     const body = await readJson(req);
     if (sessionId.startsWith('codex:')) {
       const codexSessionId = sessionId.slice('codex:'.length);
-      const deletedCodex = await deleteCodexSessionFile(codexSessionId);
-      state.hiddenCodexSessions ||= {};
-      state.hiddenCodexSessions[codexSessionId] = nowIso();
-      if (state.codexSessionTitles) delete state.codexSessionTitles[codexSessionId];
+      let deletedCodex = false;
+      if (body.permanent === true) {
+        deletedCodex = await deleteCodexSessionFile(codexSessionId);
+        delete state.hiddenCodexSessions?.[codexSessionId];
+        if (state.codexSessionTitles) delete state.codexSessionTitles[codexSessionId];
+      } else {
+        state.hiddenCodexSessions ||= {};
+        state.hiddenCodexSessions[codexSessionId] = nowIso();
+      }
       scheduleSave();
-      return json(res, 200, { ok: true, hidden: true, deletedCodex });
+      const external = body.permanent === true ? null : await findCodexSession(codexSessionId);
+      return json(res, 200, {
+        ok: true,
+        trashed: body.permanent !== true,
+        deletedCodex,
+        session: external ? publicExternalSession(external) : null
+      });
     }
 
     const session = state.sessions[sessionId];
     if (!session) return json(res, 404, { error: 'session_not_found' });
     if (running.has(sessionId)) return json(res, 409, { error: 'session_running' });
+    if (body.permanent !== true) {
+      session.trashedAt = nowIso();
+      session.updatedAt = session.trashedAt;
+      scheduleSave();
+      return json(res, 200, { ok: true, trashed: true, session: publicSession(session) });
+    }
     let deletedCodex = false;
     if (body.deleteCodex === true && session.codexSessionId) {
       deletedCodex = await deleteCodexSessionFile(session.codexSessionId);
       if (state.codexSessionTitles) delete state.codexSessionTitles[session.codexSessionId];
     }
     delete state.sessions[sessionId];
+    await cleanupStorage('orphanUploads', { manual: true });
     scheduleSave();
     return json(res, 200, { ok: true, deletedCodex });
   }
@@ -1062,36 +2006,107 @@ async function handleApi(req, res, url) {
     const body = await readJson(req, 32 * 1024 * 1024);
     const prompt = String(body.prompt || '').trim();
     const elevated = body.elevated === true;
+    const mode = body.mode === 'supplement' ? 'supplement' : 'run';
     const clientMessageId = String(body.clientMessageId || '').trim().slice(0, 120);
     const queueId = clientMessageId || randomUUID();
     const images = await savePromptImages(body.images || []);
     if (!prompt && !images.length) return json(res, 400, { error: 'empty_prompt' });
     const effectivePrompt = prompt || '请分析这张图片。';
-    addMessage(session, { role: 'user', text: effectivePrompt, elevated, clientMessageId, images });
+    if (mode === 'supplement') {
+      const message = addMessage(session, {
+        role: 'supplement',
+        text: effectivePrompt,
+        elevated,
+        clientMessageId,
+        images,
+        runState: 'submitted',
+        delivery: 'supplement'
+      });
+      return json(res, 202, { session: publicSession(session), supplement: true, message });
+    }
+    const userMessage = addMessage(session, {
+      role: 'user',
+      text: effectivePrompt,
+      elevated,
+      clientMessageId,
+      images,
+      runState: running.has(session.id) ? 'queued' : 'submitted',
+      delivery: running.has(session.id) ? 'queued' : 'submitted'
+    });
     if (running.has(session.id)) {
       session.queue ||= [];
-      session.queue.push({ id: queueId, prompt: effectivePrompt, elevated, images, createdAt: nowIso(), clientMessageId });
+      session.queue.push({ id: queueId, prompt: effectivePrompt, displayPrompt: effectivePrompt, elevated, images, createdAt: nowIso(), clientMessageId, messageId: userMessage.id });
       session.updatedAt = nowIso();
       scheduleSave();
       return json(res, 202, { session: publicSession(session), queued: true });
     }
+    const prepared = promptWithSupplements(session, effectivePrompt);
+    markSupplementsUsed(prepared.supplements, userMessage.id);
     try {
-      runCodex(session, effectivePrompt, { elevated, imagePaths: images.map((image) => image.path) });
+      runCodex(session, prepared.prompt, {
+        elevated,
+        imagePaths: [
+          ...images.map((image) => image.path),
+          ...(prepared.imagePaths || [])
+        ],
+        messageId: userMessage.id,
+        clientMessageId
+      });
     } catch (error) {
       session.status = 'error';
+      updateMessageRunState(session, userMessage.id, 'failed', { delivery: 'failed' });
       addMessage(session, { role: 'system', text: String(error.message || error), status: 'error' });
     }
     return json(res, 202, { session: publicSession(session) });
   }
 
   const queueMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/queue\/([^/]+)$/);
+  if (queueMatch && req.method === 'POST') {
+    const session = state.sessions[decodeURIComponent(queueMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    const queueId = decodeURIComponent(queueMatch[2]);
+    const index = (session.queue || []).findIndex((item) => item.id === queueId || item.clientMessageId === queueId);
+    if (index < 0) return json(res, 404, { error: 'queue_item_not_found', session: publicSession(session) });
+    const [removed] = session.queue.splice(index, 1);
+    restoreSupplementsUsedBy(session, removed?.messageId);
+    let message = (session.messages || []).find((item) => item.id === removed?.messageId || item.clientMessageId === removed?.clientMessageId);
+    if (message) {
+      message.role = 'supplement';
+      message.text = removed.displayPrompt || message.text || removed.prompt || '';
+      message.images = removed.images || message.images || [];
+      message.runState = 'submitted';
+      message.delivery = 'supplement';
+      message.pending = false;
+      message.failed = false;
+      message.used = false;
+      message.convertedFromQueue = true;
+      delete message.completedAt;
+      broadcastEvent(session.id, 'message_update', message);
+    } else {
+      message = addMessage(session, {
+        role: 'supplement',
+        text: removed.displayPrompt || removed.prompt || '',
+        elevated: removed.elevated === true,
+        clientMessageId: removed.clientMessageId || '',
+        images: removed.images || [],
+        runState: 'submitted',
+        delivery: 'supplement',
+        convertedFromQueue: true
+      });
+    }
+    session.updatedAt = nowIso();
+    scheduleSave();
+    return json(res, 200, { ok: true, session: publicSession(session), message });
+  }
+
   if (queueMatch && req.method === 'DELETE') {
     const session = state.sessions[decodeURIComponent(queueMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
     const queueId = decodeURIComponent(queueMatch[2]);
     const index = (session.queue || []).findIndex((item) => item.id === queueId || item.clientMessageId === queueId);
     if (index < 0) return json(res, 404, { error: 'queue_item_not_found', session: publicSession(session) });
-    session.queue.splice(index, 1);
+    const [removed] = session.queue.splice(index, 1);
+    updateMessageRunState(session, removed?.messageId || removed?.clientMessageId, 'stopped', { delivery: 'stopped' });
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { ok: true, session: publicSession(session) });
@@ -1138,7 +2153,7 @@ function handleEvents(req, res, url) {
     'cache-control': 'no-store',
     'connection': 'keep-alive'
   });
-  sendSse(res, 'hello', { sessionId, status: session.status, now: nowIso() });
+  sendSse(res, 'hello', { sessionId, session: publicSession(session), now: nowIso() });
   for (const message of session.messages || []) {
     if (message.seq > after) sendSse(res, 'message', message);
   }
@@ -1150,6 +2165,11 @@ function handleEvents(req, res, url) {
   }
   set.add(res);
   const ping = setInterval(() => sendSse(res, 'ping', { now: nowIso() }), 25000);
+  res.on('error', () => {
+    clearInterval(ping);
+    set.delete(res);
+    if (set.size === 0) clients.delete(sessionId);
+  });
   req.on('close', () => {
     clearInterval(ping);
     set.delete(res);
@@ -1158,6 +2178,17 @@ function handleEvents(req, res, url) {
 }
 
 const server = http.createServer((req, res) => {
+  totalRequests += 1;
+  activeRequests += 1;
+  let counted = true;
+  const finishRequest = () => {
+    if (!counted) return;
+    counted = false;
+    activeRequests = Math.max(0, activeRequests - 1);
+  };
+  res.on('finish', finishRequest);
+  res.on('close', finishRequest);
+
   const url = new URL(req.url, `http://${req.headers.host || `${HOST}:${PORT}`}`);
   if (req.method === 'OPTIONS') {
     res.writeHead(204, {
@@ -1180,4 +2211,24 @@ const server = http.createServer((req, res) => {
 await init();
 server.listen(PORT, HOST, () => {
   console.log(`codex-mobile-console listening on http://${HOST}:${PORT}`);
+});
+
+let shuttingDown = false;
+async function shutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  try {
+    await prepareForShutdown(signal.toLowerCase());
+  } catch (error) {
+    console.error(error);
+  } finally {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => {
+  shutdown('SIGTERM');
+});
+process.on('SIGINT', () => {
+  shutdown('SIGINT');
 });

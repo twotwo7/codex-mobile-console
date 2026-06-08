@@ -28,13 +28,15 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=30">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=55">
       </head>
       <body>
         <main class="workspace">
           <header class="topbar">
             <button class="icon-button" type="button">☰</button>
             <div class="top-title"><strong>移动端检查</strong><span>/root/Projects</span></div>
+            <button class="top-favorite-button active" type="button">★</button>
+            <button class="top-runtime-button" type="button">运行时</button>
             <span class="connection-badge running">运行中</span>
           </header>
           <section class="message-pane">
@@ -57,15 +59,14 @@ async function setFixture(page) {
               <pre class="message-text">$ npm test\\n[completed]</pre>
             </article>
             <div class="queue-panel">
-              <div class="queue-head"><strong>队列 1</strong><span>当前完成后继续</span></div>
-              <div class="queue-item"><span>分析客户截图 · 图片 1</span><div class="queue-images"><button class="queue-image-button"><img alt="queued" src="${sampleImage()}"></button></div><button class="queue-cancel-button">×</button></div>
+              <div class="queue-head"><strong>待执行 1 条</strong><span>点 ↪ 补当前会话</span></div>
+              <div class="queue-item"><span>分析客户截图 · 图片 1</span><div class="queue-images"><button class="queue-image-button"><img alt="queued" src="${sampleImage()}"></button></div><button class="queue-supplement-button">↪</button><button class="queue-cancel-button">×</button></div>
             </div>
           </section>
           <form class="prompt-bar">
             <div class="prompt-tools">
               <button class="stop-button" type="button">停止</button>
               <button class="command-button" type="button">命令</button>
-              <button class="command-button active" type="button">收藏</button>
               <button class="command-button" type="button">图片</button>
             </div>
             <div class="image-preview-strip">
