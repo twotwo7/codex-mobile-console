@@ -1331,6 +1331,13 @@ button:disabled {
   width: min(680px, calc(100% - 22px));
 }
 
+.skill-dialog {
+  display: grid;
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  max-height: min(78svh, 680px);
+  overflow: hidden;
+}
+
 .runtime-panel {
   display: grid;
   gap: 10px;
@@ -1632,6 +1639,11 @@ button:disabled {
 .skill-list {
   max-height: min(64vh, 560px);
   overflow: auto;
+}
+
+.skill-dialog .skill-list {
+  max-height: none;
+  min-height: 0;
 }
 
 .drawer-skill-list {
