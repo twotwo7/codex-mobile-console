@@ -65,15 +65,11 @@ let skillRegistry = {
   skills: [],
   lastScanAt: '',
   scanStatus: 'idle',
-  scanError: '',
-  lastSummaryAt: '',
-  summaryStatus: 'idle',
-  summaryError: ''
+  scanError: ''
 };
 let skillScanPromise = null;
-let skillSummaryPromise = null;
 let skillMaintenanceTimer = null;
-const SKILL_SUMMARY_ENABLED = process.env.SKILL_SUMMARY_ENABLED === '1';
+let skillRegistryFileMtimeMs = 0;
 
 async function exists(file) {
   try {
@@ -1020,43 +1016,64 @@ function defaultSkillRegistry() {
     skills: [],
     lastScanAt: '',
     scanStatus: 'idle',
-    scanError: '',
-    lastSummaryAt: '',
-    summaryStatus: 'idle',
-    summaryError: ''
+    scanError: ''
+  };
+}
+
+function normalizeSkillRegistry(value = {}) {
+  const parsed = value && typeof value === 'object' ? value : {};
+  const version = Number(parsed.version || 1);
+  return {
+    ...defaultSkillRegistry(),
+    version: Number.isFinite(version) ? version : 1,
+    roots: SKILL_ROOTS,
+    skills: Array.isArray(parsed.skills) ? parsed.skills : [],
+    lastScanAt: typeof parsed.lastScanAt === 'string' ? parsed.lastScanAt : '',
+    scanStatus: ['idle', 'scanning', 'error'].includes(parsed.scanStatus) ? parsed.scanStatus : 'idle',
+    scanError: typeof parsed.scanError === 'string' ? parsed.scanError : ''
   };
 }
 
 async function loadSkillRegistry() {
   try {
     const parsed = JSON.parse(await readFile(SKILL_REGISTRY_FILE, 'utf8'));
-    skillRegistry = {
-      ...defaultSkillRegistry(),
-      ...parsed,
-      roots: SKILL_ROOTS,
-      skills: Array.isArray(parsed.skills) ? parsed.skills : []
-    };
+    skillRegistry = normalizeSkillRegistry(parsed);
+    const info = await stat(SKILL_REGISTRY_FILE);
+    skillRegistryFileMtimeMs = info.mtimeMs;
   } catch {
     skillRegistry = defaultSkillRegistry();
+    skillRegistryFileMtimeMs = 0;
   }
 }
 
 async function saveSkillRegistry() {
+  skillRegistry = normalizeSkillRegistry(skillRegistry);
   const tmp = `${SKILL_REGISTRY_FILE}.tmp`;
   await writeFile(tmp, JSON.stringify(skillRegistry, null, 2), { mode: 0o600 });
   await rename(tmp, SKILL_REGISTRY_FILE);
+  const info = await stat(SKILL_REGISTRY_FILE);
+  skillRegistryFileMtimeMs = info.mtimeMs;
+}
+
+async function reloadSkillRegistryIfChanged() {
+  try {
+    const info = await stat(SKILL_REGISTRY_FILE);
+    if (info.mtimeMs !== skillRegistryFileMtimeMs) await loadSkillRegistry();
+  } catch {
+    if (skillRegistryFileMtimeMs !== 0) await loadSkillRegistry();
+  }
 }
 
 function publicSkillRegistry() {
+  const pendingSummarySkills = (skillRegistry.skills || []).filter((skill) => skill.summaryStatus !== 'ready');
   return {
     roots: skillRegistry.roots,
     skills: skillRegistry.skills,
     lastScanAt: skillRegistry.lastScanAt,
     scanStatus: skillRegistry.scanStatus,
     scanError: skillRegistry.scanError,
-    lastSummaryAt: skillRegistry.lastSummaryAt,
-    summaryStatus: SKILL_SUMMARY_ENABLED ? skillRegistry.summaryStatus : 'disabled',
-    summaryError: skillRegistry.summaryError
+    pendingSummaryCount: pendingSummarySkills.length,
+    summaryPrompt: pendingSummarySkills.length ? skillSummaryPrompt(pendingSummarySkills) : ''
   };
 }
 
@@ -1130,13 +1147,14 @@ async function listInstalledSkills() {
   });
 }
 
-function refreshSkillRegistry(options = {}) {
+function refreshSkillRegistry() {
   if (skillScanPromise) return skillScanPromise;
-  skillRegistry.scanStatus = 'scanning';
-  skillRegistry.scanError = '';
-  saveSkillRegistry().catch(() => {});
   skillScanPromise = Promise.resolve()
     .then(async () => {
+      await reloadSkillRegistryIfChanged();
+      skillRegistry.scanStatus = 'scanning';
+      skillRegistry.scanError = '';
+      await saveSkillRegistry().catch(() => {});
       const skills = await listInstalledSkills();
       const previous = new Map((skillRegistry.skills || []).map((skill) => [`${skill.source}:${skill.name}`, skill]));
       skillRegistry = {
@@ -1157,7 +1175,6 @@ function refreshSkillRegistry(options = {}) {
         scanError: ''
       };
       await saveSkillRegistry();
-      if (SKILL_SUMMARY_ENABLED && options.summarize === true) triggerSkillSummaryMaintenance();
     })
     .catch(async (error) => {
       skillRegistry.scanStatus = 'error';
@@ -1173,133 +1190,37 @@ function refreshSkillRegistry(options = {}) {
 function startSkillMaintenance() {
   clearInterval(skillMaintenanceTimer);
   setTimeout(() => {
-    refreshSkillRegistry({ summarize: false }).catch(() => {});
+    refreshSkillRegistry().catch(() => {});
   }, 2000).unref();
   skillMaintenanceTimer = setInterval(() => {
-    refreshSkillRegistry({ summarize: false }).catch(() => {});
+    refreshSkillRegistry().catch(() => {});
   }, 15 * 60 * 1000);
   skillMaintenanceTimer.unref();
 }
 
-function triggerSkillSummaryMaintenance() {
-  if (skillSummaryPromise) return skillSummaryPromise;
-  skillSummaryPromise = Promise.resolve()
-    .then(async () => {
-      if (running.size > 0) return;
-      const pending = (skillRegistry.skills || []).find((skill) => skill.summaryStatus !== 'ready');
-      if (!pending) return;
-      skillRegistry.summaryStatus = 'summarizing';
-      skillRegistry.summaryError = '';
-      await saveSkillRegistry().catch(() => {});
-      const summary = await summarizeSkillWithCodex(pending);
-      skillRegistry.skills = (skillRegistry.skills || []).map((skill) => {
-        if (skill.source !== pending.source || skill.name !== pending.name) return skill;
-        return {
-          ...skill,
-          summary,
-          summaryStatus: 'ready',
-          summaryUpdatedAt: nowIso()
-        };
-      });
-      skillRegistry.lastSummaryAt = nowIso();
-      skillRegistry.summaryStatus = 'idle';
-      skillRegistry.summaryError = '';
-      await saveSkillRegistry();
-    })
-    .catch(async (error) => {
-      skillRegistry.summaryStatus = 'error';
-      skillRegistry.summaryError = String(error.message || error).slice(0, 300);
-      await saveSkillRegistry().catch(() => {});
-    })
-    .finally(() => {
-      skillSummaryPromise = null;
-    });
-  return skillSummaryPromise;
-}
-
-async function summarizeSkillWithCodex(skill) {
-  const raw = await readFile(skill.path, 'utf8');
-  const fallback = {
+function skillSummaryPrompt(skills) {
+  const targets = skills.map((skill) => ({
+    name: skill.name,
+    source: skill.source,
+    path: skill.path,
+    hash: skill.hash,
     title: skill.title || skill.name,
-    overview: skill.description || skill.shortDescription || '暂无说明',
-    bullets: [
-      skill.description || skill.shortDescription || '读取本地 SKILL.md 指令，在匹配任务时执行。',
-      `来源：${skill.source}`
-    ]
-  };
-  const prompt = [
-    '请为下面这个 Codex skill 生成中文概要，只输出 JSON，不要输出 markdown。',
-    '格式：{"title":"一句话标题","overview":"80字以内介绍","bullets":["适用场景","使用方式","实现要点"]}',
-    '不要直接展示或大段复述 SKILL.md 原文。',
-    `skill: ${skill.name}`,
-    `source: ${skill.source}`,
-    `SKILL.md:\n${raw.slice(0, 18000)}`
-  ].join('\n\n');
-  try {
-    const output = await runCodexOneShot(prompt, { cwd: '/root/Projects', timeoutMs: 30000 });
-    const parsed = JSON.parse((output.match(/\{[\s\S]*\}/) || [output])[0]);
-    return {
-      title: String(parsed.title || fallback.title).slice(0, 100),
-      overview: String(parsed.overview || fallback.overview).slice(0, 220),
-      bullets: Array.isArray(parsed.bullets) ? parsed.bullets.map((item) => String(item).slice(0, 120)).slice(0, 4) : fallback.bullets,
-      generatedBy: 'codex-background',
-      generatedAt: nowIso()
-    };
-  } catch {
-    return {
-      ...fallback,
-      generatedBy: 'local-fallback',
-      generatedAt: nowIso()
-    };
-  }
-}
-
-function runCodexOneShot(prompt, options = {}) {
-  return new Promise((resolve, reject) => {
-    const command = CODEX_BIN.endsWith('.js') ? CODEX_NODE : CODEX_BIN;
-    const args = ['exec', '--json', '-C', options.cwd || '/root/Projects', '--skip-git-repo-check', '-'];
-    const commandArgs = CODEX_BIN.endsWith('.js') ? [CODEX_BIN, ...args] : args;
-    const child = spawn(command, commandArgs, {
-      cwd: options.cwd || '/root/Projects',
-      detached: false,
-      env: {
-        ...process.env,
-        PATH: `${CODEX_BIN_DIR}:${process.env.PATH || ''}`,
-        NO_COLOR: '1'
-      },
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    let stdout = '';
-    let stderr = '';
-    const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      reject(new Error('codex_summary_timeout'));
-    }, options.timeoutMs || 30000);
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString('utf8'); });
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString('utf8'); });
-    child.on('error', (error) => {
-      clearTimeout(timer);
-      reject(error);
-    });
-    child.on('close', () => {
-      clearTimeout(timer);
-      const texts = [];
-      for (const line of stdout.split('\n')) {
-        try {
-          const event = JSON.parse(line);
-          const text = deriveMessageFromCodexEvent(event)?.text;
-          if (text) texts.push(text);
-        } catch {
-          if (line.trim()) texts.push(line.trim());
-        }
-      }
-      const output = texts.join('\n').trim();
-      if (!output && stderr.trim()) return reject(new Error(stderr.trim().slice(0, 300)));
-      resolve(output);
-    });
-    child.stdin.write(prompt);
-    child.stdin.end();
-  });
+    description: skill.description || skill.shortDescription || ''
+  }));
+  return [
+    '请更新 Codex Mobile Console 的 skill 中文总结缓存。',
+    '',
+    '要求：',
+    '1. 读取下面每个 skill 的 SKILL.md 文件。',
+    '2. 更新 /root/Projects/codex-mobile-console/data/skill-registry.json 中对应 skill 的 summary、summaryStatus、summaryUpdatedAt 字段。',
+    '3. summary 格式为 {"title":"一句话标题","overview":"80字以内介绍","bullets":["适用场景","使用方式","实现要点"]}。',
+    '4. 不要直接展示或大段复述 SKILL.md 原文。',
+    '5. 只更新 hash 匹配的条目；如果文件 hash 已变化，先重新计算并以当前文件为准。',
+    '6. 所有下面列出的待更新 skill 都要一次性更新，不要分批。',
+    '7. 保留 registry 文件里和本次总结无关的字段，不要重启服务，不要调用应用内接口。',
+    '',
+    `待更新 skill JSON:\n${JSON.stringify(targets, null, 2)}`
+  ].join('\n');
 }
 
 async function readCodexThreadNames() {
@@ -2222,11 +2143,12 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === '/api/skills' && req.method === 'GET') {
+    await reloadSkillRegistryIfChanged();
     return json(res, 200, publicSkillRegistry());
   }
 
   if (url.pathname === '/api/skills/refresh' && req.method === 'POST') {
-    refreshSkillRegistry({ summarize: false }).catch(() => {});
+    refreshSkillRegistry().catch(() => {});
     return json(res, 202, {
       ok: true,
       ...publicSkillRegistry(),

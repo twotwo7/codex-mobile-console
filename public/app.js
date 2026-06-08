@@ -5,7 +5,7 @@ import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, merge
 import { createMessageView } from './message-view.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=1';
 import { createQueueView } from './queue-view.js?v=1';
-import { createSkillView } from './skill-view.js?v=1';
+import { createSkillView } from './skill-view.js?v=3';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -1525,8 +1525,8 @@ async function loadSkills(force = false) {
 async function refreshSkillsInBackground() {
   el.refreshSkillsButton.disabled = true;
   el.drawerRefreshSkillsButton.disabled = true;
-  el.skillStatus.textContent = '已提交后台更新，列表会从缓存读取。';
-  el.drawerSkillStatus.textContent = '已提交后台更新，列表会从缓存读取。';
+  el.skillStatus.textContent = '已提交扫描，列表会从缓存读取。';
+  el.drawerSkillStatus.textContent = '已提交扫描，列表会从缓存读取。';
   try {
     const data = await api('/api/skills/refresh', { method: 'POST' });
     skillView.renderSkillStatus(data);
@@ -1537,8 +1537,8 @@ async function refreshSkillsInBackground() {
       });
     }, 1200);
   } catch (error) {
-    el.skillStatus.textContent = error.message || '提交后台更新失败';
-    el.drawerSkillStatus.textContent = error.message || '提交后台更新失败';
+    el.skillStatus.textContent = error.message || '提交扫描失败';
+    el.drawerSkillStatus.textContent = error.message || '提交扫描失败';
   } finally {
     el.refreshSkillsButton.disabled = false;
     el.drawerRefreshSkillsButton.disabled = false;

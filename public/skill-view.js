@@ -1,6 +1,8 @@
 import { escapeHtml, formatTime } from './format-utils.js?v=1';
 
 export function createSkillView({ commands, el, getSkills, insertPromptText, openModal, closeModal }) {
+  let currentSummaryPrompt = '';
+
   function renderCommandList() {
     el.commandList.innerHTML = '';
     for (const command of commands) {
@@ -46,7 +48,7 @@ export function createSkillView({ commands, el, getSkills, insertPromptText, ope
       item.type = 'button';
       item.className = 'skill-item';
       const summary = skill.summary?.overview || skill.description || skill.shortDescription || skill.title || '暂无说明';
-      const status = skill.summaryStatus === 'ready' ? '已总结' : skill.source || '';
+      const status = skill.summaryStatus === 'ready' ? '已总结' : '待总结';
       item.innerHTML = `
         <span class="skill-row"><strong>$${escapeHtml(skill.name)}</strong><em>${escapeHtml(status)}</em></span>
         <span>${escapeHtml(summary)}</span>
@@ -82,14 +84,14 @@ export function createSkillView({ commands, el, getSkills, insertPromptText, ope
           <strong>${escapeHtml(skill.summary.title || skill.title || skill.name)}</strong>
           <p>${escapeHtml(skill.summary.overview || '暂无总结')}</p>
           ${bullets.length ? `<ul>${bullets.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
-          <small>${escapeHtml(skill.summaryUpdatedAt ? `更新 ${formatTime(skill.summaryUpdatedAt)}` : '等待后台总结')}</small>
+          <small>${escapeHtml(skill.summaryUpdatedAt ? `更新 ${formatTime(skill.summaryUpdatedAt)}` : '手动总结')}</small>
         </section>
       `;
     }
     return `
       <section class="skill-detail-section">
         <h3>AI 中文总结</h3>
-        <p>${escapeHtml(skill.summaryStatus === 'pending' ? '等待后台异步总结。' : '暂无总结。')}</p>
+        <p>${escapeHtml(skill.summaryStatus === 'pending' ? '检测到新增或变更，需要用统一提示词更新中文总结。' : '暂无总结。')}</p>
       </section>
     `;
   }
@@ -105,6 +107,12 @@ export function createSkillView({ commands, el, getSkills, insertPromptText, ope
         : skill.summaryStatus || '未知';
     el.skillDetailBody.innerHTML = `
       ${renderSkillSummaryBlock(skill)}
+      ${skill.summaryStatus !== 'ready' ? `
+        <section class="skill-detail-section">
+          <h3>待更新</h3>
+          <p>这个 skill 的中文总结需要更新。请在 skill 管理页复制统一提示词，让 Codex 一次性更新所有待总结 skill。</p>
+        </section>
+      ` : ''}
       <section class="skill-detail-section">
         <h3>原生介绍</h3>
         <p>${escapeHtml(nativeDescription)}</p>
@@ -125,16 +133,52 @@ export function createSkillView({ commands, el, getSkills, insertPromptText, ope
   function skillStatusText(data = {}) {
     const scanned = data.lastScanAt ? `扫描 ${formatTime(data.lastScanAt)}` : '尚未完成扫描';
     const scan = data.scanStatus && data.scanStatus !== 'idle' ? ` · ${data.scanStatus}` : '';
-    const summary = data.summaryStatus && !['idle', 'disabled'].includes(data.summaryStatus) ? ` · 总结 ${data.summaryStatus}` : '';
+    const pendingCount = Number(data.pendingSummaryCount || 0);
+    const summary = pendingCount ? ` · 待总结 ${pendingCount} 个` : '';
     const count = Number.isFinite(Number(data.skills?.length)) ? ` · ${data.skills.length} 个` : '';
-    const error = data.scanError || data.summaryError;
+    const error = data.scanError;
     return `${scanned}${count}${scan}${summary}${error ? ` · ${error}` : ''}`;
   }
 
+  function renderStatusNode(node, text) {
+    if (!node) return;
+    node.innerHTML = '';
+    const span = document.createElement('span');
+    span.textContent = text;
+    node.append(span);
+    if (!currentSummaryPrompt) return;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'ghost-button inline skill-copy-prompt-button';
+    button.textContent = '复制更新提示词';
+    button.addEventListener('click', () => copySummaryPrompt(button));
+    node.append(button);
+  }
+
   function renderSkillStatus(data = {}) {
+    currentSummaryPrompt = data.summaryPrompt || '';
     const text = skillStatusText(data);
-    if (el.skillStatus) el.skillStatus.textContent = text;
-    if (el.drawerSkillStatus) el.drawerSkillStatus.textContent = text;
+    renderStatusNode(el.skillStatus, text);
+    renderStatusNode(el.drawerSkillStatus, text);
+  }
+
+  async function copySummaryPrompt(button) {
+    if (!currentSummaryPrompt) return;
+    try {
+      await navigator.clipboard.writeText(currentSummaryPrompt);
+      const old = button.textContent;
+      button.textContent = '已复制';
+      setTimeout(() => { button.textContent = old; }, 1200);
+    } catch {
+      const area = document.createElement('textarea');
+      area.value = currentSummaryPrompt;
+      area.style.position = 'fixed';
+      area.style.opacity = '0';
+      document.body.append(area);
+      area.select();
+      document.execCommand('copy');
+      area.remove();
+    }
   }
 
   return {

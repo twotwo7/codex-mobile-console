@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=73">
+    <link rel="stylesheet" href="/styles.css?v=75">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -55,7 +55,7 @@
         <section id="drawerSkillsPanel" class="drawer-panel drawer-skills-panel" role="tabpanel" aria-labelledby="skillManagerButton">
           <div class="drawer-skill-toolbar">
             <input id="drawerSkillSearch" type="search" placeholder="搜索 skill..." autocomplete="off">
-            <button id="drawerRefreshSkillsButton" class="ghost-button inline" type="button">更新</button>
+            <button id="drawerRefreshSkillsButton" class="ghost-button inline" type="button">扫描</button>
           </div>
           <p id="drawerSkillStatus" class="skill-status">读取缓存列表，不阻塞聊天主流程。</p>
           <div id="drawerSkillList" class="skill-list drawer-skill-list">加载中...</div>
@@ -243,7 +243,7 @@
       <p id="skillDialogHint" class="skill-status">点击后插入到输入框。</p>
       <div class="skill-toolbar">
         <input id="skillSearch" type="search" placeholder="搜索 skill..." autocomplete="off">
-        <button id="refreshSkillsButton" class="ghost-button inline" type="button">后台更新</button>
+        <button id="refreshSkillsButton" class="ghost-button inline" type="button">扫描</button>
       </div>
       <p id="skillStatus" class="skill-status">读取缓存列表，不阻塞聊天主流程。</p>
       <div id="skillList" class="skill-list">加载中...</div>
@@ -324,6 +324,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=87" type="module"></script>
+    <script src="/app.js?v=89" type="module"></script>
   </body>
 </html>
