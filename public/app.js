@@ -36,6 +36,7 @@ const state = {
   userScrolledDuringRender: false,
   suppressScrollTracking: false,
   scrollSuppressToken: 0,
+  initialBottomLockSessionId: '',
   drawerOpen: false,
   drawerPanel: 'sessions',
   sessionListDirty: true,
@@ -648,7 +649,7 @@ function renderActive(options = {}) {
   setBadge(isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线', isRunning ? 'running' : state.online ? 'online' : '');
   if (shouldRenderMessages) {
     renderMessages(session.id, {
-      stickToBottom: options.stickToBottom ?? state.autoFollowBottom,
+      stickToBottom: options.stickToBottom ?? shouldStickToBottom(session.id),
       restoreAnchor: options.restoreAnchor || null
     });
   }
@@ -729,6 +730,20 @@ function settleMessagesToBottom() {
   setTimeout(() => setProgrammaticMessageScrollTop(el.messagePane.scrollHeight), 240);
 }
 
+function lockInitialBottom(sessionId) {
+  state.initialBottomLockSessionId = sessionId || '';
+}
+
+function unlockInitialBottom(sessionId = state.activeId) {
+  if (!sessionId || state.initialBottomLockSessionId === sessionId) {
+    state.initialBottomLockSessionId = '';
+  }
+}
+
+function shouldStickToBottom(sessionId = state.activeId) {
+  return state.autoFollowBottom || Boolean(sessionId && state.initialBottomLockSessionId === sessionId);
+}
+
 function getActiveSession() {
   return state.sessions.find((item) => item.id === state.activeId);
 }
@@ -786,7 +801,7 @@ function mergeSessionSnapshot(nextSession) {
 
 function renderMessages(sessionId, options = {}) {
   messageScheduler.clearRender(sessionId);
-  const stickToBottom = options.stickToBottom ?? true;
+  const stickToBottom = options.stickToBottom ?? shouldStickToBottom(sessionId);
   const messages = displayMessages(sessionId);
   const renderJobId = ++state.renderJobId;
   state.renderingMessages = true;
@@ -1567,7 +1582,7 @@ function upsertMessage(sessionId, message) {
   }
 
   if (sessionId === state.activeId) {
-    const stickToBottom = state.autoFollowBottom;
+    const stickToBottom = shouldStickToBottom(sessionId);
     if (state.renderingMessages || replacedIndex >= 0 || renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
       messageScheduler.scheduleRender(sessionId, { stickToBottom });
       return;
@@ -1608,19 +1623,19 @@ function updateMessage(sessionId, message) {
   messageScheduler.scheduleSave(sessionId);
   if (sessionId === state.activeId) {
     if (state.renderingMessages) {
-      messageScheduler.scheduleRender(sessionId, { stickToBottom: state.autoFollowBottom });
+      messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
       return;
     }
     const node = findRenderedMessageNode(message);
     if (node) {
-      const stickToBottom = state.autoFollowBottom;
+      const stickToBottom = shouldStickToBottom(sessionId);
       node.replaceWith(messageView.renderMessage(updatedMessage, { animate: false }));
       updateQueuePanel();
       updateRunIndicator();
       if (stickToBottom) scrollMessagesToBottom();
       renderActive({ messages: false });
     } else {
-      messageScheduler.scheduleRender(sessionId, { stickToBottom: state.autoFollowBottom });
+      messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
     }
   }
 }
@@ -1658,6 +1673,7 @@ window.cmcAfterLogin = async function cmcAfterLogin() {
 };
 
 async function loadSession(id, options = {}) {
+  lockInitialBottom(id);
   if (options.showLoading !== false && state.activeId === id) {
     renderActive({ messages: false });
     renderSessionLoading();
@@ -1764,7 +1780,7 @@ async function refreshActiveContext() {
     }
     if (changed || sessionChanged) {
       if (state.activeId === session.id) {
-        const stickToBottom = state.autoFollowBottom;
+        const stickToBottom = shouldStickToBottom(session.id);
         renderSessions();
         if (changed) messageScheduler.scheduleRender(session.id, { stickToBottom });
         else renderActive({ messages: false });
@@ -2211,6 +2227,7 @@ el.historyLimitInput.addEventListener('change', async () => {
 el.autoFollowBottom.addEventListener('change', () => {
   state.autoFollowBottom = el.autoFollowBottom.checked;
   storageSet('cmc.autoFollowBottom', state.autoFollowBottom ? '1' : '0');
+  if (!state.autoFollowBottom) unlockInitialBottom();
 });
 
 el.elevatedRun.addEventListener('change', () => {
@@ -2381,9 +2398,9 @@ function autoSizePrompt() {
 el.promptInput.addEventListener('input', autoSizePrompt);
 
 el.messagePane.addEventListener('scroll', () => {
-  if (state.renderingMessages && !state.suppressScrollTracking) {
-    state.userScrolledDuringRender = true;
-  }
+  if (state.suppressScrollTracking) return;
+  unlockInitialBottom();
+  if (state.renderingMessages) state.userScrolledDuringRender = true;
 }, { passive: true });
 
 window.addEventListener('online', () => {
