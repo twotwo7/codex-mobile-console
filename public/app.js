@@ -381,18 +381,67 @@ function messageKey(message) {
   return `${message.role || ''}\0${message.at || ''}\0${String(message.text || '').slice(0, 120)}`;
 }
 
+function comparableMessageText(message) {
+  return String(message?.text || '').replace(/\s+/g, ' ').trim();
+}
+
+function messageTimeMs(message) {
+  const value = Date.parse(message?.at || '');
+  return Number.isFinite(value) ? value : 0;
+}
+
+function isCodexSource(message) {
+  return message?.source === 'codex';
+}
+
+function sameCrossSourceContent(left, right) {
+  if (!left || !right) return false;
+  if ((left.role || '') !== (right.role || '')) return false;
+  const text = comparableMessageText(left);
+  if (!text || text !== comparableMessageText(right)) return false;
+  if (isCodexSource(left) === isCodexSource(right) && !isCodexSource(left)) return false;
+  const leftAt = messageTimeMs(left);
+  const rightAt = messageTimeMs(right);
+  if (!leftAt || !rightAt) return true;
+  return Math.abs(leftAt - rightAt) <= 5 * 60 * 1000;
+}
+
+function mergeMessagePair(current, incoming) {
+  const preferCurrent = !isCodexSource(current) && isCodexSource(incoming);
+  const base = preferCurrent ? incoming : current;
+  const overlay = preferCurrent ? current : incoming;
+  const next = { ...base, ...overlay };
+  const currentImages = current.images || [];
+  const incomingImages = incoming.images || [];
+  next.images = currentImages.length >= incomingImages.length ? currentImages : incomingImages;
+  next.starred = current.starred === true || incoming.starred === true;
+  if (incoming.id || incoming.seq) {
+    next.pending = false;
+    next.failed = false;
+  }
+  return next;
+}
+
+function findMessageIndex(messages, message) {
+  const key = messageKey(message);
+  const direct = messages.findIndex((item) => messageKey(item) === key);
+  if (direct >= 0) return direct;
+  return messages.findIndex((item) => sameCrossSourceContent(item, message));
+}
+
 function mergeMessages(existing, incoming) {
-  const byKey = new Map();
+  const out = [];
   for (const message of [...(existing || []), ...(incoming || [])]) {
-    const key = messageKey(message);
-    const next = { ...(byKey.get(key) || {}), ...message };
+    const index = findMessageIndex(out, message);
+    const next = index >= 0 ? mergeMessagePair(out[index], message) : { ...message };
     if (message.id || message.seq) {
       next.pending = false;
       next.failed = false;
     }
-    byKey.set(key, next);
+    if (index >= 0) out[index] = next;
+    else out.push(next);
   }
-  return [...byKey.values()].sort(compareMessages);
+  return out.sort(compareMessages);
 }
 
 async function api(path, options = {}) {
@@ -1901,18 +1950,11 @@ function extractOptionActions(text) {
 
 function upsertMessage(sessionId, message) {
   const messages = loadMessages(sessionId);
-  let replacedIndex = -1;
-  if (message.clientMessageId) {
-    replacedIndex = messages.findIndex((item) => item.clientMessageId === message.clientMessageId);
-  }
-  if (replacedIndex < 0) {
-    const seq = Number(message.seq || 0);
-    replacedIndex = seq > 0 ? messages.findIndex((item) => Number(item.seq || 0) === seq) : -1;
-  }
+  const replacedIndex = findMessageIndex(messages, message);
   const incoming = (message.id || message.seq) ? { ...message, pending: false, failed: false } : message;
   let renderedMessage = incoming;
   if (replacedIndex >= 0) {
-    renderedMessage = { ...messages[replacedIndex], ...incoming };
+    renderedMessage = mergeMessagePair(messages[replacedIndex], incoming);
     messages[replacedIndex] = renderedMessage;
   } else {
     messages.push(incoming);
@@ -1933,17 +1975,16 @@ function upsertMessage(sessionId, message) {
 
   if (sessionId === state.activeId) {
     const stickToBottom = isNearMessageBottom();
+    if (state.renderingMessages || replacedIndex >= 0 || renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
+      renderMessages(sessionId, { stickToBottom });
+      return;
+    }
     const nextNode = renderMessage(renderedMessage);
     const existing = findRenderedMessageNode(renderedMessage);
     removeRunIndicator();
     removeQueuePanel();
     if (existing) existing.replaceWith(nextNode);
-    else if (renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
-      renderMessages(sessionId, { stickToBottom });
-      return;
-    } else {
-      el.messagePane.append(nextNode);
-    }
+    else el.messagePane.append(nextNode);
     updateQueuePanel();
     updateRunIndicator();
     if (stickToBottom) scrollMessagesToBottom();
@@ -1962,21 +2003,21 @@ function findRenderedMessageNode(message) {
 
 function updateMessage(sessionId, message) {
   const messages = loadMessages(sessionId);
-  const index = messages.findIndex((item) => (
-    (message.id && item.id === message.id)
-    || (message.clientMessageId && item.clientMessageId === message.clientMessageId)
-    || (message.seq && Number(item.seq || 0) === Number(message.seq || 0))
-  ));
+  const index = findMessageIndex(messages, message);
   if (index < 0) {
     upsertMessage(sessionId, message);
     return;
   }
-  const updatedMessage = { ...messages[index], ...message };
+  const updatedMessage = mergeMessagePair(messages[index], message);
   messages[index] = updatedMessage;
   messages.sort(compareMessages);
   state.lastSeq.set(sessionId, lastRealSeq(messages));
   saveMessages(sessionId);
   if (sessionId === state.activeId) {
+    if (state.renderingMessages) {
+      renderMessages(sessionId, { stickToBottom: isNearMessageBottom() });
+      return;
+    }
     const node = findRenderedMessageNode(message);
     if (node) {
       const stickToBottom = isNearMessageBottom();
@@ -1992,12 +2033,16 @@ function updateMessage(sessionId, message) {
 }
 
 function compareMessages(a, b) {
+  const aTime = messageTimeMs(a);
+  const bTime = messageTimeMs(b);
+  if (aTime && bTime && aTime !== bTime) return aTime - bTime;
+  if (aTime && !bTime) return -1;
+  if (!aTime && bTime) return 1;
   const aSeq = Number(a.seq || 0);
   const bSeq = Number(b.seq || 0);
   if (aSeq > 0 && bSeq > 0) return aSeq - bSeq;
-  if (aSeq > 0) return -1;
-  if (bSeq > 0) return 1;
-  return String(a.at || '').localeCompare(String(b.at || ''));
+  if (aSeq || bSeq) return aSeq - bSeq;
+  return messageKey(a).localeCompare(messageKey(b));
 }
 
 function lastRealSeq(messages) {

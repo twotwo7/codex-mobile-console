@@ -1550,6 +1550,49 @@ async function displayMessages(session, limit = 500) {
   return page.messages;
 }
 
+function displayMessageText(message) {
+  return String(message?.text || '').replace(/\s+/g, ' ').trim();
+}
+
+function displayMessageTime(message) {
+  const value = Date.parse(message?.at || '');
+  return Number.isFinite(value) ? value : 0;
+}
+
+function displayIsCodex(message) {
+  return message?.source === 'codex';
+}
+
+function sameDisplayMessage(left, right) {
+  if (!left || !right) return false;
+  if ((left.role || '') !== (right.role || '')) return false;
+  const text = displayMessageText(left);
+  if (!text || text !== displayMessageText(right)) return false;
+  if (displayIsCodex(left) === displayIsCodex(right) && !displayIsCodex(left)) return false;
+  const leftAt = displayMessageTime(left);
+  const rightAt = displayMessageTime(right);
+  if (!leftAt || !rightAt) return true;
+  return Math.abs(leftAt - rightAt) <= 5 * 60 * 1000;
+}
+
+function mergeDisplayMessage(existing, incoming) {
+  const preferExisting = !displayIsCodex(existing) && displayIsCodex(incoming);
+  const base = preferExisting ? incoming : existing;
+  const overlay = preferExisting ? existing : incoming;
+  const next = { ...base, ...overlay };
+  const existingImages = existing.images || [];
+  const incomingImages = incoming.images || [];
+  next.images = existingImages.length >= incomingImages.length ? existingImages : incomingImages;
+  next.starred = existing.starred === true || incoming.starred === true;
+  return next;
+}
+
+function compareDisplayMessages(a, b) {
+  const byTime = displayMessageTime(a) - displayMessageTime(b);
+  if (byTime) return byTime;
+  return Number(a.seq || 0) - Number(b.seq || 0);
+}
+
 async function displayMessagePage(session, options = {}) {
   const rawLimit = Number(options.limit ?? 500);
   const rawOffset = Number(options.offset ?? 0);
@@ -1557,32 +1600,19 @@ async function displayMessagePage(session, options = {}) {
   const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.min(50000, Math.floor(rawOffset))) : 0;
   const codexMessages = session.codexSessionId ? await readCodexMessages(session.codexSessionId) : [];
   const out = [];
-  const seen = new Map();
   for (const message of [...codexMessages, ...(session.messages || [])]) {
-    const key = `${message.role}\0${String(message.text || '').trim()}`;
     const next = {
       ...message,
       starred: message.starred === true || state.starredMessages?.[message.id] === true
     };
-    if (seen.has(key)) {
-      const index = seen.get(key);
-      const existing = out[index];
-      const nextHasImages = next.images?.length;
-      const existingHasImages = existing.images?.length;
-      out[index] = {
-        ...(nextHasImages && !existingHasImages ? next : existing),
-        starred: existing.starred === true || next.starred === true,
-        images: existingHasImages ? existing.images : next.images
-      };
+    const index = out.findIndex((item) => sameDisplayMessage(item, next));
+    if (index >= 0) {
+      out[index] = mergeDisplayMessage(out[index], next);
       continue;
     }
-    seen.set(key, out.length);
     out.push(next);
   }
-  const sorted = out.sort((a, b) => {
-    const byTime = Date.parse(a.at || '') - Date.parse(b.at || '');
-    return byTime || (a.seq || 0) - (b.seq || 0);
-  });
+  const sorted = out.sort(compareDisplayMessages);
   const total = sorted.length;
   const end = Math.max(0, total - offset);
   const start = limit > 0 ? Math.max(0, end - limit) : 0;
