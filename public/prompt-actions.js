@@ -14,6 +14,7 @@ export function createPromptActions(options) {
     state,
     storageSet,
     updateFavoritesButton,
+    updateMessage,
     upsertMessage
   } = options;
 
@@ -154,10 +155,47 @@ export function createPromptActions(options) {
     }
   }
 
+  async function patchQueuedPrompt(queueId, body, fallbackText) {
+    const session = getActiveSession();
+    if (!session || !queueId) return;
+    try {
+      const data = await api(`/api/sessions/${session.id}/queue/${encodeURIComponent(queueId)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(body)
+      });
+      if (data.message) updateMessage(session.id, data.message);
+      if (data.session) {
+        if (mergeSessionSnapshot(data.session)) renderSessions();
+        renderActive({ messages: false });
+      }
+    } catch (error) {
+      upsertMessage(session.id, {
+        at: new Date().toISOString(),
+        role: 'system',
+        text: error.message || fallbackText
+      });
+    }
+  }
+
+  function topQueuedPrompt(queueId) {
+    return patchQueuedPrompt(queueId, { action: 'top' }, '置顶排队失败');
+  }
+
+  function editQueuedPrompt(item) {
+    const current = item.displayPrompt || item.prompt || '';
+    const nextPrompt = window.prompt('编辑排队输入', current);
+    if (nextPrompt === null) return;
+    const prompt = String(nextPrompt || '').trim();
+    if (!prompt || prompt === current) return;
+    patchQueuedPrompt(item.id, { prompt }, '编辑排队失败');
+  }
+
   return {
     cancelQueuedPrompt,
+    editQueuedPrompt,
     retryMessage,
     sendPrompt,
-    setSendState
+    setSendState,
+    topQueuedPrompt
   };
 }

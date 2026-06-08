@@ -3,8 +3,8 @@ import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, s
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
 import { createMessageView } from './message-view.js?v=3';
-import { createPromptActions } from './prompt-actions.js?v=2';
-import { createQueueView } from './queue-view.js?v=2';
+import { createPromptActions } from './prompt-actions.js?v=3';
+import { createQueueView } from './queue-view.js?v=3';
 import { createSkillView } from './skill-view.js?v=3';
 
 const storedExpandedCwds = (() => {
@@ -198,6 +198,7 @@ const promptActions = createPromptActions({
   state,
   storageSet,
   updateFavoritesButton,
+  updateMessage,
   upsertMessage
 });
 
@@ -211,7 +212,9 @@ const messageView = createMessageView({
 
 const queueView = createQueueView({
   cancelQueuedPrompt: promptActions.cancelQueuedPrompt,
-  openImageViewer
+  editQueuedPrompt: promptActions.editQueuedPrompt,
+  openImageViewer,
+  topQueuedPrompt: promptActions.topQueuedPrompt
 });
 
 const skillView = createSkillView({

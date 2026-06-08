@@ -2425,6 +2425,41 @@ async function handleApi(req, res, url) {
   }
 
   const queueMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/queue\/([^/]+)$/);
+  if (queueMatch && req.method === 'PATCH') {
+    const session = state.sessions[decodeURIComponent(queueMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    const queueId = decodeURIComponent(queueMatch[2]);
+    const index = (session.queue || []).findIndex((item) => item.id === queueId || item.clientMessageId === queueId);
+    if (index < 0) return json(res, 404, { error: 'queue_item_not_found', session: publicSession(session) });
+    const body = await readJson(req);
+    const item = session.queue[index];
+    let message = null;
+
+    if (body.action === 'top' && index > 0) {
+      session.queue.splice(index, 1);
+      session.queue.unshift(item);
+    }
+
+    if (typeof body.prompt === 'string') {
+      const prompt = body.prompt.trim();
+      if (!prompt) return json(res, 400, { error: 'empty_prompt' });
+      item.prompt = prompt;
+      item.displayPrompt = prompt;
+      message = (session.messages || []).find((entry) => entry.id === item.messageId || entry.clientMessageId === item.clientMessageId);
+      if (message) {
+        message.text = prompt;
+        message.pending = false;
+        message.failed = false;
+        message.updatedAt = nowIso();
+        broadcastEvent(session.id, 'message_update', message);
+      }
+    }
+
+    session.updatedAt = nowIso();
+    scheduleSave();
+    return json(res, 200, { ok: true, session: publicSession(session), message });
+  }
+
   if (queueMatch && req.method === 'DELETE') {
     const session = state.sessions[decodeURIComponent(queueMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });

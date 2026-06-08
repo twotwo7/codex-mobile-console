@@ -18,6 +18,8 @@ export function createQueueView(actions) {
     row.innerHTML = `
       <span>${escapeHtml(`${summarizeText(item.displayPrompt || item.prompt || '', 64)}${item.imageCount ? ` · 图片 ${item.imageCount}` : ''}`)}</span>
       <div class="queue-images"></div>
+      <button class="queue-action-button" type="button" aria-label="置顶这条排队输入" title="置顶">↑</button>
+      <button class="queue-action-button" type="button" aria-label="编辑这条排队输入" title="编辑">✎</button>
       <button class="queue-cancel-button" type="button" aria-label="取消这条排队输入">×</button>
     `;
 
@@ -25,6 +27,9 @@ export function createQueueView(actions) {
     for (const image of item.images || []) {
       imageWrap.append(renderQueueImage(image));
     }
+    const [topButton, editButton] = row.querySelectorAll('.queue-action-button');
+    topButton.addEventListener('click', () => actions.topQueuedPrompt(item.id));
+    editButton.addEventListener('click', () => actions.editQueuedPrompt(item));
     row.querySelector('.queue-cancel-button').addEventListener('click', () => actions.cancelQueuedPrompt(item.id));
     return row;
   }
