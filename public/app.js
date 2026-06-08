@@ -62,6 +62,7 @@ const state = {
   renderingMessages: false,
   userScrolledDuringRender: false,
   suppressScrollTracking: false,
+  drawerOpen: false,
   loadingOlder: false,
   cleanupTimer: null,
   online: navigator.onLine,
@@ -76,6 +77,7 @@ const INITIAL_HISTORY_LIMIT = 120;
 const HISTORY_PAGE_SIZE = 120;
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
+const MAX_RENDERED_MESSAGES = 220;
 
 const CODEX_COMMANDS = [
   { name: '/status', detail: '查看会话状态', value: '/status' },
@@ -356,6 +358,10 @@ function setAuthView(isAuthed) {
 }
 
 function setDrawer(open) {
+  state.drawerOpen = open;
+  state.renderJobId += 1;
+  state.renderingMessages = false;
+  document.body.classList.toggle('drawer-open', open);
   el.sessionDrawer.classList.toggle('open', open);
   el.drawerScrim.hidden = !open;
 }
@@ -391,6 +397,7 @@ function formatTime(iso) {
 
 function renderSessions() {
   el.sessionList.innerHTML = '';
+  const fragment = document.createDocumentFragment();
 
   const sessions = [...state.sessions]
     .filter((session) => state.sessionViewMode === 'trash' ? Boolean(session.trashedAt) : !session.trashedAt)
@@ -401,7 +408,8 @@ function renderSessions() {
     const empty = document.createElement('div');
     empty.className = 'session-empty';
     empty.textContent = state.sessionViewMode === 'trash' ? '回收站为空' : '暂无会话';
-    el.sessionList.append(empty);
+    fragment.append(empty);
+    el.sessionList.append(fragment);
     return;
   }
 
@@ -434,12 +442,14 @@ function renderSessions() {
       if (expanded) {
         for (const session of group) section.append(renderSessionButton(session));
       }
-      el.sessionList.append(section);
+      fragment.append(section);
     }
+    el.sessionList.append(fragment);
     return;
   }
 
-  for (const session of visible) el.sessionList.append(renderSessionButton(session));
+  for (const session of visible) fragment.append(renderSessionButton(session));
+  el.sessionList.append(fragment);
 }
 
 function renderSessionButton(session) {
@@ -611,6 +621,13 @@ function renderMessages(sessionId, options = {}) {
   el.messagePane.innerHTML = '';
   const olderControl = renderOlderMessagesControl(sessionId);
   if (olderControl) el.messagePane.append(olderControl);
+  const allMessages = state.showStarredOnly ? messages : loadMessages(sessionId);
+  if (!state.showStarredOnly && allMessages.length > messages.length) {
+    const clipped = document.createElement('div');
+    clipped.className = 'session-loading compact';
+    clipped.textContent = `仅渲染最近 ${messages.length} 条，向上可加载更早内容`;
+    el.messagePane.append(clipped);
+  }
   if (state.showStarredOnly && !messages.length) {
     el.messagePane.append(renderFavoriteEmpty());
   }
@@ -633,7 +650,7 @@ function renderMessages(sessionId, options = {}) {
     setMessageScrollTop(Math.max(0, el.messagePane.scrollHeight - previousBottomOffset));
   };
 
-  const chunkSize = messages.length <= 500 ? Math.max(1, messages.length) : 50;
+  const chunkSize = messages.length <= 60 ? Math.max(1, messages.length) : 40;
   let index = 0;
   const renderChunk = () => {
     if (renderJobId !== state.renderJobId || state.activeId !== sessionId) return;
@@ -880,7 +897,8 @@ async function copyMessageText(text) {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
-  return mergeDisplayMessages(filtered);
+  const visible = state.showStarredOnly ? filtered : filtered.slice(-MAX_RENDERED_MESSAGES);
+  return mergeDisplayMessages(visible);
 }
 
 function mergeDisplayMessages(messages) {

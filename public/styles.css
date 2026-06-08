@@ -1699,6 +1699,10 @@ button:disabled {
     display: block;
   }
 
+  body.drawer-open .workspace {
+    visibility: hidden;
+  }
+
   .session-drawer {
     position: fixed;
     inset: 0;
