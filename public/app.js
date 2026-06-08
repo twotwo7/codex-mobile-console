@@ -26,6 +26,7 @@ const state = {
   expandedCwds: new Set(storedExpandedCwds),
   messages: new Map(),
   messagePages: new Map(),
+  messageRenderLimits: new Map(),
   messageCollapseStates: new Map(),
   turnCollapseStates: new Map(),
   latestTurnIds: new Map(),
@@ -375,6 +376,16 @@ function maxHistoryLimit() {
 
 function renderedMessageLimit() {
   return isMobileViewport() ? MOBILE_MAX_RENDERED_MESSAGES : DESKTOP_MAX_RENDERED_MESSAGES;
+}
+
+function sessionRenderedMessageLimit(sessionId = state.activeId) {
+  return Math.min(maxHistoryLimit(), Math.max(renderedMessageLimit(), Number(state.messageRenderLimits.get(sessionId) || 0)));
+}
+
+function expandRenderedMessageLimit(sessionId, count) {
+  if (!sessionId || !Number.isFinite(count) || count <= 0) return;
+  const current = sessionRenderedMessageLimit(sessionId);
+  state.messageRenderLimits.set(sessionId, Math.min(maxHistoryLimit(), current + count));
 }
 
 function setMessagePage(sessionId, page, options = {}) {
@@ -773,7 +784,8 @@ function renderActive(options = {}) {
   if (shouldRenderMessages) {
     renderMessages(session.id, {
       stickToBottom: options.stickToBottom ?? shouldStickToBottom(session.id),
-      restoreAnchor: options.restoreAnchor || null
+      restoreAnchor: options.restoreAnchor || null,
+      scrollToTop: options.scrollToTop === true
     });
   }
   else {
@@ -963,6 +975,11 @@ function renderMessages(sessionId, options = {}) {
       releaseProgrammaticMessageScroll(renderScrollToken);
       return;
     }
+    if (options.scrollToTop) {
+      setProgrammaticMessageScrollTop(0);
+      releaseProgrammaticMessageScroll(renderScrollToken);
+      return;
+    }
     if (stickToBottom) {
       settleMessagesToBottom();
       releaseProgrammaticMessageScroll(renderScrollToken);
@@ -1030,9 +1047,16 @@ function closeImageViewer() {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
-  const maxRendered = renderedMessageLimit();
-  const visible = state.showStarredOnly ? filtered : filtered.slice(-maxRendered);
+  const visible = state.showStarredOnly ? filtered : visibleMessagesForSession(sessionId, filtered);
   return mergeDisplayMessages(visible);
+}
+
+function visibleMessagesForSession(sessionId, messages) {
+  const limit = sessionRenderedMessageLimit(sessionId);
+  if (!Array.isArray(messages) || messages.length <= limit) return messages || [];
+  let start = Math.max(0, messages.length - limit);
+  while (start > 0 && messages[start]?.role !== 'user') start -= 1;
+  return messages.slice(start);
 }
 
 function groupMessagesIntoTurns(sessionId, messages) {
@@ -1909,15 +1933,16 @@ async function loadOlderMessages(sessionId) {
 
   state.loadingOlder = true;
   state.messagePages.set(sessionId, { ...page, loading: true });
-  const previousAnchor = firstVisibleMessageAnchor();
   renderActive({ messages: false });
   try {
     const limit = Math.min(HISTORY_PAGE_SIZE, remaining);
     const data = await api(sessionMessagesUrl(sessionId, { limit, beforeSeq: page.beforeSeq || '' }));
     if (data.session) mergeSessionSnapshot(data.session);
+    const loadedOlderCount = Array.isArray(data.messages) ? data.messages.length : 0;
     const merged = mergeMessages(data.messages || [], loadMessages(sessionId));
     state.messages.set(sessionId, trimMessagesForStorage(merged));
     state.lastSeq.set(sessionId, lastRealSeq(merged));
+    expandRenderedMessageLimit(sessionId, loadedOlderCount);
     setMessagePage(sessionId, {
       ...data,
       hasMore: data.hasMoreBefore === true && merged.length < maxHistoryLimit()
@@ -1925,7 +1950,7 @@ async function loadOlderMessages(sessionId) {
     saveMessages(sessionId);
     if (state.activeId === sessionId) {
       renderSessions();
-      renderActive({ stickToBottom: false, restoreAnchor: previousAnchor });
+      renderActive({ stickToBottom: false, scrollToTop: true });
     }
   } catch (error) {
     state.messagePages.set(sessionId, { ...page, loading: false });

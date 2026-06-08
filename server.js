@@ -1598,7 +1598,7 @@ async function displayMessageRange(session, options = {}) {
     ? sorted.findIndex((message) => Number(message.orderSeq || 0) >= beforeSeq)
     : sorted.length;
   const end = endIndex < 0 ? sorted.length : Math.max(0, endIndex);
-  const start = limit > 0 ? Math.max(0, end - limit) : 0;
+  const start = turnBoundaryStart(sorted, limit > 0 ? Math.max(0, end - limit) : 0);
   const messages = sorted.slice(start, end);
   return {
     messages,
@@ -1611,6 +1611,12 @@ async function displayMessageRange(session, options = {}) {
     hasMoreBefore: start > 0,
     hasMoreAfter: end < sorted.length
   };
+}
+
+function turnBoundaryStart(messages, start) {
+  let index = Math.max(0, Math.min(Number(start || 0), messages.length));
+  while (index > 0 && messages[index]?.role !== 'user') index -= 1;
+  return index;
 }
 
 async function listCodexSessions() {
