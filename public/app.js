@@ -1584,8 +1584,15 @@ async function openSkillDialog() {
   try {
     await loadSkills();
   } catch (error) {
-    el.skillList.textContent = error.message || '加载失败';
+    el.skillList.textContent = skillErrorCopy(error);
   }
+}
+
+function skillErrorCopy(error) {
+  if (error?.status === 404 || error?.code === 'not_found') {
+    return '技能接口未生效，等待服务重启后再试。';
+  }
+  return error?.message || '加载失败';
 }
 
 function isCollapsibleMessage(message) {
@@ -2379,7 +2386,7 @@ el.closeSkillDialog.addEventListener('click', () => closeModal(el.skillDialog));
 el.skillSearch.addEventListener('input', renderSkillList);
 el.refreshSkillsButton.addEventListener('click', () => {
   loadSkills(true).catch((error) => {
-    el.skillList.textContent = error.message || '加载失败';
+    el.skillList.textContent = skillErrorCopy(error);
   });
 });
 el.runtimeButton.addEventListener('click', openRuntimeDialog);
