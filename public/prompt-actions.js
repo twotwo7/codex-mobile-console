@@ -10,7 +10,6 @@ export function createPromptActions(options) {
     renderPendingImages,
     renderSessions,
     saveMessages,
-    scrollMessagesToBottom,
     state,
     storageSet,
     updateFavoritesButton,
@@ -99,7 +98,6 @@ export function createPromptActions(options) {
     const clientMessageId = createClientMessageId();
     setSendState('sending');
     upsertMessage(sessionId, optimisticMessage({ clientMessageId, elevated, images, prompt }));
-    scrollMessagesToBottom();
 
     try {
       const data = await api(`/api/sessions/${sessionId}/messages`, {

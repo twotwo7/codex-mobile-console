@@ -16,9 +16,10 @@ export function createMessageScheduler(options) {
 
   function scheduleRender(sessionId, renderOptions = {}) {
     if (!sessionId || sessionId !== options.getActiveId()) return;
+    const requestedStickToBottom = renderOptions.stickToBottom === true;
     const nextStickToBottom = pendingRender
-      ? pendingRender.stickToBottom === true && renderOptions.stickToBottom !== false
-      : renderOptions.stickToBottom !== false;
+      ? pendingRender.stickToBottom === true || requestedStickToBottom
+      : requestedStickToBottom;
     pendingRender = {
       sessionId,
       stickToBottom: nextStickToBottom,

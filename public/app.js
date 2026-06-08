@@ -1,9 +1,9 @@
-import { createMessageScheduler } from './message-scheduler.js?v=1';
+import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
 import { createMessageView } from './message-view.js?v=3';
-import { createPromptActions } from './prompt-actions.js?v=3';
+import { createPromptActions } from './prompt-actions.js?v=4';
 import { createQueueView } from './queue-view.js?v=3';
 import { createSkillView } from './skill-view.js?v=3';
 
@@ -194,7 +194,6 @@ const promptActions = createPromptActions({
   renderPendingImages,
   renderSessions,
   saveMessages,
-  scrollMessagesToBottom,
   state,
   storageSet,
   updateFavoritesButton,
@@ -840,7 +839,11 @@ function unlockInitialBottom(sessionId = state.activeId) {
 }
 
 function shouldStickToBottom(sessionId = state.activeId) {
-  return state.autoFollowBottom || Boolean(sessionId && state.initialBottomLockSessionId === sessionId);
+  return Boolean(sessionId && state.initialBottomLockSessionId === sessionId);
+}
+
+function shouldFollowNewMessage(sessionId = state.activeId) {
+  return state.autoFollowBottom || shouldStickToBottom(sessionId);
 }
 
 function getActiveSession() {
@@ -1626,6 +1629,7 @@ async function openSkillDialog() {
 function upsertMessage(sessionId, message) {
   const messages = loadMessages(sessionId);
   const replacedIndex = findMessageIndex(messages, message);
+  const isNewMessage = replacedIndex < 0;
   const incoming = (message.id || message.seq) ? { ...message, pending: false, failed: false } : message;
   let renderedMessage = incoming;
   if (replacedIndex >= 0) {
@@ -1652,7 +1656,7 @@ function upsertMessage(sessionId, message) {
   }
 
   if (sessionId === state.activeId) {
-    const stickToBottom = shouldStickToBottom(sessionId);
+    const stickToBottom = isNewMessage ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
     if (state.renderingMessages || replacedIndex >= 0 || renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
       messageScheduler.scheduleRender(sessionId, { stickToBottom });
       return;
@@ -1839,6 +1843,7 @@ async function refreshActiveContext() {
     const currentLast = currentMessages.at(-1);
     const nextLast = nextMessages.at(-1);
     const mergedMessages = mergeMessages(currentMessages, nextMessages);
+    const hasNewMessages = mergedMessages.length > currentMessages.length;
     const changed = currentMessages.length !== mergedMessages.length
       || currentLast?.at !== nextLast?.at
       || currentLast?.text !== nextLast?.text;
@@ -1854,7 +1859,7 @@ async function refreshActiveContext() {
     }, { preserveOffset: true });
     if (changed || sessionChanged) {
       if (state.activeId === session.id) {
-        const stickToBottom = shouldStickToBottom(session.id);
+        const stickToBottom = hasNewMessages ? shouldFollowNewMessage(session.id) : shouldStickToBottom(session.id);
         renderSessions();
         if (changed) messageScheduler.scheduleRender(session.id, { stickToBottom });
         else renderActive({ messages: false });
