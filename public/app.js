@@ -3,6 +3,8 @@ import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, s
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
 import { createMessageView } from './message-view.js?v=1';
+import { createPromptActions } from './prompt-actions.js?v=1';
+import { createQueueView } from './queue-view.js?v=1';
 import { createSkillView } from './skill-view.js?v=1';
 
 const storedExpandedCwds = (() => {
@@ -91,14 +93,6 @@ const messageScheduler = createMessageScheduler({
     renderMessages(sessionId, { stickToBottom, restoreAnchor });
   },
   save: saveMessages
-});
-
-const messageView = createMessageView({
-  editPrompt,
-  openImageViewer,
-  retryMessage,
-  sendPrompt,
-  toggleStarred
 });
 
 const el = {
@@ -190,6 +184,39 @@ const el = {
   closeImageViewer: document.querySelector('#closeImageViewer'),
   imageViewerImg: document.querySelector('#imageViewerImg')
 };
+
+const promptActions = createPromptActions({
+  api,
+  autoSizePrompt,
+  el,
+  getActiveSession,
+  loadMessages,
+  mergeSessionSnapshot,
+  renderActive,
+  renderPendingImages,
+  renderSessions,
+  saveMessages,
+  scrollMessagesToBottom,
+  state,
+  storageSet,
+  updateFavoritesButton,
+  updateMessage,
+  upsertMessage
+});
+
+const messageView = createMessageView({
+  editPrompt,
+  openImageViewer,
+  retryMessage: promptActions.retryMessage,
+  sendPrompt: promptActions.sendPrompt,
+  toggleStarred
+});
+
+const queueView = createQueueView({
+  cancelQueuedPrompt: promptActions.cancelQueuedPrompt,
+  openImageViewer,
+  supplementQueuedPrompt: promptActions.supplementQueuedPrompt
+});
 
 const skillView = createSkillView({
   commands: CODEX_COMMANDS,
@@ -996,44 +1023,13 @@ function removeRunIndicator() {
   if (existing) existing.remove();
 }
 
-function renderQueuePanel(session) {
-  const panel = document.createElement('div');
-  panel.className = 'queue-panel';
-  panel.dataset.queuePanel = '1';
-  panel.innerHTML = `<div class="queue-head"><strong>待执行 ${session.queue.length} 条</strong><span>点 ↪ 补当前会话</span></div>`;
-  for (const item of session.queue || []) {
-    const row = document.createElement('div');
-    row.className = 'queue-item';
-    row.innerHTML = `
-      <span>${escapeHtml(`${summarizeText(item.displayPrompt || item.prompt || '', 64)}${item.imageCount ? ` · 图片 ${item.imageCount}` : ''}`)}</span>
-      <div class="queue-images"></div>
-      <button class="queue-supplement-button" type="button" aria-label="把这条排队输入直接补充到当前会话" title="补充到当前会话">↪</button>
-      <button class="queue-cancel-button" type="button" aria-label="取消这条排队输入">×</button>
-    `;
-    const imageWrap = row.querySelector('.queue-images');
-    for (const image of item.images || []) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.className = 'queue-image-button';
-      button.setAttribute('aria-label', '查看排队图片');
-      button.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || 'queued image')}">`;
-      button.addEventListener('click', () => openImageViewer(image.url, image.name || '排队图片'));
-      imageWrap.append(button);
-    }
-    row.querySelector('.queue-supplement-button').addEventListener('click', () => supplementQueuedPrompt(item.id));
-    row.querySelector('.queue-cancel-button').addEventListener('click', () => cancelQueuedPrompt(item.id));
-    panel.append(row);
-  }
-  return panel;
-}
-
 function updateQueuePanel() {
   const existing = el.messagePane.querySelector('[data-queue-panel="1"]');
   if (existing) existing.remove();
   if (state.showStarredOnly) return;
   const session = getActiveSession();
   if (!session?.queue?.length) return;
-  el.messagePane.append(renderQueuePanel(session));
+  el.messagePane.append(queueView.renderQueuePanel(session));
 }
 
 function removeQueuePanel() {
@@ -1476,12 +1472,6 @@ async function addImageFiles(fileList) {
     el.imageButton.disabled = false;
     el.imageButton.textContent = '图片';
   }
-}
-
-function setSendState(mode) {
-  state.sending = mode === 'sending';
-  el.sendButton.disabled = !state.activeId || state.sending;
-  el.sendButton.textContent = state.sending ? '发送中' : '发送';
 }
 
 function updateRunSettingsState() {
@@ -1983,97 +1973,6 @@ if (!el.loginForm.dataset.fallbackBound) {
   });
 }
 
-async function sendPrompt(rawPrompt, opts = {}) {
-  const prompt = String(rawPrompt || '').trim();
-  const images = opts.images ? [...opts.images] : [...state.pendingImages];
-  const mode = opts.mode === 'supplement' ? 'supplement' : 'run';
-  if ((!prompt && !images.length) || !state.activeId) return;
-  const sessionId = state.activeId;
-  if (state.showStarredOnly) {
-    state.showStarredOnly = false;
-    storageSet('cmc.showStarredOnly', '0');
-    updateFavoritesButton();
-  }
-  const previousInput = el.promptInput.value;
-  const previousImages = [...state.pendingImages];
-  if (!opts.keepInput) el.promptInput.value = '';
-  if (!opts.keepImages) {
-    state.pendingImages = [];
-    renderPendingImages();
-  }
-  autoSizePrompt();
-  const elevated = Boolean(el.elevatedRun.checked);
-  const clientMessageId = globalThis.crypto?.randomUUID ? crypto.randomUUID() : `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  setSendState('sending');
-  const optimisticMessage = {
-    at: new Date().toISOString(),
-    role: mode === 'supplement' ? 'supplement' : 'user',
-    text: prompt || '请分析这张图片。',
-    elevated,
-    clientMessageId,
-    images: images.map((image) => ({ name: image.name, type: image.type, dataUrl: image.data })),
-    retryImages: images,
-    delivery: mode === 'supplement' ? 'supplement' : 'sending',
-    pending: true
-  };
-  upsertMessage(sessionId, optimisticMessage);
-  scrollMessagesToBottom();
-  try {
-    const data = await api(`/api/sessions/${sessionId}/messages`, {
-      method: 'POST',
-      body: JSON.stringify({ prompt, elevated, clientMessageId, images, mode })
-    });
-    updateLocalClientMessage(sessionId, clientMessageId, {
-      pending: false,
-      delivery: data.supplement === true ? 'supplement' : data.queued === true ? 'queued' : 'sent',
-      runState: data.supplement === true ? 'submitted' : data.queued === true ? 'queued' : 'submitted'
-    });
-    if (mergeSessionSnapshot(data.session)) renderSessions();
-    renderActive({ messages: false });
-  } catch (error) {
-    if (state.activeId === sessionId && !el.promptInput.value && !state.pendingImages.length) {
-      el.promptInput.value = previousInput;
-      state.pendingImages = previousImages;
-      autoSizePrompt();
-      renderPendingImages();
-    }
-    const messages = loadMessages(sessionId);
-    const index = messages.findIndex((message) => message.clientMessageId === clientMessageId);
-    if (index >= 0) {
-      messages[index] = { ...messages[index], pending: false, failed: true, delivery: 'failed' };
-      saveMessages(sessionId);
-      if (state.activeId === sessionId) renderActive();
-    }
-    upsertMessage(sessionId, {
-      at: new Date().toISOString(),
-      role: 'system',
-      text: error.message || '发送失败'
-    });
-  } finally {
-    setSendState('');
-  }
-}
-
-function updateLocalClientMessage(sessionId, clientMessageId, patch) {
-  const messages = loadMessages(sessionId);
-  const index = messages.findIndex((message) => message.clientMessageId === clientMessageId);
-  if (index < 0) return;
-  messages[index] = { ...messages[index], ...patch };
-  saveMessages(sessionId);
-  if (state.activeId === sessionId) renderActive();
-}
-
-function retryMessage(message) {
-  sendPrompt(message.text || '', {
-    images: (message.retryImages || message.images || []).map((image) => ({
-      ...image,
-      data: image.data || image.dataUrl
-    })).filter((image) => image.data),
-    keepInput: true,
-    keepImages: true
-  });
-}
-
 async function stopCurrentRun() {
   if (!state.activeId) return;
   const sessionId = state.activeId;
@@ -2090,39 +1989,6 @@ async function stopCurrentRun() {
       role: 'system',
       text: error.message || '停止失败'
     });
-  }
-}
-
-async function cancelQueuedPrompt(queueId) {
-  const session = getActiveSession();
-  if (!session || !queueId) return;
-  try {
-    const data = await api(`/api/sessions/${session.id}/queue/${encodeURIComponent(queueId)}`, { method: 'DELETE' });
-    if (data.session) {
-      if (mergeSessionSnapshot(data.session)) renderSessions();
-      renderActive({ messages: false });
-    }
-  } catch (error) {
-    upsertMessage(session.id, {
-      at: new Date().toISOString(),
-      role: 'system',
-      text: error.message || '取消排队失败'
-    });
-  }
-}
-
-async function supplementQueuedPrompt(queueId) {
-  const session = getActiveSession();
-  if (!session || !queueId) return;
-  try {
-    const data = await api(`/api/sessions/${session.id}/queue/${encodeURIComponent(queueId)}`, { method: 'POST' });
-    if (data.message) updateMessage(session.id, data.message);
-    if (data.session) {
-      if (mergeSessionSnapshot(data.session)) renderSessions();
-      renderActive({ messages: false });
-    }
-  } catch (error) {
-    alert(error.message || '补入失败');
   }
 }
 
@@ -2176,7 +2042,7 @@ function editPrompt(text, elevated) {
 
 el.promptForm.addEventListener('submit', async (event) => {
   event.preventDefault();
-  await sendPrompt(el.promptInput.value);
+  await promptActions.sendPrompt(el.promptInput.value);
 });
 
 el.promptInput.addEventListener('keydown', (event) => {

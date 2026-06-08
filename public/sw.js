@@ -1,6 +1,6 @@
-const CACHE_NAME = 'codex-console-v88';
-const ASSETS = ['/', '/index.html', '/styles.css?v=72', '/app.js?v=83', '/message-scheduler.js?v=1', '/browser-utils.js?v=1', '/format-utils.js?v=1', '/message-utils.js?v=1', '/message-view.js?v=1', '/skill-view.js?v=1', '/manifest.json?v=2'];
-const CACHEABLE_PATHS = new Set(['/', '/index.html', '/styles.css', '/app.js', '/message-scheduler.js', '/browser-utils.js', '/format-utils.js', '/message-utils.js', '/message-view.js', '/skill-view.js', '/manifest.json']);
+const CACHE_NAME = 'codex-console-v89';
+const ASSETS = ['/', '/index.html', '/styles.css?v=73', '/app.js?v=84', '/message-scheduler.js?v=1', '/browser-utils.js?v=1', '/format-utils.js?v=1', '/message-utils.js?v=1', '/message-view.js?v=1', '/prompt-actions.js?v=1', '/queue-view.js?v=1', '/skill-view.js?v=1', '/manifest.json?v=2'];
+const CACHEABLE_PATHS = new Set(['/', '/index.html', '/styles.css', '/app.js', '/message-scheduler.js', '/browser-utils.js', '/format-utils.js', '/message-utils.js', '/message-view.js', '/prompt-actions.js', '/queue-view.js', '/skill-view.js', '/manifest.json']);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)));

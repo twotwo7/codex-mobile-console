@@ -99,6 +99,14 @@ async function assertVisibleBox(page, selector, label) {
   return box;
 }
 
+async function checkSkillDialog(page) {
+  await page.click('#skillButton');
+  await page.waitForSelector('#skillDialog[open]', { timeout: 5000 });
+  await assertVisibleBox(page, '#skillDialog', 'skill dialog');
+  await page.click('#closeSkillDialog');
+  await page.waitForSelector('#skillDialog', { state: 'hidden', timeout: 5000 });
+}
+
 async function run() {
   await mkdir(OUT_DIR, { recursive: true });
   const browser = await chromium.launch({
@@ -111,6 +119,7 @@ async function run() {
       const context = await browser.newContext({ viewport, isMobile: true, deviceScaleFactor: 2 });
       const page = await context.newPage();
       await loginSmoke(page);
+      await checkSkillDialog(page);
       await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-app.png`), fullPage: true });
 
       await setFixture(page);
