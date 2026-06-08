@@ -722,6 +722,61 @@ button:disabled {
   animation: message-in 0.18s ease-out;
 }
 
+.conversation-turn {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.turn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.turn-summary-button {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 4px;
+  width: min(860px, 100%);
+  min-height: 28px;
+  padding: 3px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: left;
+}
+
+.turn-summary-button:hover,
+.turn-summary-button:focus {
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+
+.turn-toggle-icon {
+  color: var(--soft);
+  font-size: 13px;
+  line-height: 1;
+  text-align: center;
+}
+
+.turn-summary-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-turn.collapsed .turn-summary-button {
+  background: var(--surface);
+  border-color: var(--line);
+}
+
 .message.menu-open {
   z-index: 30;
   content-visibility: visible;

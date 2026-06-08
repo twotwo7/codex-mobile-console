@@ -27,6 +27,8 @@ const state = {
   messages: new Map(),
   messagePages: new Map(),
   messageCollapseStates: new Map(),
+  turnCollapseStates: new Map(),
+  latestTurnIds: new Map(),
   lastSeq: new Map(),
   eventSource: null,
   contextRefreshTimer: null,
@@ -248,6 +250,10 @@ function collapseStateKey(sessionId = state.activeId) {
   return `cmc.messageCollapsed.${sessionId || 'global'}`;
 }
 
+function turnCollapseStateKey(sessionId = state.activeId) {
+  return `cmc.turnCollapsed.${sessionId || 'global'}`;
+}
+
 function messageCollapseId(message) {
   return message.clientMessageId
     || (message.ids || []).find(Boolean)
@@ -282,6 +288,25 @@ function loadMessageCollapseStates(sessionId = state.activeId || 'global') {
   const safeStates = states && typeof states === 'object' ? states : {};
   state.messageCollapseStates.set(sessionId, safeStates);
   return safeStates;
+}
+
+function loadTurnCollapseStates(sessionId = state.activeId || 'global') {
+  if (state.turnCollapseStates.has(sessionId)) return state.turnCollapseStates.get(sessionId);
+  const states = storageJsonGet(turnCollapseStateKey(sessionId), {});
+  const safeStates = states && typeof states === 'object' ? states : {};
+  state.turnCollapseStates.set(sessionId, safeStates);
+  return safeStates;
+}
+
+function setTurnCollapsed(sessionId, turnId, collapsed) {
+  if (!sessionId || !turnId) return;
+  const states = loadTurnCollapseStates(sessionId);
+  const next = {
+    ...(states && typeof states === 'object' ? states : {}),
+    [turnId]: collapsed === true
+  };
+  state.turnCollapseStates.set(sessionId, next);
+  storageJsonSet(turnCollapseStateKey(sessionId), next);
 }
 
 function saveSessionCache() {
@@ -787,10 +812,11 @@ function messageBottomDistance() {
 
 function firstVisibleMessageAnchor() {
   const paneTop = el.messagePane.getBoundingClientRect().top;
-  for (const node of el.messagePane.querySelectorAll('.message')) {
+  for (const node of el.messagePane.querySelectorAll('.message, .conversation-turn')) {
     const rect = node.getBoundingClientRect();
     if (rect.bottom < paneTop) continue;
     return {
+      turnId: node.dataset.turnId || '',
       seq: node.dataset.seq || '',
       id: node.dataset.messageId || '',
       clientMessageId: node.dataset.clientMessageId || '',
@@ -802,10 +828,11 @@ function firstVisibleMessageAnchor() {
 
 function restoreMessageAnchor(anchor) {
   if (!anchor) return false;
-  const nodes = [...el.messagePane.querySelectorAll('.message')];
+  const nodes = [...el.messagePane.querySelectorAll('.message, .conversation-turn')];
   const target = nodes.find((node) => {
     const ids = (node.dataset.messageIds || '').split(',').filter(Boolean);
-    return (anchor.id && (node.dataset.messageId === anchor.id || ids.includes(anchor.id)))
+    return (anchor.turnId && node.dataset.turnId === anchor.turnId)
+      || (anchor.id && (node.dataset.messageId === anchor.id || ids.includes(anchor.id)))
       || (anchor.clientMessageId && node.dataset.clientMessageId === anchor.clientMessageId)
       || (anchor.seq && Number(node.dataset.seq || 0) === Number(anchor.seq || 0));
   });
@@ -947,8 +974,9 @@ function renderMessages(sessionId, options = {}) {
     releaseProgrammaticMessageScroll(renderScrollToken);
   };
 
+  const turns = groupMessagesIntoTurns(sessionId, messages);
   const baseChunkSize = isMobileViewport() ? MOBILE_MESSAGE_CHUNK : DESKTOP_MESSAGE_CHUNK;
-  const chunkSize = messages.length <= renderedMessageLimit() ? Math.max(1, messages.length) : baseChunkSize;
+  const chunkSize = messages.length <= renderedMessageLimit() ? Math.max(1, turns.length) : Math.max(1, Math.floor(baseChunkSize / 3));
   let index = 0;
   const renderChunk = () => {
     if (renderJobId !== state.renderJobId || state.activeId !== sessionId) {
@@ -956,12 +984,12 @@ function renderMessages(sessionId, options = {}) {
       return;
     }
     const fragment = document.createDocumentFragment();
-    const end = Math.min(index + chunkSize, messages.length);
+    const end = Math.min(index + chunkSize, turns.length);
     for (; index < end; index += 1) {
-      fragment.append(messageView.renderMessage(messages[index], { animate: false }));
+      fragment.append(renderConversationTurn(sessionId, turns[index]));
     }
     el.messagePane.append(fragment);
-    if (index < messages.length) {
+    if (index < turns.length) {
       requestAnimationFrame(renderChunk);
     } else {
       restoreScroll(true);
@@ -1005,6 +1033,116 @@ function displayMessages(sessionId) {
   const maxRendered = renderedMessageLimit();
   const visible = state.showStarredOnly ? filtered : filtered.slice(-maxRendered);
   return mergeDisplayMessages(visible);
+}
+
+function groupMessagesIntoTurns(sessionId, messages) {
+  if (state.showStarredOnly) {
+    return messages.map((message, index) => createConversationTurn(sessionId, [message], index, false));
+  }
+  const turns = [];
+  let current = null;
+  for (const message of messages) {
+    if (!current || message.role === 'user') {
+      current = { messages: [], index: turns.length };
+      turns.push(current);
+    }
+    current.messages.push(message);
+  }
+  const latestTurnIndex = turns.length - 1;
+  const conversationTurns = turns.map((turn, index) => createConversationTurn(sessionId, turn.messages, index, index < latestTurnIndex));
+  autoCollapsePreviousTurns(sessionId, conversationTurns);
+  return conversationTurns;
+}
+
+function createConversationTurn(sessionId, messages, index, defaultCollapsed) {
+  const turn = {
+    id: conversationTurnId(messages, index),
+    index,
+    messages,
+    defaultCollapsed
+  };
+  const states = loadTurnCollapseStates(sessionId);
+  turn.collapsed = typeof states[turn.id] === 'boolean' ? states[turn.id] : defaultCollapsed;
+  return turn;
+}
+
+function conversationTurnId(messages, index) {
+  const userMessage = messages.find((message) => message.role === 'user') || messages[0] || {};
+  const key = messageCollapseId(userMessage)
+    || userMessage.id
+    || userMessage.seq
+    || userMessage.at
+    || index;
+  return `turn:${key}`;
+}
+
+function renderConversationTurn(sessionId, turn) {
+  const section = document.createElement('section');
+  section.className = `conversation-turn${turn.collapsed ? ' collapsed' : ''}`;
+  section.dataset.turnId = turn.id;
+  section.dataset.turnIndex = String(turn.index + 1);
+
+  const summary = document.createElement('button');
+  summary.type = 'button';
+  summary.className = 'turn-summary-button';
+  summary.setAttribute('aria-expanded', turn.collapsed ? 'false' : 'true');
+  summary.innerHTML = `
+    <span class="turn-toggle-icon" aria-hidden="true">${turn.collapsed ? '▸' : '▾'}</span>
+    <span class="turn-summary-text">${escapeHtml(summarizeTurn(turn))}</span>
+  `;
+  summary.addEventListener('click', () => {
+    const collapsed = !section.classList.contains('collapsed');
+    setTurnCollapsed(sessionId, turn.id, collapsed);
+    messageScheduler.scheduleRender(sessionId, {
+      stickToBottom: collapsed ? shouldStickToBottom(sessionId) : false,
+      delay: 0
+    });
+  });
+  section.append(summary);
+
+  if (turn.collapsed) return section;
+
+  const body = document.createElement('div');
+  body.className = 'turn-body';
+  for (const message of turn.messages) {
+    body.append(messageView.renderMessage(message, { animate: false }));
+  }
+  section.append(body);
+  return section;
+}
+
+function autoCollapsePreviousTurns(sessionId, turns) {
+  const latest = turns.at(-1);
+  if (!latest) return;
+  const previousLatestId = state.latestTurnIds.get(sessionId);
+  state.latestTurnIds.set(sessionId, latest.id);
+  if (!previousLatestId || previousLatestId === latest.id) return;
+  const states = loadTurnCollapseStates(sessionId);
+  const next = { ...(states && typeof states === 'object' ? states : {}) };
+  let changed = false;
+  for (const turn of turns) {
+    const collapsed = turn.id !== latest.id;
+    if (next[turn.id] !== collapsed) {
+      next[turn.id] = collapsed;
+      changed = true;
+    }
+    turn.collapsed = collapsed;
+  }
+  if (!changed) return;
+  state.turnCollapseStates.set(sessionId, next);
+  storageJsonSet(turnCollapseStateKey(sessionId), next);
+}
+
+function summarizeTurn(turn) {
+  const userMessage = turn.messages.find((message) => message.role === 'user') || turn.messages[0] || {};
+  const replies = turn.messages.filter((message) => message.role === 'assistant').reduce((sum, message) => sum + (message.groupCount || 1), 0);
+  const tools = turn.messages.filter((message) => message.role === 'tool').reduce((sum, message) => sum + (message.groupCount || 1), 0);
+  const title = summarizeText(userMessage.text || '(空消息)', 88);
+  const parts = [`第 ${turn.index + 1} 轮`, title];
+  if (replies) parts.push(`回复 ${replies}`);
+  if (tools) parts.push(`工具 ${tools}`);
+  if (userMessage.images?.length) parts.push(`图 ${userMessage.images.length}`);
+  return parts.join(' · ');
 }
 
 function mergeDisplayMessages(messages) {
@@ -1115,14 +1253,6 @@ function updateQueuePanel() {
 function removeQueuePanel() {
   const existing = el.messagePane.querySelector('[data-queue-panel="1"]');
   if (existing) existing.remove();
-}
-
-function isNearMessageBottom() {
-  return messageBottomDistance() < 96;
-}
-
-function scrollMessagesToBottom() {
-  settleMessagesToBottom();
 }
 
 function renderPendingImages() {
@@ -1627,9 +1757,9 @@ async function openSkillDialog() {
 }
 
 function upsertMessage(sessionId, message) {
+  const previousTailKey = sessionId === state.activeId ? lastDisplayBubbleKey(sessionId) : '';
   const messages = loadMessages(sessionId);
   const replacedIndex = findMessageIndex(messages, message);
-  const isNewMessage = replacedIndex < 0;
   const incoming = (message.id || message.seq) ? { ...message, pending: false, failed: false } : message;
   let renderedMessage = incoming;
   if (replacedIndex >= 0) {
@@ -1656,31 +1786,20 @@ function upsertMessage(sessionId, message) {
   }
 
   if (sessionId === state.activeId) {
-    const stickToBottom = isNewMessage ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
-    if (state.renderingMessages || replacedIndex >= 0 || renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
-      messageScheduler.scheduleRender(sessionId, { stickToBottom });
-      return;
-    }
-    const nextNode = messageView.renderMessage(renderedMessage);
-    const existing = findRenderedMessageNode(renderedMessage);
-    removeRunIndicator();
-    removeQueuePanel();
-    if (existing) existing.replaceWith(nextNode);
-    else el.messagePane.append(nextNode);
-    updateQueuePanel();
-    updateRunIndicator();
-    if (stickToBottom) scrollMessagesToBottom();
+    const hasNewBubble = previousTailKey !== lastDisplayBubbleKey(sessionId);
+    const stickToBottom = hasNewBubble ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
+    messageScheduler.scheduleRender(sessionId, { stickToBottom });
     renderActive({ messages: false });
   }
 }
 
-function findRenderedMessageNode(message) {
-  return [...el.messagePane.querySelectorAll('.message')].find((node) => {
-    const ids = (node.dataset.messageIds || '').split(',').filter(Boolean);
-    return (message.id && (node.dataset.messageId === message.id || ids.includes(message.id)))
-      || (message.clientMessageId && node.dataset.clientMessageId === message.clientMessageId)
-      || (message.seq && Number(node.dataset.seq || 0) === Number(message.seq || 0));
-  });
+function lastDisplayBubbleKey(sessionId) {
+  const messages = displayMessages(sessionId);
+  const message = messages.at(-1);
+  if (!message) return '';
+  const firstId = message.clientMessageId || (message.ids || []).find(Boolean) || message.id || '';
+  const stable = firstId || (message.seq ? `seq:${message.seq}` : `${message.at || ''}:${String(message.text || '').slice(0, 48)}`);
+  return `${message.role || 'system'}:${stable}`;
 }
 
 function updateMessage(sessionId, message) {
@@ -1696,21 +1815,8 @@ function updateMessage(sessionId, message) {
   state.lastSeq.set(sessionId, lastRealSeq(messages));
   messageScheduler.scheduleSave(sessionId);
   if (sessionId === state.activeId) {
-    if (state.renderingMessages) {
-      messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
-      return;
-    }
-    const node = findRenderedMessageNode(message);
-    if (node) {
-      const stickToBottom = shouldStickToBottom(sessionId);
-      node.replaceWith(messageView.renderMessage(updatedMessage, { animate: false }));
-      updateQueuePanel();
-      updateRunIndicator();
-      if (stickToBottom) scrollMessagesToBottom();
-      renderActive({ messages: false });
-    } else {
-      messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
-    }
+    messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
+    renderActive({ messages: false });
   }
 }
 
