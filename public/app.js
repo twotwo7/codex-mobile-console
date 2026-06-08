@@ -1,20 +1,51 @@
-const storedExpandedCwds = (() => {
+function storageGet(key, fallback = '') {
   try {
-    const value = JSON.parse(localStorage.getItem('cmc.expandedCwds') || '[]');
-    return Array.isArray(value) ? value : [];
+    return localStorage.getItem(key) ?? fallback;
   } catch {
-    return [];
+    return fallback;
   }
+}
+
+function storageSet(key, value) {
+  try {
+    localStorage.setItem(key, String(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function storageJsonGet(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function storageJsonSet(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const storedExpandedCwds = (() => {
+  const value = storageJsonGet('cmc.expandedCwds', []);
+  return Array.isArray(value) ? value : [];
 })();
 
 const state = {
   sessions: [],
-  activeId: localStorage.getItem('cmc.activeId') || '',
-  sessionViewMode: localStorage.getItem('cmc.sessionViewMode') || 'recent',
-  theme: localStorage.getItem('cmc.theme') || 'graphite',
-  historyLimit: localStorage.getItem('cmc.historyLimit') || '200',
-  elevated: localStorage.getItem('cmc.elevated') === '1',
-  showStarredOnly: localStorage.getItem('cmc.showStarredOnly') === '1',
+  activeId: storageGet('cmc.activeId'),
+  sessionViewMode: storageGet('cmc.sessionViewMode', 'recent'),
+  theme: storageGet('cmc.theme', 'graphite'),
+  historyLimit: storageGet('cmc.historyLimit', '200'),
+  elevated: storageGet('cmc.elevated') === '1',
+  showStarredOnly: storageGet('cmc.showStarredOnly') === '1',
   pendingImages: [],
   sending: false,
   directoryPath: '/root/Projects',
@@ -147,28 +178,21 @@ function pageCacheKey(id) {
 }
 
 function saveSessionCache() {
-  localStorage.setItem('cmc.sessions', JSON.stringify(state.sessions));
+  storageJsonSet('cmc.sessions', state.sessions);
 }
 
 function saveExpandedCwds() {
-  localStorage.setItem('cmc.expandedCwds', JSON.stringify([...state.expandedCwds]));
+  storageJsonSet('cmc.expandedCwds', [...state.expandedCwds]);
 }
 
 function loadCachedSessions() {
-  try {
-    state.sessions = JSON.parse(localStorage.getItem('cmc.sessions') || '[]');
-  } catch {
-    state.sessions = [];
-  }
+  const sessions = storageJsonGet('cmc.sessions', []);
+  state.sessions = Array.isArray(sessions) ? sessions : [];
 }
 
 function saveMessages(id) {
-  try {
-    const messages = trimMessagesForStorage(mergeMessages([], state.messages.get(id) || []));
-    localStorage.setItem(cacheKey(id), JSON.stringify(messages.map(cacheSafeMessage)));
-  } catch {
-    // Large pasted screenshots should not break the live UI if browser storage is full.
-  }
+  const messages = trimMessagesForStorage(mergeMessages([], state.messages.get(id) || []));
+  storageJsonSet(cacheKey(id), messages.map(cacheSafeMessage));
 }
 
 function trimMessagesForStorage(messages) {
@@ -186,30 +210,21 @@ function cacheSafeMessage(message) {
 
 function loadMessages(id) {
   if (state.messages.has(id)) return state.messages.get(id);
-  try {
-    const messages = JSON.parse(localStorage.getItem(cacheKey(id)) || '[]');
-    const merged = trimMessagesForStorage(mergeMessages([], messages));
-    state.messages.set(id, merged);
-    state.lastSeq.set(id, lastRealSeq(merged));
-    loadMessagePage(id);
-    return merged;
-  } catch {
-    state.messages.set(id, []);
-    state.lastSeq.set(id, 0);
-    return [];
-  }
+  const cached = storageJsonGet(cacheKey(id), []);
+  const messages = Array.isArray(cached) ? cached : [];
+  const merged = trimMessagesForStorage(mergeMessages([], messages));
+  state.messages.set(id, merged);
+  state.lastSeq.set(id, lastRealSeq(merged));
+  loadMessagePage(id);
+  return merged;
 }
 
 function loadMessagePage(id) {
   if (state.messagePages.has(id)) return state.messagePages.get(id);
-  try {
-    const page = JSON.parse(localStorage.getItem(pageCacheKey(id)) || 'null');
-    if (page && typeof page === 'object') {
-      state.messagePages.set(id, { ...page, loading: false });
-      return state.messagePages.get(id);
-    }
-  } catch {
-    // Ignore stale page metadata.
+  const page = storageJsonGet(pageCacheKey(id), null);
+  if (page && typeof page === 'object') {
+    state.messagePages.set(id, { ...page, loading: false });
+    return state.messagePages.get(id);
   }
   return null;
 }
@@ -247,11 +262,7 @@ function setMessagePage(sessionId, page, options = {}) {
     next.lastSeq = current.lastSeq || 0;
   }
   state.messagePages.set(sessionId, next);
-  try {
-    localStorage.setItem(pageCacheKey(sessionId), JSON.stringify(next));
-  } catch {
-    // Page metadata is an optimization only.
-  }
+  storageJsonSet(pageCacheKey(sessionId), next);
 }
 
 function isMessageCacheFresh(sessionId, session) {
@@ -314,6 +325,20 @@ async function api(path, options = {}) {
     throw error;
   }
   return data;
+}
+
+function parseEventData(event, fallback = null) {
+  try {
+    return JSON.parse(event.data || 'null') ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function setActiveSessionId(id = '') {
+  state.activeId = id || '';
+  storageSet('cmc.activeId', state.activeId);
+  return state.activeId;
 }
 
 function setAuthView(isAuthed) {
@@ -1652,11 +1677,11 @@ async function refreshSessions(options = {}) {
     state.sessions = data.sessions || [];
     saveSessionCache();
     const firstWebSession = state.sessions.find((item) => item.source !== 'codex' && !item.trashedAt);
-    if (!state.activeId && firstWebSession) state.activeId = firstWebSession.id;
+    if (!state.activeId && firstWebSession) setActiveSessionId(firstWebSession.id);
     if (state.activeId && !state.sessions.some((item) => item.id === state.activeId && !item.trashedAt)) {
-      state.activeId = firstWebSession?.id || '';
+      setActiveSessionId(firstWebSession?.id || '');
     }
-    localStorage.setItem('cmc.activeId', state.activeId);
+    setActiveSessionId(state.activeId);
     renderSessions();
     if (state.activeId && options.messages !== false) {
       renderActive({ messages: false });
@@ -1821,22 +1846,20 @@ function connectEvents(id) {
   source.addEventListener('hello', (event) => {
     state.online = true;
     let sessionChanged = false;
-    try {
-      const data = JSON.parse(event.data || '{}');
-      sessionChanged = data.session ? mergeSessionSnapshot(data.session) : false;
-    } catch {
-      // A malformed hello should not break the reconnect path.
-    }
+    const data = parseEventData(event, {});
+    sessionChanged = data?.session ? mergeSessionSnapshot(data.session) : false;
     if (sessionChanged) renderSessions();
     renderActive({ messages: false });
   });
 
   source.addEventListener('message', (event) => {
-    upsertMessage(id, JSON.parse(event.data));
+    const message = parseEventData(event);
+    if (message) upsertMessage(id, message);
   });
 
   source.addEventListener('message_update', (event) => {
-    updateMessage(id, JSON.parse(event.data));
+    const message = parseEventData(event);
+    if (message) updateMessage(id, message);
   });
 
   source.onerror = () => {
@@ -1855,8 +1878,7 @@ async function selectSession(id) {
     await importExternalSession(session.codexSessionId);
     return;
   }
-  state.activeId = id;
-  localStorage.setItem('cmc.activeId', id);
+  setActiveSessionId(id);
   setDrawer(false);
   renderSessions();
   renderActive({ messages: false });
@@ -1872,8 +1894,7 @@ async function importExternalSession(codexSessionId) {
     });
     state.sessions = state.sessions.filter((item) => item.codexSessionId !== codexSessionId || item.source !== 'codex');
     state.sessions.unshift(data.session);
-    state.activeId = data.session.id;
-    localStorage.setItem('cmc.activeId', state.activeId);
+    setActiveSessionId(data.session.id);
     saveSessionCache();
     setDrawer(false);
     renderSessions();
@@ -1897,8 +1918,7 @@ async function forkSession(session) {
     });
     if (data.session) {
       mergeSessionSnapshot(data.session);
-      state.activeId = data.session.id;
-      localStorage.setItem('cmc.activeId', state.activeId);
+      setActiveSessionId(data.session.id);
       saveSessionCache();
       setDrawer(false);
       renderSessions();
@@ -1935,8 +1955,7 @@ async function deleteSession(session) {
       mergeSessionSnapshot(data.session);
     }
     if (state.activeId === session.id) {
-      state.activeId = state.sessions.find((item) => item.source !== 'codex' && !item.trashedAt)?.id || '';
-      localStorage.setItem('cmc.activeId', state.activeId);
+      setActiveSessionId(state.sessions.find((item) => item.source !== 'codex' && !item.trashedAt)?.id || '');
       if (state.eventSource) state.eventSource.close();
       state.eventSource = null;
     }
@@ -2007,7 +2026,7 @@ async function sendPrompt(rawPrompt, opts = {}) {
   const sessionId = state.activeId;
   if (state.showStarredOnly) {
     state.showStarredOnly = false;
-    localStorage.setItem('cmc.showStarredOnly', '0');
+    storageSet('cmc.showStarredOnly', '0');
     updateFavoritesButton();
   }
   const previousInput = el.promptInput.value;
@@ -2211,7 +2230,7 @@ el.stopButton.addEventListener('click', stopCurrentRun);
 
 el.favoritesButton.addEventListener('click', () => {
   state.showStarredOnly = !state.showStarredOnly;
-  localStorage.setItem('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
+  storageSet('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
   renderActive();
 });
 
@@ -2228,7 +2247,7 @@ el.promptInput.addEventListener('paste', (event) => {
 
 el.themeSelect.addEventListener('change', () => {
   state.theme = el.themeSelect.value;
-  localStorage.setItem('cmc.theme', state.theme);
+  storageSet('cmc.theme', state.theme);
   applyTheme(state.theme);
 });
 
@@ -2236,19 +2255,19 @@ el.historyLimitInput.addEventListener('change', async () => {
   const value = Math.max(0, Math.min(5000, Number(el.historyLimitInput.value || 200)));
   state.historyLimit = String(Number.isFinite(value) ? value : 200);
   el.historyLimitInput.value = state.historyLimit;
-  localStorage.setItem('cmc.historyLimit', state.historyLimit);
+  storageSet('cmc.historyLimit', state.historyLimit);
   if (state.activeId) await loadSession(state.activeId);
 });
 
 el.elevatedRun.addEventListener('change', () => {
   state.elevated = el.elevatedRun.checked;
-  localStorage.setItem('cmc.elevated', state.elevated ? '1' : '0');
+  storageSet('cmc.elevated', state.elevated ? '1' : '0');
   updateRunSettingsState();
 });
 
 el.sessionViewMode.addEventListener('change', () => {
   state.sessionViewMode = el.sessionViewMode.value;
-  localStorage.setItem('cmc.sessionViewMode', state.sessionViewMode);
+  storageSet('cmc.sessionViewMode', state.sessionViewMode);
   renderSessions();
 });
 
@@ -2259,8 +2278,7 @@ el.newSessionForm.addEventListener('submit', async (event) => {
   try {
     const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
     state.sessions.unshift(data.session);
-    state.activeId = data.session.id;
-    localStorage.setItem('cmc.activeId', state.activeId);
+    setActiveSessionId(data.session.id);
     el.dialog.close();
     saveSessionCache();
     renderSessions();

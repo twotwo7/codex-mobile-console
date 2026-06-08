@@ -246,12 +246,23 @@ function json(res, code, body, extraHeaders = {}) {
 function readBody(req, limit = 1024 * 1024) {
   return new Promise((resolve, reject) => {
     let body = '';
+    let done = false;
+    const finish = (error, value) => {
+      if (done) return;
+      done = true;
+      if (error) reject(error);
+      else resolve(value);
+    };
     req.on('data', (chunk) => {
+      if (done) return;
       body += chunk;
-      if (body.length > limit) reject(new Error('body_too_large'));
+      if (body.length > limit) {
+        finish(new Error('body_too_large'));
+        req.destroy();
+      }
     });
-    req.on('end', () => resolve(body));
-    req.on('error', reject);
+    req.on('end', () => finish(null, body));
+    req.on('error', (error) => finish(error));
   });
 }
 
@@ -2165,16 +2176,14 @@ function handleEvents(req, res, url) {
   }
   set.add(res);
   const ping = setInterval(() => sendSse(res, 'ping', { now: nowIso() }), 25000);
-  res.on('error', () => {
+  const cleanup = () => {
     clearInterval(ping);
     set.delete(res);
     if (set.size === 0) clients.delete(sessionId);
-  });
-  req.on('close', () => {
-    clearInterval(ping);
-    set.delete(res);
-    if (set.size === 0) clients.delete(sessionId);
-  });
+  };
+  res.on('error', cleanup);
+  res.on('close', cleanup);
+  req.on('close', cleanup);
 }
 
 const server = http.createServer((req, res) => {
