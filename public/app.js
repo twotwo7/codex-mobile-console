@@ -1281,7 +1281,7 @@ function renderConversationTurn(sessionId, turn) {
   summary.addEventListener('click', () => {
     const collapsed = !section.classList.contains('collapsed');
     setTurnCollapsed(sessionId, turn.id, collapsed);
-    setTurnExpandedState(sessionId, section, turn, !collapsed);
+    setTurnExpandedState(sessionId, section, turn, !collapsed, { animate: !collapsed });
     if (!collapsed) hydrateTurnIfNeeded(sessionId, section, turn).catch(() => {});
   });
   section.append(summary);
@@ -1302,9 +1302,10 @@ function createTurnBody(turn) {
   return body;
 }
 
-function attachTurnBody(sessionId, section, turn) {
+function attachTurnBody(sessionId, section, turn, options = {}) {
   let body = section.querySelector(':scope > .turn-body');
   if (!body) body = createTurnBody(turn);
+  body.classList.toggle('turn-body-animate', options.animate === true);
   body.hidden = false;
   if (body.parentElement !== section) section.append(body);
   const key = turnDomKey(sessionId, turn.id);
@@ -1323,13 +1324,13 @@ function detachTurnBody(sessionId, section, turn) {
   pruneCollapsedTurnBodies();
 }
 
-function setTurnExpandedState(sessionId, section, turn, expanded) {
+function setTurnExpandedState(sessionId, section, turn, expanded, options = {}) {
   section.classList.toggle('collapsed', !expanded);
   const button = section.querySelector('.turn-summary-button');
   const icon = section.querySelector('.turn-toggle-icon');
   if (button) button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   if (icon) icon.textContent = expanded ? '▾' : '▸';
-  if (expanded) attachTurnBody(sessionId, section, turn);
+  if (expanded) attachTurnBody(sessionId, section, turn, options);
   else detachTurnBody(sessionId, section, turn);
 }
 

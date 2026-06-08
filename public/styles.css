@@ -734,6 +734,9 @@ button:disabled {
   flex-direction: column;
   gap: 12px;
   contain: layout style;
+}
+
+.turn-body-animate {
   animation: turn-body-in 0.14s ease-out;
 }
 
