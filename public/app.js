@@ -71,6 +71,10 @@ const state = {
   contextRefreshInFlight: false,
   foregroundRefreshTimer: null,
   runtimeTimer: null,
+  messageRenderTimer: null,
+  pendingMessageRender: null,
+  messageSaveTimer: null,
+  pendingMessageSaves: new Set(),
   renderJobId: 0,
   renderingMessages: false,
   userScrolledDuringRender: false,
@@ -97,9 +101,13 @@ const HISTORY_PAGE_SIZE = 120;
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
 const MAX_BROWSER_CACHED_MESSAGES = 360;
-const MAX_RENDERED_MESSAGES = 220;
+const DESKTOP_MAX_RENDERED_MESSAGES = 180;
+const MOBILE_MAX_RENDERED_MESSAGES = 120;
 const MOBILE_MESSAGE_CHUNK = 18;
 const DESKTOP_MESSAGE_CHUNK = 40;
+const MESSAGE_RENDER_DEBOUNCE_MS = 120;
+const MESSAGE_RENDER_BUSY_DELAY_MS = 180;
+const MESSAGE_SAVE_DEBOUNCE_MS = 600;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
@@ -246,6 +254,21 @@ function saveMessages(id) {
   if (!storageJsonSet(cacheKey(id), cached)) {
     scheduleLocalCacheCleanup(500);
   }
+}
+
+function scheduleMessageSave(id) {
+  if (!id) return;
+  state.pendingMessageSaves.add(id);
+  clearTimeout(state.messageSaveTimer);
+  state.messageSaveTimer = setTimeout(flushMessageSaves, MESSAGE_SAVE_DEBOUNCE_MS);
+}
+
+function flushMessageSaves() {
+  clearTimeout(state.messageSaveTimer);
+  state.messageSaveTimer = null;
+  const ids = [...state.pendingMessageSaves];
+  state.pendingMessageSaves.clear();
+  for (const id of ids) saveMessages(id);
 }
 
 function trimMessagesForStorage(messages) {
@@ -856,6 +879,7 @@ function mergeSessionSnapshot(nextSession) {
 }
 
 function renderMessages(sessionId, options = {}) {
+  clearPendingMessageRender(sessionId);
   const stickToBottom = options.stickToBottom ?? true;
   const messages = displayMessages(sessionId);
   const renderJobId = ++state.renderJobId;
@@ -916,9 +940,52 @@ function renderMessages(sessionId, options = {}) {
       updateQueuePanel();
       updateRunIndicator();
       if (renderJobId === state.renderJobId) state.renderingMessages = false;
+      flushPendingMessageRender();
     }
   };
   renderChunk();
+}
+
+function clearPendingMessageRender(sessionId) {
+  if (state.pendingMessageRender?.sessionId !== sessionId) return;
+  state.pendingMessageRender = null;
+  clearTimeout(state.messageRenderTimer);
+  state.messageRenderTimer = null;
+}
+
+function scheduleMessageRender(sessionId, options = {}) {
+  if (!sessionId || sessionId !== state.activeId) return;
+  const current = state.pendingMessageRender;
+  const nextStickToBottom = current
+    ? current.stickToBottom === true && options.stickToBottom !== false
+    : options.stickToBottom !== false;
+  state.pendingMessageRender = {
+    sessionId,
+    stickToBottom: nextStickToBottom,
+    restoreAnchor: options.restoreAnchor || current?.restoreAnchor || null
+  };
+  clearTimeout(state.messageRenderTimer);
+  const delay = Number.isFinite(options.delay) ? options.delay : MESSAGE_RENDER_DEBOUNCE_MS;
+  state.messageRenderTimer = setTimeout(flushPendingMessageRender, delay);
+}
+
+function flushPendingMessageRender() {
+  const pending = state.pendingMessageRender;
+  if (!pending || pending.sessionId !== state.activeId) {
+    state.pendingMessageRender = null;
+    return;
+  }
+  if (state.renderingMessages) {
+    clearTimeout(state.messageRenderTimer);
+    state.messageRenderTimer = setTimeout(flushPendingMessageRender, MESSAGE_RENDER_BUSY_DELAY_MS);
+    return;
+  }
+  state.pendingMessageRender = null;
+  state.messageRenderTimer = null;
+  renderMessages(pending.sessionId, {
+    stickToBottom: pending.stickToBottom,
+    restoreAnchor: pending.restoreAnchor
+  });
 }
 
 function renderOlderMessagesControl(sessionId) {
@@ -1145,7 +1212,8 @@ async function copyMessageText(text) {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
-  const visible = state.showStarredOnly ? filtered : filtered.slice(-MAX_RENDERED_MESSAGES);
+  const maxRendered = isMobileViewport() ? MOBILE_MAX_RENDERED_MESSAGES : DESKTOP_MAX_RENDERED_MESSAGES;
+  const visible = state.showStarredOnly ? filtered : filtered.slice(-maxRendered);
   return mergeDisplayMessages(visible);
 }
 
@@ -2023,7 +2091,7 @@ function upsertMessage(sessionId, message) {
   }
   messages.sort(compareMessages);
   state.lastSeq.set(sessionId, lastRealSeq(messages));
-  saveMessages(sessionId);
+  scheduleMessageSave(sessionId);
 
   if (renderedMessage.status) {
     const changed = mergeSessionSnapshot({
@@ -2038,7 +2106,7 @@ function upsertMessage(sessionId, message) {
   if (sessionId === state.activeId) {
     const stickToBottom = isNearMessageBottom();
     if (state.renderingMessages || replacedIndex >= 0 || renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
-      renderMessages(sessionId, { stickToBottom });
+      scheduleMessageRender(sessionId, { stickToBottom });
       return;
     }
     const nextNode = renderMessage(renderedMessage);
@@ -2074,10 +2142,10 @@ function updateMessage(sessionId, message) {
   messages[index] = updatedMessage;
   messages.sort(compareMessages);
   state.lastSeq.set(sessionId, lastRealSeq(messages));
-  saveMessages(sessionId);
+  scheduleMessageSave(sessionId);
   if (sessionId === state.activeId) {
     if (state.renderingMessages) {
-      renderMessages(sessionId, { stickToBottom: isNearMessageBottom() });
+      scheduleMessageRender(sessionId, { stickToBottom: isNearMessageBottom() });
       return;
     }
     const node = findRenderedMessageNode(message);
@@ -2089,7 +2157,7 @@ function updateMessage(sessionId, message) {
       if (stickToBottom) scrollMessagesToBottom();
       renderActive({ messages: false });
     } else {
-      renderActive();
+      scheduleMessageRender(sessionId, { stickToBottom: isNearMessageBottom() });
     }
   }
 }
@@ -2255,13 +2323,14 @@ async function refreshActiveContext() {
       state.lastSeq.set(session.id, lastRealSeq(mergedMessages));
       const page = state.messagePages.get(session.id);
       if (!page) setMessagePage(session.id, data);
-      saveMessages(session.id);
+      scheduleMessageSave(session.id);
     }
     if (changed || sessionChanged) {
       if (state.activeId === session.id) {
         const stickToBottom = isNearMessageBottom();
         renderSessions();
-        renderActive({ messages: changed, stickToBottom });
+        if (changed) scheduleMessageRender(session.id, { stickToBottom });
+        else renderActive({ messages: false });
       }
     }
   } catch {
@@ -2873,14 +2942,6 @@ el.messagePane.addEventListener('scroll', () => {
   if (state.renderingMessages && !state.suppressScrollTracking) {
     state.userScrolledDuringRender = true;
   }
-  if (
-    !state.suppressScrollTracking
-    && !state.renderingMessages
-    && el.messagePane.scrollTop < 48
-    && state.activeId
-  ) {
-    loadOlderMessages(state.activeId);
-  }
 }, { passive: true });
 
 window.addEventListener('online', () => {
@@ -2899,12 +2960,18 @@ window.addEventListener('offline', () => {
 
 document.addEventListener('visibilitychange', () => {
   clearTimeout(state.foregroundRefreshTimer);
+  if (document.hidden) {
+    flushMessageSaves();
+    return;
+  }
   if (!document.hidden) {
     state.foregroundRefreshTimer = setTimeout(() => {
       refreshActiveContext();
     }, 600);
   }
 });
+
+window.addEventListener('pagehide', flushMessageSaves);
 
 function registerServiceWorkerLater() {
   if (!('serviceWorker' in navigator)) return;
