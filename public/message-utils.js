@@ -2,6 +2,7 @@ function messageKey(message) {
   if (message.clientMessageId) return `client:${message.clientMessageId}`;
   if (message.id) return `id:${message.id}`;
   if (message.seq) return `seq:${message.seq}`;
+  if (message.orderSeq) return `order:${message.orderSeq}`;
   return `${message.role || ''}\0${message.at || ''}\0${String(message.text || '').slice(0, 120)}`;
 }
 
@@ -39,7 +40,7 @@ export function mergeMessagePair(current, incoming) {
   const incomingImages = incoming.images || [];
   next.images = currentImages.length >= incomingImages.length ? currentImages : incomingImages;
   next.starred = current.starred === true || incoming.starred === true;
-  if (incoming.id || incoming.seq) {
+  if (incoming.id || incoming.seq || incoming.orderSeq) {
     next.pending = false;
     next.failed = false;
   }
@@ -58,7 +59,7 @@ export function mergeMessages(existing, incoming) {
   for (const message of [...(existing || []), ...(incoming || [])]) {
     const index = findMessageIndex(out, message);
     const next = index >= 0 ? mergeMessagePair(out[index], message) : { ...message };
-    if (message.id || message.seq) {
+    if (message.id || message.seq || message.orderSeq) {
       next.pending = false;
       next.failed = false;
     }
@@ -78,6 +79,10 @@ export function compareMessages(a, b) {
   const bSeq = Number(b.seq || 0);
   if (aSeq > 0 && bSeq > 0) return aSeq - bSeq;
   if (aSeq || bSeq) return aSeq - bSeq;
+  const aOrder = Number(a.orderSeq || 0);
+  const bOrder = Number(b.orderSeq || 0);
+  if (aOrder > 0 && bOrder > 0) return aOrder - bOrder;
+  if (aOrder || bOrder) return aOrder - bOrder;
   return messageKey(a).localeCompare(messageKey(b));
 }
 

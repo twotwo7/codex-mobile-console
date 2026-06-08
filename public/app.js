@@ -1,7 +1,7 @@
 import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
-import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
+import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
 import { createMessageView } from './message-view.js?v=3';
 import { createPromptActions } from './prompt-actions.js?v=4';
 import { createQueueView } from './queue-view.js?v=3';
@@ -52,6 +52,9 @@ const state = {
   cleanupTimer: null,
   localCacheCleanupHandle: null,
   promptResizeHandle: 0,
+  expandedTurnOrder: [],
+  collapsedTurnBodyOrder: [],
+  loadingTurnIds: new Set(),
   online: navigator.onLine,
   localRuntimeSnapshot: null,
   localRuntimeSnapshotAt: 0,
@@ -61,12 +64,14 @@ const state = {
   skillDialogMode: 'quick'
 };
 
-const HISTORY_TURN_PAGE_SIZE = 10;
+const HISTORY_TURN_PAGE_SIZE = 2;
 const REFRESH_MESSAGE_LIMIT = 120;
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
 const MAX_BROWSER_CACHED_MESSAGES = 360;
-const DEFAULT_RENDERED_TURNS = 10;
+const DEFAULT_RENDERED_TURNS = 3;
+const MAX_EXPANDED_TURNS = 2;
+const MAX_COLLAPSED_TURN_BODIES = 3;
 const MOBILE_MESSAGE_CHUNK = 18;
 const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
@@ -394,6 +399,25 @@ function messageListSignature(messages) {
   ].join(':');
 }
 
+function mergeFetchedMessages(currentMessages, fetchedMessages, page = {}) {
+  const incoming = Array.isArray(fetchedMessages) ? fetchedMessages : [];
+  if (page?.compactTurns !== true) return mergeMessages(currentMessages, incoming);
+  const compactRanges = incoming
+    .map((message) => message.turnSummary)
+    .filter((summary) => summary && summary.full === false && Number(summary.startSeq || 0) > 0)
+    .map((summary) => ({
+      startSeq: Number(summary.startSeq || 0),
+      endSeq: Number(summary.endSeq || summary.startSeq || 0)
+    }));
+  if (!compactRanges.length) return mergeMessages(currentMessages, incoming);
+  const reduced = (currentMessages || []).filter((message) => {
+    const seq = Number(message.orderSeq || message.seq || 0);
+    if (!seq) return true;
+    return !compactRanges.some((range) => seq > range.startSeq && seq <= range.endSeq);
+  });
+  return mergeMessages(reduced, incoming);
+}
+
 function loadMessages(id, options = {}) {
   if (state.messages.has(id)) return state.messages.get(id);
   const cached = options.fromCache === false ? [] : storageJsonGet(cacheKey(id), []);
@@ -448,6 +472,16 @@ function setMessagePage(sessionId, page, options = {}) {
     totalTurns: Number(page?.totalTurns ?? current.totalTurns ?? 0),
     loadedTurns: Number(page?.loadedTurns ?? countMessageTurns(state.messages.get(sessionId) || [])),
     turnLimit: Number(page?.turnLimit || current.turnLimit || firstPageLimit()),
+    compactTurns: options.preserveOffset && page?.compactTurns === false
+      ? current.compactTurns === true
+      : page?.compactTurns === undefined
+      ? current.compactTurns === true
+      : page?.compactTurns === true || page?.compactTurns === 'true' || page?.compactTurns === 1,
+    latestFull: options.preserveOffset && page?.latestFull === false
+      ? current.latestFull === true
+      : page?.latestFull === undefined
+      ? current.latestFull === true
+      : page?.latestFull === true || page?.latestFull === 'true' || page?.latestFull === 1,
     beforeSeq: currentBeforeSeq && incomingBeforeSeq ? Math.min(currentBeforeSeq, incomingBeforeSeq) : incomingBeforeSeq || currentBeforeSeq,
     afterSeq: Number(page?.afterSeq || current.afterSeq || 0),
     latestSeq: Number(page?.latestSeq || current.latestSeq || 0),
@@ -473,6 +507,8 @@ function isMessageCacheFresh(sessionId, session) {
   return Boolean(messages.length)
     && Boolean(page?.beforeSeq || messages.some((message) => message.orderSeq))
     && page?.sessionUpdatedAt === session.updatedAt
+    && page?.compactTurns === true
+    && page?.turnLimit === firstPageLimit()
     && countMessageTurns(messages) >= firstPageLimit();
 }
 
@@ -1011,6 +1047,7 @@ function renderMessages(sessionId, options = {}) {
   const previousAnchor = stickToBottom ? null : options.restoreAnchor || firstVisibleMessageAnchor();
   const renderScrollToken = beginProgrammaticMessageScroll();
   el.messagePane.innerHTML = '';
+  clearTurnDomState(sessionId);
   const olderControl = renderOlderMessagesControl(sessionId);
   if (olderControl) el.messagePane.append(olderControl);
   if (state.showStarredOnly && !messages.length) {
@@ -1110,6 +1147,27 @@ function visibleMessagesForSession(sessionId, messages) {
   return turns.slice(-limit).flat();
 }
 
+function turnDomKey(sessionId, turnId) {
+  return `${sessionId || 'global'}::${turnId || ''}`;
+}
+
+function moveKeyToEnd(list, key) {
+  const index = list.indexOf(key);
+  if (index >= 0) list.splice(index, 1);
+  list.push(key);
+}
+
+function removeKey(list, key) {
+  const index = list.indexOf(key);
+  if (index >= 0) list.splice(index, 1);
+}
+
+function clearTurnDomState(sessionId) {
+  const sessionPrefix = `${sessionId || 'global'}::`;
+  state.expandedTurnOrder = state.expandedTurnOrder.filter((key) => !key.startsWith(sessionPrefix));
+  state.collapsedTurnBodyOrder = state.collapsedTurnBodyOrder.filter((key) => !key.startsWith(sessionPrefix));
+}
+
 function groupMessagesIntoTurns(sessionId, messages) {
   if (state.showStarredOnly) {
     return messages.map((message, index) => createConversationTurn(sessionId, [message], index, false));
@@ -1117,6 +1175,7 @@ function groupMessagesIntoTurns(sessionId, messages) {
   const turns = splitMessagesIntoTurns(messages).map((turnMessages, index) => ({ messages: turnMessages, index }));
   const conversationTurns = turns.map((turn, index) => createConversationTurn(sessionId, turn.messages, index, true));
   autoCollapsePreviousTurns(sessionId, conversationTurns);
+  enforceTurnCollapseLimit(sessionId, conversationTurns);
   return conversationTurns;
 }
 
@@ -1134,15 +1193,41 @@ function splitMessagesIntoTurns(messages) {
 }
 
 function createConversationTurn(sessionId, messages, index, defaultCollapsed) {
+  const userMessage = messages.find((message) => message.role === 'user') || messages[0] || {};
+  const summary = userMessage.turnSummary || {};
+  const startSeq = Number(summary.startSeq || userMessage.orderSeq || userMessage.seq || 0);
   const turn = {
     id: conversationTurnId(messages, index),
     index,
     messages,
-    defaultCollapsed
+    defaultCollapsed,
+    startSeq,
+    endSeq: Number(summary.endSeq || messages.at(-1)?.orderSeq || messages.at(-1)?.seq || startSeq || 0),
+    full: summary.full === true || (summary.full !== false && messages.length > 1) || !summary.startSeq,
+    messageCount: Number(summary.messageCount || messages.length || 0),
+    replyCount: Number(summary.replyCount ?? messages.filter((message) => message.role === 'assistant').length),
+    toolCount: Number(summary.toolCount ?? messages.filter((message) => message.role === 'tool').length)
   };
   const states = loadTurnCollapseStates(sessionId);
   turn.collapsed = typeof states[turn.id] === 'boolean' ? states[turn.id] : defaultCollapsed;
   return turn;
+}
+
+function enforceTurnCollapseLimit(sessionId, turns) {
+  const expanded = turns.filter((turn) => !turn.collapsed);
+  if (expanded.length <= MAX_EXPANDED_TURNS) return;
+  const states = loadTurnCollapseStates(sessionId);
+  let changed = false;
+  for (const turn of expanded.slice(0, -MAX_EXPANDED_TURNS)) {
+    turn.collapsed = true;
+    if (states[turn.id] !== true) {
+      states[turn.id] = true;
+      changed = true;
+    }
+  }
+  if (!changed) return;
+  state.turnCollapseStates.set(sessionId, states);
+  scheduleTurnCollapseSave(sessionId);
 }
 
 function conversationTurnId(messages, index) {
@@ -1159,8 +1244,10 @@ function conversationTurnId(messages, index) {
 function renderConversationTurn(sessionId, turn) {
   const section = document.createElement('section');
   section.className = `conversation-turn${turn.collapsed ? ' collapsed' : ''}`;
+  section.dataset.sessionId = sessionId;
   section.dataset.turnId = turn.id;
   section.dataset.turnIndex = String(turn.index + 1);
+  section.dataset.turnStartSeq = String(turn.startSeq || '');
 
   const summary = document.createElement('button');
   summary.type = 'button';
@@ -1174,10 +1261,14 @@ function renderConversationTurn(sessionId, turn) {
     const collapsed = !section.classList.contains('collapsed');
     setTurnCollapsed(sessionId, turn.id, collapsed);
     setTurnExpandedState(sessionId, section, turn, !collapsed);
+    if (!collapsed) hydrateTurnIfNeeded(sessionId, section, turn).catch(() => {});
   });
   section.append(summary);
 
-  if (!turn.collapsed) attachTurnBody(sessionId, section, turn);
+  if (!turn.collapsed) {
+    attachTurnBody(sessionId, section, turn);
+    moveKeyToEnd(state.expandedTurnOrder, turnDomKey(sessionId, turn.id));
+  }
   return section;
 }
 
@@ -1195,18 +1286,20 @@ function attachTurnBody(sessionId, section, turn) {
   if (!body) body = createTurnBody(turn);
   body.hidden = false;
   if (body.parentElement !== section) section.append(body);
+  const key = turnDomKey(sessionId, turn.id);
+  removeKey(state.collapsedTurnBodyOrder, key);
+  moveKeyToEnd(state.expandedTurnOrder, key);
+  enforceExpandedTurnDomLimit(sessionId, key);
 }
 
 function detachTurnBody(sessionId, section, turn) {
   const body = section.querySelector(':scope > .turn-body');
   if (!body) return;
   body.hidden = true;
-  const turnId = turn.id;
-  scheduleIdle(() => {
-    if (!section.isConnected || section.dataset.turnId !== turnId || !section.classList.contains('collapsed')) return;
-    const currentBody = section.querySelector(':scope > .turn-body');
-    if (currentBody?.hidden) currentBody.remove();
-  }, 2500);
+  const key = turnDomKey(sessionId, turn.id);
+  removeKey(state.expandedTurnOrder, key);
+  moveKeyToEnd(state.collapsedTurnBodyOrder, key);
+  pruneCollapsedTurnBodies();
 }
 
 function setTurnExpandedState(sessionId, section, turn, expanded) {
@@ -1217,6 +1310,75 @@ function setTurnExpandedState(sessionId, section, turn, expanded) {
   if (icon) icon.textContent = expanded ? '▾' : '▸';
   if (expanded) attachTurnBody(sessionId, section, turn);
   else detachTurnBody(sessionId, section, turn);
+}
+
+function findTurnSection(sessionId, turnId) {
+  return el.messagePane.querySelector(
+    `.conversation-turn[data-session-id="${CSS.escape(sessionId || '')}"][data-turn-id="${CSS.escape(turnId || '')}"]`
+  );
+}
+
+function findDisplayedTurn(sessionId, turnId) {
+  const turns = splitMessagesIntoTurns(displayMessages(sessionId))
+    .map((messages, index) => createConversationTurn(sessionId, messages, index, true));
+  return turns.find((turn) => turn.id === turnId) || null;
+}
+
+function enforceExpandedTurnDomLimit(sessionId, keepKey) {
+  const sessionPrefix = `${sessionId || 'global'}::`;
+  const sessionKeys = state.expandedTurnOrder.filter((key) => key.startsWith(sessionPrefix));
+  while (sessionKeys.length > MAX_EXPANDED_TURNS) {
+    const key = sessionKeys.find((candidate) => candidate !== keepKey) || sessionKeys[0];
+    removeKey(state.expandedTurnOrder, key);
+    removeKey(sessionKeys, key);
+    const [, turnId] = key.split('::');
+    const section = findTurnSection(sessionId, turnId);
+    const turn = findDisplayedTurn(sessionId, turnId);
+    if (!section || !turn || section.classList.contains('collapsed')) continue;
+    setTurnCollapsed(sessionId, turn.id, true);
+    setTurnExpandedState(sessionId, section, turn, false);
+  }
+}
+
+function pruneCollapsedTurnBodies() {
+  state.collapsedTurnBodyOrder = state.collapsedTurnBodyOrder.filter((key) => {
+    const [sessionId, turnId] = key.split('::');
+    const section = findTurnSection(sessionId, turnId);
+    const body = section?.querySelector(':scope > .turn-body');
+    return Boolean(section?.classList.contains('collapsed') && body?.hidden);
+  });
+  while (state.collapsedTurnBodyOrder.length > MAX_COLLAPSED_TURN_BODIES) {
+    const key = state.collapsedTurnBodyOrder.shift();
+    const [sessionId, turnId] = key.split('::');
+    const body = findTurnSection(sessionId, turnId)?.querySelector(':scope > .turn-body');
+    if (body?.hidden) body.remove();
+  }
+}
+
+async function hydrateTurnIfNeeded(sessionId, section, turn) {
+  const loadingKey = turnDomKey(sessionId, turn.id);
+  if (turn.full || !turn.startSeq || state.loadingTurnIds.has(loadingKey)) return;
+  state.loadingTurnIds.add(loadingKey);
+  section.classList.add('loading-turn');
+  try {
+    const data = await api(sessionMessagesUrl(sessionId, { turnStartSeq: turn.startSeq }));
+    if (data.session) mergeSessionSnapshot(data.session);
+    const merged = mergeMessages(loadMessages(sessionId), data.messages || []);
+    state.messages.set(sessionId, trimMessagesForStorage(merged));
+    state.lastSeq.set(sessionId, lastRealSeq(merged));
+    saveMessages(sessionId);
+    if (state.activeId !== sessionId || section.classList.contains('collapsed')) return;
+    const freshTurn = findDisplayedTurn(sessionId, turn.id);
+    if (!freshTurn) return;
+    const oldBody = section.querySelector(':scope > .turn-body');
+    if (oldBody) oldBody.remove();
+    attachTurnBody(sessionId, section, freshTurn);
+    const summary = section.querySelector('.turn-summary-text');
+    if (summary) summary.textContent = summarizeTurn(freshTurn);
+  } finally {
+    state.loadingTurnIds.delete(loadingKey);
+    section.classList.remove('loading-turn');
+  }
 }
 
 function autoCollapsePreviousTurns(sessionId, turns) {
@@ -1243,9 +1405,9 @@ function autoCollapsePreviousTurns(sessionId, turns) {
 
 function summarizeTurn(turn) {
   const userMessage = turn.messages.find((message) => message.role === 'user') || turn.messages[0] || {};
-  const replies = turn.messages.filter((message) => message.role === 'assistant').reduce((sum, message) => sum + (message.groupCount || 1), 0);
-  const tools = turn.messages.filter((message) => message.role === 'tool').reduce((sum, message) => sum + (message.groupCount || 1), 0);
-  const title = summarizeText(userMessage.text || '(空消息)', 88);
+  const replies = turn.replyCount || turn.messages.filter((message) => message.role === 'assistant').reduce((sum, message) => sum + (message.groupCount || 1), 0);
+  const tools = turn.toolCount || turn.messages.filter((message) => message.role === 'tool').reduce((sum, message) => sum + (message.groupCount || 1), 0);
+  const title = userMessage.text || '(空消息)';
   const parts = [`第 ${turn.index + 1} 轮`, title];
   if (replies) parts.push(`回复 ${replies}`);
   if (tools) parts.push(`工具 ${tools}`);
@@ -1984,7 +2146,9 @@ async function loadSession(id, options = {}) {
     }
     const data = await api(sessionMessagesUrl(
       id,
-      options.full === true ? { limit: maxHistoryLimit() } : { turnLimit: firstPageLimit() }
+      options.full === true
+        ? { limit: maxHistoryLimit() }
+        : { turnLimit: firstPageLimit(), compactTurns: 1, latestFull: 1 }
     ));
     const session = data.session || { id };
     mergeSessionSnapshot(session);
@@ -1992,7 +2156,7 @@ async function loadSession(id, options = {}) {
     const previousSignature = messageListSignature(cached);
     const merged = options.full === true
       ? mergeMessages([], data.messages || [])
-      : mergeMessages(cached, data.messages || []);
+      : mergeFetchedMessages(cached, data.messages || [], data);
     const trimmed = trimMessagesForStorage(merged);
     const nextSignature = messageListSignature(trimmed);
     state.messages.set(id, trimmed);
@@ -2031,11 +2195,13 @@ async function loadOlderMessages(sessionId) {
   try {
     const data = await api(sessionMessagesUrl(sessionId, {
       turnLimit: HISTORY_TURN_PAGE_SIZE,
-      beforeSeq: page.beforeSeq || ''
+      beforeSeq: page.beforeSeq || '',
+      compactTurns: 1,
+      latestFull: 1
     }));
     if (data.session) mergeSessionSnapshot(data.session);
     const loadedOlderTurns = Number(data.loadedTurns || countMessageTurns(data.messages || []));
-    const merged = mergeMessages(data.messages || [], loadMessages(sessionId));
+    const merged = mergeFetchedMessages(loadMessages(sessionId), data.messages || [], data);
     state.messages.set(sessionId, trimMessagesForStorage(merged));
     state.lastSeq.set(sessionId, lastRealSeq(merged));
     expandRenderedTurnLimit(sessionId, loadedOlderTurns);

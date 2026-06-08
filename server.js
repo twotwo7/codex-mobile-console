@@ -1585,6 +1585,32 @@ async function displayMessageRange(session, options = {}) {
   const latestSeq = sorted.at(-1)?.orderSeq || 0;
   const afterSeq = Number(options.afterSeq || 0);
   const beforeSeq = Number(options.beforeSeq || 0);
+  const turnStartSeq = Number(options.turnStartSeq || 0);
+  const compactTurns = options.compactTurns === true || options.compactTurns === '1' || options.compactTurns === 'true';
+  const latestFull = options.latestFull === true || options.latestFull === '1' || options.latestFull === 'true';
+
+  if (Number.isFinite(turnStartSeq) && turnStartSeq > 0) {
+    const matchIndex = sorted.findIndex((message) => Number(message.orderSeq || 0) >= turnStartSeq);
+    const start = turnBoundaryStart(sorted, matchIndex < 0 ? sorted.length : matchIndex);
+    const end = turnBoundaryEnd(sorted, start);
+    const messages = annotateTurnMessages(sorted.slice(start, end), true);
+    return {
+      messages,
+      limit,
+      turnLimit: 1,
+      total,
+      totalTurns,
+      loadedTurns: messages.length ? 1 : 0,
+      compactTurns: false,
+      latestFull: true,
+      firstSeq,
+      latestSeq,
+      beforeSeq: messages[0]?.orderSeq || 0,
+      afterSeq: messages.at(-1)?.orderSeq || 0,
+      hasMoreBefore: start > 0,
+      hasMoreAfter: end < sorted.length
+    };
+  }
 
   if (Number.isFinite(afterSeq) && afterSeq > 0) {
     const messages = sorted.filter((message) => Number(message.orderSeq || 0) > afterSeq).slice(0, limit);
@@ -1595,6 +1621,8 @@ async function displayMessageRange(session, options = {}) {
       total,
       totalTurns,
       loadedTurns: countMessageTurns(messages),
+      compactTurns: false,
+      latestFull: false,
       firstSeq,
       latestSeq,
       beforeSeq: messages[0]?.orderSeq || 0,
@@ -1611,7 +1639,10 @@ async function displayMessageRange(session, options = {}) {
   const start = turnLimit > 0
     ? turnWindowStart(sorted, end, turnLimit)
     : turnBoundaryStart(sorted, limit > 0 ? Math.max(0, end - limit) : 0);
-  const messages = sorted.slice(start, end);
+  const windowMessages = sorted.slice(start, end);
+  const messages = compactTurns
+    ? compactTurnMessages(windowMessages, { latestFull: latestFull && end >= sorted.length })
+    : windowMessages;
   return {
     messages,
     limit,
@@ -1619,6 +1650,8 @@ async function displayMessageRange(session, options = {}) {
     total,
     totalTurns,
     loadedTurns: countMessageTurns(messages),
+    compactTurns,
+    latestFull: latestFull && end >= sorted.length,
     firstSeq,
     latestSeq,
     beforeSeq: messages[0]?.orderSeq || 0,
@@ -1634,6 +1667,14 @@ function turnBoundaryStart(messages, start) {
   return index;
 }
 
+function turnBoundaryEnd(messages, start) {
+  let index = Math.max(0, Math.min(Number(start || 0), messages.length));
+  if (index < messages.length && messages[index]?.role !== 'user') index = turnBoundaryStart(messages, index);
+  index += 1;
+  while (index < messages.length && messages[index]?.role !== 'user') index += 1;
+  return index;
+}
+
 function turnWindowStart(messages, end, turnLimit) {
   const targetTurns = Math.max(1, Number(turnLimit || 1));
   let index = Math.max(0, Math.min(Number(end || 0), messages.length));
@@ -1646,6 +1687,46 @@ function turnWindowStart(messages, end, turnLimit) {
     }
   }
   return 0;
+}
+
+function splitDisplayTurns(messages) {
+  const turns = [];
+  let current = null;
+  for (const message of messages || []) {
+    if (!current || message.role === 'user') {
+      current = [];
+      turns.push(current);
+    }
+    current.push(message);
+  }
+  return turns;
+}
+
+function annotateTurnMessages(turnMessages, full, summaryMessages = turnMessages) {
+  if (!turnMessages?.length) return [];
+  const statsMessages = summaryMessages?.length ? summaryMessages : turnMessages;
+  const startSeq = statsMessages[0]?.orderSeq || turnMessages[0]?.orderSeq || 0;
+  const endSeq = statsMessages.at(-1)?.orderSeq || startSeq;
+  const summary = {
+    startSeq,
+    endSeq,
+    full: full === true,
+    messageCount: statsMessages.length,
+    replyCount: statsMessages.filter((message) => message.role === 'assistant').length,
+    toolCount: statsMessages.filter((message) => message.role === 'tool').length
+  };
+  return turnMessages.map((message, index) => (
+    index === 0 ? { ...message, turnSummary: summary } : { ...message }
+  ));
+}
+
+function compactTurnMessages(messages, options = {}) {
+  const turns = splitDisplayTurns(messages);
+  return turns.flatMap((turnMessages, index) => {
+    const isLatestTurn = index === turns.length - 1;
+    if (options.latestFull === true && isLatestTurn) return annotateTurnMessages(turnMessages, true);
+    return annotateTurnMessages(turnMessages.slice(0, 1), false, turnMessages);
+  });
 }
 
 function countMessageTurns(messages) {
@@ -2200,7 +2281,10 @@ async function handleApi(req, res, url) {
       limit: url.searchParams.get('limit'),
       turnLimit: url.searchParams.get('turnLimit'),
       beforeSeq: url.searchParams.get('beforeSeq'),
-      afterSeq: url.searchParams.get('afterSeq')
+      afterSeq: url.searchParams.get('afterSeq'),
+      turnStartSeq: url.searchParams.get('turnStartSeq'),
+      compactTurns: url.searchParams.get('compactTurns'),
+      latestFull: url.searchParams.get('latestFull')
     });
     return json(res, 200, { session: publicSession(session), ...range });
   }
