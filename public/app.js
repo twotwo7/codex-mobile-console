@@ -1,5 +1,6 @@
 import { createMessageScheduler } from './message-scheduler.js?v=1';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
+import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
 
 const storedExpandedCwds = (() => {
@@ -449,12 +450,6 @@ function closeModal(dialog) {
 function setBadge(text, mode = '') {
   el.connectionBadge.textContent = text;
   el.connectionBadge.className = `connection-badge ${mode}`.trim();
-}
-
-function formatTime(iso) {
-  if (!iso) return '';
-  const date = new Date(iso);
-  return date.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', month: 'numeric', day: 'numeric' });
 }
 
 function renderSessions(options = {}) {
@@ -1256,13 +1251,6 @@ function imageSizeFromDataUrl(dataUrl) {
   return Math.round(base64.length * 0.75);
 }
 
-function formatBytes(bytes) {
-  if (!Number.isFinite(bytes)) return '';
-  if (bytes <= 0) return '0B';
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))}KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
-}
-
 function renderStorageStats(data) {
   const settings = data.settings || {};
   el.autoCleanupToggle.checked = settings.autoCleanup === true;
@@ -1320,28 +1308,9 @@ async function runStorageCleanup(mode) {
   }
 }
 
-function formatDuration(ms) {
-  if (!Number.isFinite(ms) || ms <= 0) return '0s';
-  const seconds = Math.floor(ms / 1000);
-  const hours = Math.floor(seconds / 3600);
-  const minutes = Math.floor((seconds % 3600) / 60);
-  const rest = seconds % 60;
-  return [
-    hours ? `${hours}h` : '',
-    minutes || hours ? `${minutes}m` : '',
-    `${rest}s`
-  ].filter(Boolean).join(' ');
-}
-
 function shortCommand(cmdline) {
   const text = (cmdline || []).join(' ').replace(/\s+/g, ' ').trim();
   return summarizeText(text || '-', 160);
-}
-
-function formatNumber(value) {
-  const number = Number(value || 0);
-  if (!Number.isFinite(number)) return '0';
-  return number.toLocaleString('zh-CN');
 }
 
 function localStorageStats() {
@@ -1904,11 +1873,6 @@ function summarizeMessage(message) {
   return `${prefix} · ${clipped}`;
 }
 
-function summarizeText(value, limit) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  return text.length > limit ? `${text.slice(0, limit)}...` : text;
-}
-
 function extractOptionActions(text) {
   const actions = [];
   const seen = new Set();
@@ -2008,15 +1972,6 @@ function updateMessage(sessionId, message) {
       messageScheduler.scheduleRender(sessionId, { stickToBottom: state.autoFollowBottom });
     }
   }
-}
-
-function escapeHtml(value) {
-  return String(value)
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#039;');
 }
 
 async function refreshSessions(options = {}) {
