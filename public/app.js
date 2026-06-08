@@ -134,6 +134,10 @@ const messageScheduler = createMessageScheduler({
   save: saveMessages
 });
 
+if ('scrollRestoration' in history) {
+  history.scrollRestoration = 'manual';
+}
+
 const el = {
   loginView: document.querySelector('#loginView'),
   appView: document.querySelector('#appView'),
@@ -2158,7 +2162,7 @@ async function refreshSessions(options = {}) {
     if (error.status === 401) throw error;
     loadCachedSessions();
     renderSessions();
-    renderActive({ messages: options.messages !== false });
+    renderActive({ messages: options.messages !== false, stickToBottom: true });
   }
 }
 
@@ -2938,7 +2942,7 @@ async function boot() {
     if (!navigator.onLine && state.sessions.length) {
       setAuthView(true);
       renderSessions({ force: true });
-      renderActive();
+      renderActive({ stickToBottom: true });
     } else {
       setAuthView(false);
     }
