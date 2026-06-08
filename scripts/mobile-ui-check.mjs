@@ -83,6 +83,7 @@ async function setFixture(page) {
       </body>
     </html>`, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('.image-viewer img', { timeout: 5000 });
+  await page.waitForFunction(() => getComputedStyle(document.querySelector('.workspace')).display === 'grid', null, { timeout: 5000 });
 }
 
 function sampleImage() {

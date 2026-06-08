@@ -55,7 +55,6 @@ const state = {
   skillDialogMode: 'quick'
 };
 
-const INITIAL_HISTORY_LIMIT = 120;
 const HISTORY_PAGE_SIZE = 120;
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
@@ -305,14 +304,19 @@ function loadMessagePage(id) {
 
 function firstPageLimit() {
   const configured = Number(state.historyLimit || 200);
-  if (!Number.isFinite(configured) || configured <= 0) return INITIAL_HISTORY_LIMIT;
-  return Math.max(20, Math.min(INITIAL_HISTORY_LIMIT, configured));
+  const viewportLimit = renderedMessageLimit();
+  if (!Number.isFinite(configured) || configured <= 0) return viewportLimit;
+  return Math.max(20, Math.min(viewportLimit, configured));
 }
 
 function maxHistoryLimit() {
   const configured = Number(state.historyLimit || 200);
   if (!Number.isFinite(configured) || configured <= 0) return MAX_LOCAL_MESSAGES;
   return Math.max(20, Math.min(MAX_LOCAL_MESSAGES, configured));
+}
+
+function renderedMessageLimit() {
+  return isMobileViewport() ? MOBILE_MAX_RENDERED_MESSAGES : DESKTOP_MAX_RENDERED_MESSAGES;
 }
 
 function setMessagePage(sessionId, page, options = {}) {
@@ -868,7 +872,7 @@ function renderMessages(sessionId, options = {}) {
   };
 
   const baseChunkSize = isMobileViewport() ? MOBILE_MESSAGE_CHUNK : DESKTOP_MESSAGE_CHUNK;
-  const chunkSize = messages.length <= baseChunkSize ? Math.max(1, messages.length) : baseChunkSize;
+  const chunkSize = messages.length <= renderedMessageLimit() ? Math.max(1, messages.length) : baseChunkSize;
   let index = 0;
   const renderChunk = () => {
     if (renderJobId !== state.renderJobId || state.activeId !== sessionId) {
@@ -922,7 +926,7 @@ function closeImageViewer() {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
-  const maxRendered = isMobileViewport() ? MOBILE_MAX_RENDERED_MESSAGES : DESKTOP_MAX_RENDERED_MESSAGES;
+  const maxRendered = renderedMessageLimit();
   const visible = state.showStarredOnly ? filtered : filtered.slice(-maxRendered);
   return mergeDisplayMessages(visible);
 }
