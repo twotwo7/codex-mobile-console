@@ -59,6 +59,7 @@ const state = {
   sessionViewMode: storageGet('cmc.sessionViewMode', 'recent'),
   theme: storageGet('cmc.theme', 'graphite'),
   historyLimit: storageGet('cmc.historyLimit', '200'),
+  autoFollowBottom: storageGet('cmc.autoFollowBottom', '1') === '1',
   elevated: storageGet('cmc.elevated') === '1',
   showStarredOnly: storageGet('cmc.showStarredOnly') === '1',
   pendingImages: [],
@@ -175,6 +176,7 @@ const el = {
   skillButton: document.querySelector('#skillButton'),
   themeSelect: document.querySelector('#themeSelect'),
   historyLimitInput: document.querySelector('#historyLimitInput'),
+  autoFollowBottom: document.querySelector('#autoFollowBottom'),
   sessionViewMode: document.querySelector('#sessionViewMode'),
   dialog: document.querySelector('#newSessionDialog'),
   newSessionForm: document.querySelector('#newSessionForm'),
@@ -230,6 +232,7 @@ const el = {
 applyTheme(state.theme);
 el.themeSelect.value = state.theme;
 el.historyLimitInput.value = state.historyLimit;
+el.autoFollowBottom.checked = state.autoFollowBottom;
 el.elevatedRun.checked = state.elevated;
 el.sessionViewMode.value = state.sessionViewMode;
 updateRunSettingsState();
@@ -747,7 +750,7 @@ function renderActive(options = {}) {
   setBadge(isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线', isRunning ? 'running' : state.online ? 'online' : '');
   if (shouldRenderMessages) {
     renderMessages(session.id, {
-      stickToBottom: options.stickToBottom ?? isNearMessageBottom(),
+      stickToBottom: options.stickToBottom ?? state.autoFollowBottom,
       restoreAnchor: options.restoreAnchor || null
     });
   }
@@ -2055,7 +2058,7 @@ function upsertMessage(sessionId, message) {
   }
 
   if (sessionId === state.activeId) {
-    const stickToBottom = isNearMessageBottom();
+    const stickToBottom = state.autoFollowBottom;
     if (state.renderingMessages || replacedIndex >= 0 || renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
       messageScheduler.scheduleRender(sessionId, { stickToBottom });
       return;
@@ -2096,19 +2099,19 @@ function updateMessage(sessionId, message) {
   messageScheduler.scheduleSave(sessionId);
   if (sessionId === state.activeId) {
     if (state.renderingMessages) {
-      messageScheduler.scheduleRender(sessionId, { stickToBottom: isNearMessageBottom() });
+      messageScheduler.scheduleRender(sessionId, { stickToBottom: state.autoFollowBottom });
       return;
     }
     const node = findRenderedMessageNode(message);
     if (node) {
-      const stickToBottom = isNearMessageBottom();
+      const stickToBottom = state.autoFollowBottom;
       node.replaceWith(renderMessage(updatedMessage, { animate: false }));
       updateQueuePanel();
       updateRunIndicator();
       if (stickToBottom) scrollMessagesToBottom();
       renderActive({ messages: false });
     } else {
-      messageScheduler.scheduleRender(sessionId, { stickToBottom: isNearMessageBottom() });
+      messageScheduler.scheduleRender(sessionId, { stickToBottom: state.autoFollowBottom });
     }
   }
 }
@@ -2278,7 +2281,7 @@ async function refreshActiveContext() {
     }
     if (changed || sessionChanged) {
       if (state.activeId === session.id) {
-        const stickToBottom = isNearMessageBottom();
+        const stickToBottom = state.autoFollowBottom;
         renderSessions();
         if (changed) messageScheduler.scheduleRender(session.id, { stickToBottom });
         else renderActive({ messages: false });
@@ -2720,6 +2723,11 @@ el.historyLimitInput.addEventListener('change', async () => {
   el.historyLimitInput.value = state.historyLimit;
   storageSet('cmc.historyLimit', state.historyLimit);
   if (state.activeId) await loadSession(state.activeId);
+});
+
+el.autoFollowBottom.addEventListener('change', () => {
+  state.autoFollowBottom = el.autoFollowBottom.checked;
+  storageSet('cmc.autoFollowBottom', state.autoFollowBottom ? '1' : '0');
 });
 
 el.elevatedRun.addEventListener('change', () => {
