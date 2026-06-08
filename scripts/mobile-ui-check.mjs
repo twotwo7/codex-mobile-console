@@ -37,7 +37,8 @@ async function setFixture(page) {
             <div class="top-title"><strong>移动端检查</strong><span>/root/Projects</span></div>
             <button class="top-favorite-button active" type="button">★</button>
             <button class="top-runtime-button" type="button">运行时</button>
-            <span class="connection-badge running">运行中</span>
+            <span class="connection-badge running" hidden>运行中</span>
+            <button class="top-stop-button" type="button">停止</button>
           </header>
           <section class="message-pane">
             <article class="message user">
@@ -65,7 +66,6 @@ async function setFixture(page) {
           </section>
           <form class="prompt-bar">
             <div class="prompt-tools">
-              <button class="stop-button" type="button">停止</button>
               <button class="command-button" type="button">命令</button>
               <button class="command-button" type="button">图片</button>
             </div>

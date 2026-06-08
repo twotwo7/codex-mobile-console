@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=75">
+    <link rel="stylesheet" href="/styles.css?v=76">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -75,6 +75,7 @@
           <button id="favoritesButton" class="top-favorite-button" type="button" aria-label="只看收藏" aria-pressed="false">☆</button>
           <button id="runtimeButton" class="top-runtime-button" type="button">运行时</button>
           <span id="connectionBadge" class="connection-badge">离线</span>
+          <button id="stopButton" class="top-stop-button" type="button" hidden>停止</button>
         </header>
 
         <section id="emptyState" class="empty-state">
@@ -87,7 +88,6 @@
 
         <form id="promptForm" class="prompt-bar">
           <div class="prompt-tools">
-            <button id="stopButton" class="stop-button" type="button" hidden>停止</button>
             <button id="commandButton" class="command-button" type="button">命令</button>
             <button id="skillButton" class="command-button" type="button">技能</button>
             <button id="imageButton" class="command-button" type="button">图片</button>
@@ -324,6 +324,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=89" type="module"></script>
+    <script src="/app.js?v=90" type="module"></script>
   </body>
 </html>

@@ -669,15 +669,18 @@ function renderSessionButton(session) {
 function renderActive(options = {}) {
   const shouldRenderMessages = options.messages !== false;
   const session = state.sessions.find((item) => item.id === state.activeId);
-  const isRunning = isRunStatus(session?.status);
+  const isRunning = isSessionRunning(session);
+  const canStop = session?.canStop !== false && isRunning && session?.status !== 'stopping';
   el.emptyState.hidden = Boolean(session);
   el.messagePane.hidden = !session;
   el.promptInput.disabled = !session;
   el.sendButton.disabled = !session || state.sending;
   el.stopButton.hidden = !isRunning;
-  el.stopButton.disabled = !session || session.status === 'stopping';
+  el.stopButton.disabled = !session || !canStop;
+  el.connectionBadge.hidden = isRunning;
 
   if (!session) {
+    el.connectionBadge.hidden = false;
     el.activeTitle.textContent = 'Codex Console';
     el.activeMeta.textContent = '未选择会话';
     setBadge(state.online ? '在线' : '离线', state.online ? 'online' : '');
@@ -788,12 +791,14 @@ function getActiveSession() {
   return state.sessions.find((item) => item.id === state.activeId);
 }
 
-function isRunStatus(status) {
-  return status === 'running' || status === 'stopping';
+function isSessionRunning(session) {
+  if (!session) return false;
+  if (typeof session.isRunning === 'boolean') return session.isRunning;
+  return session.status === 'running' || session.status === 'stopping';
 }
 
 function isActiveSessionRunning() {
-  return isRunStatus(getActiveSession()?.status);
+  return isSessionRunning(getActiveSession());
 }
 
 function syncStreamingMarkers() {
@@ -828,6 +833,9 @@ function mergeSessionSnapshot(nextSession) {
     'createdAt',
     'updatedAt',
     'lastSeq',
+    'storedStatus',
+    'isRunning',
+    'canStop',
     'queuedCount'
   ];
   const changed = scalarKeys.some((key) => current[key] !== next[key])
@@ -1027,7 +1035,7 @@ function updateRunIndicator() {
   const existing = el.messagePane.querySelector('[data-run-indicator="1"]');
   if (existing) existing.remove();
   const session = getActiveSession();
-  if (!session || !['running', 'stopping'].includes(session.status)) return;
+  if (!isSessionRunning(session)) return;
   el.messagePane.append(renderRunIndicator(session));
 }
 
@@ -1878,7 +1886,7 @@ async function importExternalSession(codexSessionId) {
 
 async function forkSession(session) {
   if (!session?.id) return;
-  if (['running', 'stopping'].includes(session.status)) {
+  if (isSessionRunning(session)) {
     alert('会话正在运行，停止或等待结束后再 fork。');
     return;
   }

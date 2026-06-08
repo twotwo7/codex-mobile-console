@@ -599,6 +599,19 @@ button:disabled {
   white-space: nowrap;
 }
 
+.top-stop-button {
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  background: var(--danger);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .top-favorite-button {
   flex: 0 0 auto;
   width: 34px;
@@ -912,13 +925,6 @@ button:disabled {
   width: 18px;
   height: 18px;
   accent-color: var(--accent-2);
-}
-
-.stop-button {
-  min-height: 34px;
-  padding: 0 12px;
-  background: var(--danger);
-  color: #fff;
 }
 
 .command-button {

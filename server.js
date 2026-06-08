@@ -229,6 +229,22 @@ function recoverStaleSession(session, reason = 'monitor') {
   });
 }
 
+function reconcileSessionRunState(session, reason = 'snapshot') {
+  if (!session || session.source === 'codex') return false;
+  session.messages ||= [];
+  session.queue ||= [];
+  const hasChild = running.has(session.id);
+  const hasQueue = session.queue.length > 0;
+  const staleStatus = ['running', 'stopping'].includes(session.status) && !hasChild;
+  const staleMessages = incompleteRunMessages(session).some((message) => {
+    if (message.runState === 'queued') return !hasQueue;
+    return !hasChild;
+  });
+  if (!staleStatus && !staleMessages) return false;
+  recoverStaleSession(session, reason);
+  return true;
+}
+
 let saveTimer = null;
 let restartRequested = false;
 function scheduleSave() {
@@ -341,6 +357,11 @@ function safeCompare(a, b) {
 function publicSession(session) {
   session.messages ||= [];
   session.queue ||= [];
+  const runtimeRunning = running.has(session.id);
+  const isStopping = runtimeRunning && session.status === 'stopping';
+  const effectiveStatus = runtimeRunning
+    ? isStopping ? 'stopping' : 'running'
+    : ['running', 'stopping'].includes(session.status) ? 'idle' : session.status;
   return {
     id: session.id,
     source: session.source || 'web',
@@ -350,7 +371,10 @@ function publicSession(session) {
     sandbox: session.sandbox,
     approval: session.approval,
     codexSessionId: session.codexSessionId || '',
-    status: session.status,
+    status: effectiveStatus,
+    storedStatus: session.status,
+    isRunning: runtimeRunning,
+    canStop: runtimeRunning && !isStopping,
     trashedAt: session.trashedAt || '',
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -956,14 +980,7 @@ function startRunMonitor() {
   clearInterval(runMonitorTimer);
   runMonitorTimer = setInterval(() => {
     for (const session of Object.values(state.sessions || {})) {
-      const hasChild = running.has(session.id);
-      const hasQueue = (session.queue || []).length > 0;
-      const staleStatus = ['running', 'stopping'].includes(session.status) && !hasChild;
-      const staleMessages = incompleteRunMessages(session).some((message) => {
-        if (message.runState === 'queued') return !hasQueue;
-        return !hasChild;
-      });
-      if (staleStatus || staleMessages) recoverStaleSession(session, 'monitor');
+      reconcileSessionRunState(session, 'monitor');
     }
   }, 10000);
   runMonitorTimer.unref();
@@ -2185,6 +2202,7 @@ async function handleApi(req, res, url) {
   if (messageListMatch && req.method === 'GET') {
     const session = state.sessions[decodeURIComponent(messageListMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
+    reconcileSessionRunState(session, 'message-list');
     const range = await displayMessageRange(session, {
       limit: url.searchParams.get('limit'),
       beforeSeq: url.searchParams.get('beforeSeq'),
@@ -2202,6 +2220,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === '/api/sessions' && req.method === 'GET') {
+    for (const session of Object.values(state.sessions)) reconcileSessionRunState(session, 'session-list');
     const webSessions = Object.values(state.sessions).map(publicSession);
     const codexSessions = await listCodexSessions();
     const sessions = sortPublicSessions([...webSessions, ...codexSessions]);
@@ -2286,6 +2305,7 @@ async function handleApi(req, res, url) {
     const sessionId = decodeURIComponent(sessionMatch[1]);
     const session = state.sessions[sessionId];
     if (!session) return json(res, 404, { error: 'session_not_found' });
+    reconcileSessionRunState(session, 'session-load');
     const rawLimit = Number(url.searchParams.get('limit') ?? 500);
     const rawOffset = Number(url.searchParams.get('offset') ?? 0);
     const limit = Number.isFinite(rawLimit) ? Math.max(0, Math.min(5000, Math.floor(rawLimit))) : 500;
@@ -2298,6 +2318,7 @@ async function handleApi(req, res, url) {
   if (runtimeMatch && req.method === 'GET') {
     const session = state.sessions[decodeURIComponent(runtimeMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
+    reconcileSessionRunState(session, 'runtime');
     return json(res, 200, await runtimeInfo(session));
   }
 
@@ -2317,6 +2338,7 @@ async function handleApi(req, res, url) {
     } else {
       sourceSession = state.sessions[sessionId];
       if (!sourceSession) return json(res, 404, { error: 'session_not_found' });
+      reconcileSessionRunState(sourceSession, 'fork');
       if (running.has(sessionId) || ['running', 'stopping'].includes(sourceSession.status)) {
         return json(res, 409, { error: 'session_running', message: '会话正在运行，停止或等待结束后再 fork。' });
       }
@@ -2542,6 +2564,7 @@ async function handleApi(req, res, url) {
   if (stopMatch && req.method === 'POST') {
     const session = state.sessions[decodeURIComponent(stopMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
+    reconcileSessionRunState(session, 'stop');
     const stopped = stopRunningSession(session);
     return json(res, 200, { ok: true, stopped, session: publicSession(session) });
   }
