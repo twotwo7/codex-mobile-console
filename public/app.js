@@ -30,6 +30,8 @@ const state = {
   retainedTurnBodies: new Map(),
   messageCollapseStates: new Map(),
   turnCollapseStates: new Map(),
+  pendingTurnCollapseSaves: new Set(),
+  turnCollapseSaveHandle: null,
   latestTurnIds: new Map(),
   lastSeq: new Map(),
   eventSource: null,
@@ -50,6 +52,7 @@ const state = {
   loadingOlder: false,
   cleanupTimer: null,
   localCacheCleanupHandle: null,
+  retainedTurnCleanupHandle: null,
   online: navigator.onLine,
   localRuntimeSnapshot: null,
   localRuntimeSnapshotAt: 0,
@@ -305,12 +308,29 @@ function loadTurnCollapseStates(sessionId = state.activeId || 'global') {
 function setTurnCollapsed(sessionId, turnId, collapsed) {
   if (!sessionId || !turnId) return;
   const states = loadTurnCollapseStates(sessionId);
-  const next = {
-    ...(states && typeof states === 'object' ? states : {}),
-    [turnId]: collapsed === true
-  };
-  state.turnCollapseStates.set(sessionId, next);
-  storageJsonSet(turnCollapseStateKey(sessionId), next);
+  states[turnId] = collapsed === true;
+  state.turnCollapseStates.set(sessionId, states);
+  scheduleTurnCollapseSave(sessionId);
+}
+
+function scheduleTurnCollapseSave(sessionId) {
+  if (!sessionId) return;
+  state.pendingTurnCollapseSaves.add(sessionId);
+  if (state.turnCollapseSaveHandle) return;
+  state.turnCollapseSaveHandle = scheduleIdle(() => {
+    state.turnCollapseSaveHandle = null;
+    flushTurnCollapseSaves();
+  }, 1200);
+}
+
+function flushTurnCollapseSaves() {
+  cancelIdle(state.turnCollapseSaveHandle);
+  state.turnCollapseSaveHandle = null;
+  const ids = [...state.pendingTurnCollapseSaves];
+  state.pendingTurnCollapseSaves.clear();
+  for (const sessionId of ids) {
+    storageJsonSet(turnCollapseStateKey(sessionId), loadTurnCollapseStates(sessionId));
+  }
 }
 
 function saveSessionCache() {
@@ -1139,6 +1159,7 @@ function renderConversationTurn(sessionId, turn) {
 function createTurnBody(turn) {
   const body = document.createElement('div');
   body.className = 'turn-body';
+  body.dataset.turnSignature = turnMessageSignature(turn);
   for (const message of turn.messages) {
     body.append(messageView.renderMessage(message, { animate: false }));
   }
@@ -1168,13 +1189,18 @@ function turnMessageSignature(turn) {
 function retainTurnBody(sessionId, turnId, body, turn, expanded) {
   if (!sessionId || !turnId || !body) return;
   const cache = turnBodyCache(sessionId);
+  const current = cache.get(turnId);
+  const signature = current?.body === body && current.signature
+    ? current.signature
+    : body.dataset.turnSignature || turnMessageSignature(turn);
+  body.dataset.turnSignature = signature;
   cache.set(turnId, {
     body,
-    signature: turnMessageSignature(turn),
+    signature,
     expanded: expanded === true,
     lastUsedAt: Date.now()
   });
-  pruneRetainedTurnBodies();
+  scheduleRetainedTurnCleanup();
 }
 
 function takeRetainedTurnBody(sessionId, turn) {
@@ -1200,8 +1226,19 @@ function attachTurnBody(sessionId, section, turn) {
 function detachTurnBody(sessionId, section, turn) {
   const body = section.querySelector(':scope > .turn-body');
   if (!body) return;
-  body.remove();
-  retainTurnBody(sessionId, turn.id, body, turn, false);
+  body.hidden = true;
+  const cache = turnBodyCache(sessionId);
+  const current = cache.get(turn.id);
+  const signature = current?.body === body && current.signature
+    ? current.signature
+    : body.dataset.turnSignature || '';
+  cache.set(turn.id, {
+    body,
+    signature,
+    expanded: false,
+    lastUsedAt: Date.now()
+  });
+  scheduleRetainedTurnCleanup();
 }
 
 function setTurnExpandedState(sessionId, section, turn, expanded) {
@@ -1212,7 +1249,15 @@ function setTurnExpandedState(sessionId, section, turn, expanded) {
   if (icon) icon.textContent = expanded ? '▾' : '▸';
   if (expanded) attachTurnBody(sessionId, section, turn);
   else detachTurnBody(sessionId, section, turn);
-  pruneRetainedTurnBodies();
+  scheduleRetainedTurnCleanup();
+}
+
+function scheduleRetainedTurnCleanup(options = {}) {
+  if (state.retainedTurnCleanupHandle) return;
+  state.retainedTurnCleanupHandle = scheduleIdle(() => {
+    state.retainedTurnCleanupHandle = null;
+    pruneRetainedTurnBodies(options);
+  }, options.forceExpired ? 1000 : 1800);
 }
 
 function pruneRetainedTurnBodies(options = {}) {
@@ -1254,7 +1299,7 @@ function pruneRetainedTurnBodies(options = {}) {
   const expandedOverflow = retained
     .filter((item) => item.entry.body.isConnected && item.entry.expanded === true)
     .sort((a, b) => a.entry.lastUsedAt - b.entry.lastUsedAt);
-  while (retained.length > MAX_RETAINED_TURN_BODIES && expandedOverflow.length) {
+  while (options.collapseExpanded === true && retained.length > MAX_RETAINED_TURN_BODIES && expandedOverflow.length) {
     const item = expandedOverflow.shift();
     collapseRetainedTurn(item);
     const index = retained.indexOf(item);
@@ -1284,19 +1329,18 @@ function autoCollapsePreviousTurns(sessionId, turns) {
   state.latestTurnIds.set(sessionId, latest.id);
   if (!previousLatestId || previousLatestId === latest.id) return;
   const states = loadTurnCollapseStates(sessionId);
-  const next = { ...(states && typeof states === 'object' ? states : {}) };
   let changed = false;
   for (const turn of turns) {
     const collapsed = true;
-    if (next[turn.id] !== collapsed) {
-      next[turn.id] = collapsed;
+    if (states[turn.id] !== collapsed) {
+      states[turn.id] = collapsed;
       changed = true;
     }
     turn.collapsed = collapsed;
   }
   if (!changed) return;
-  state.turnCollapseStates.set(sessionId, next);
-  storageJsonSet(turnCollapseStateKey(sessionId), next);
+  state.turnCollapseStates.set(sessionId, states);
+  scheduleTurnCollapseSave(sessionId);
 }
 
 function summarizeTurn(turn) {
@@ -2638,6 +2682,7 @@ document.addEventListener('visibilitychange', () => {
   clearTimeout(state.foregroundRefreshTimer);
   if (document.hidden) {
     messageScheduler.flushSaves();
+    flushTurnCollapseSaves();
     pruneRetainedTurnBodies({ forceExpired: true });
     return;
   }
@@ -2648,7 +2693,11 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-window.addEventListener('pagehide', () => messageScheduler.flushSaves());
+window.addEventListener('pagehide', () => {
+  messageScheduler.flushSaves();
+  flushTurnCollapseSaves();
+  pruneRetainedTurnBodies({ forceExpired: true });
+});
 
 function registerServiceWorkerLater() {
   if (!('serviceWorker' in navigator)) return;
