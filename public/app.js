@@ -26,7 +26,7 @@ const state = {
   expandedCwds: new Set(storedExpandedCwds),
   messages: new Map(),
   messagePages: new Map(),
-  messageRenderLimits: new Map(),
+  turnRenderLimits: new Map(),
   messageCollapseStates: new Map(),
   turnCollapseStates: new Map(),
   latestTurnIds: new Map(),
@@ -58,12 +58,12 @@ const state = {
   skillDialogMode: 'quick'
 };
 
-const HISTORY_PAGE_SIZE = 120;
+const HISTORY_TURN_PAGE_SIZE = 10;
+const REFRESH_MESSAGE_LIMIT = 120;
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
 const MAX_BROWSER_CACHED_MESSAGES = 360;
-const DESKTOP_MAX_RENDERED_MESSAGES = 180;
-const MOBILE_MAX_RENDERED_MESSAGES = 120;
+const DEFAULT_RENDERED_TURNS = 10;
 const MOBILE_MESSAGE_CHUNK = 18;
 const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
@@ -367,25 +367,21 @@ function loadMessagePage(id) {
 }
 
 function firstPageLimit() {
-  return renderedMessageLimit();
+  return DEFAULT_RENDERED_TURNS;
 }
 
 function maxHistoryLimit() {
   return MAX_LOCAL_MESSAGES;
 }
 
-function renderedMessageLimit() {
-  return isMobileViewport() ? MOBILE_MAX_RENDERED_MESSAGES : DESKTOP_MAX_RENDERED_MESSAGES;
+function sessionRenderedTurnLimit(sessionId = state.activeId) {
+  return Math.min(maxHistoryLimit(), Math.max(DEFAULT_RENDERED_TURNS, Number(state.turnRenderLimits.get(sessionId) || 0)));
 }
 
-function sessionRenderedMessageLimit(sessionId = state.activeId) {
-  return Math.min(maxHistoryLimit(), Math.max(renderedMessageLimit(), Number(state.messageRenderLimits.get(sessionId) || 0)));
-}
-
-function expandRenderedMessageLimit(sessionId, count) {
+function expandRenderedTurnLimit(sessionId, count) {
   if (!sessionId || !Number.isFinite(count) || count <= 0) return;
-  const current = sessionRenderedMessageLimit(sessionId);
-  state.messageRenderLimits.set(sessionId, Math.min(maxHistoryLimit(), current + count));
+  const current = sessionRenderedTurnLimit(sessionId);
+  state.turnRenderLimits.set(sessionId, Math.min(maxHistoryLimit(), current + count));
 }
 
 function setMessagePage(sessionId, page, options = {}) {
@@ -400,6 +396,9 @@ function setMessagePage(sessionId, page, options = {}) {
   const next = {
     offset,
     total,
+    totalTurns: Number(page?.totalTurns ?? current.totalTurns ?? 0),
+    loadedTurns: Number(page?.loadedTurns ?? countMessageTurns(state.messages.get(sessionId) || [])),
+    turnLimit: Number(page?.turnLimit || current.turnLimit || firstPageLimit()),
     beforeSeq: currentBeforeSeq && incomingBeforeSeq ? Math.min(currentBeforeSeq, incomingBeforeSeq) : incomingBeforeSeq || currentBeforeSeq,
     afterSeq: Number(page?.afterSeq || current.afterSeq || 0),
     latestSeq: Number(page?.latestSeq || current.latestSeq || 0),
@@ -425,7 +424,14 @@ function isMessageCacheFresh(sessionId, session) {
   return Boolean(messages.length)
     && Boolean(page?.beforeSeq || messages.some((message) => message.orderSeq))
     && page?.sessionUpdatedAt === session.updatedAt
-    && Number(page?.offset || 0) >= Math.min(firstPageLimit(), messages.length);
+    && countMessageTurns(messages) >= firstPageLimit();
+}
+
+function countMessageTurns(messages) {
+  if (!Array.isArray(messages) || !messages.length) return 0;
+  return messages.reduce((count, message, index) => (
+    count + (index === 0 || message.role === 'user' ? 1 : 0)
+  ), 0);
 }
 
 function sessionMessagesUrl(sessionId, params = {}) {
@@ -986,7 +992,7 @@ function renderMessages(sessionId, options = {}) {
 
   const turns = groupMessagesIntoTurns(sessionId, messages);
   const baseChunkSize = isMobileViewport() ? MOBILE_MESSAGE_CHUNK : DESKTOP_MESSAGE_CHUNK;
-  const chunkSize = messages.length <= renderedMessageLimit() ? Math.max(1, turns.length) : Math.max(1, Math.floor(baseChunkSize / 3));
+  const chunkSize = Math.max(1, Math.min(turns.length || 1, Math.max(1, Math.floor(baseChunkSize / 3))));
   let index = 0;
   const renderChunk = () => {
     if (renderJobId !== state.renderJobId || state.activeId !== sessionId) {
@@ -1019,10 +1025,10 @@ function renderOlderMessagesControl(sessionId) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'older-messages-button';
-  const shown = displayMessages(sessionId).length;
-  const total = Number(page.total || 0);
+  const shown = countMessageTurns(displayMessages(sessionId));
+  const total = Number(page.totalTurns || 0);
   button.textContent = page.loading ? '加载中...' : '加载更早';
-  button.title = total ? `当前显示 ${shown} 条，共 ${total} 条` : `当前显示 ${shown} 条`;
+  button.title = total ? `当前显示 ${shown} 轮，共 ${total} 轮` : `当前显示 ${shown} 轮`;
   button.setAttribute('aria-label', page.loading ? '正在加载更早消息' : `${button.title}，加载更早消息`);
   button.disabled = page.loading === true;
   button.addEventListener('click', () => loadOlderMessages(sessionId));
@@ -1049,30 +1055,33 @@ function displayMessages(sessionId) {
 }
 
 function visibleMessagesForSession(sessionId, messages) {
-  const limit = sessionRenderedMessageLimit(sessionId);
-  if (!Array.isArray(messages) || messages.length <= limit) return messages || [];
-  let start = Math.max(0, messages.length - limit);
-  while (start > 0 && messages[start]?.role !== 'user') start -= 1;
-  return messages.slice(start);
+  if (!Array.isArray(messages) || !messages.length) return [];
+  const limit = sessionRenderedTurnLimit(sessionId);
+  const turns = splitMessagesIntoTurns(messages);
+  return turns.slice(-limit).flat();
 }
 
 function groupMessagesIntoTurns(sessionId, messages) {
   if (state.showStarredOnly) {
     return messages.map((message, index) => createConversationTurn(sessionId, [message], index, false));
   }
-  const turns = [];
-  let current = null;
-  for (const message of messages) {
-    if (!current || message.role === 'user') {
-      current = { messages: [], index: turns.length };
-      turns.push(current);
-    }
-    current.messages.push(message);
-  }
-  const latestTurnIndex = turns.length - 1;
-  const conversationTurns = turns.map((turn, index) => createConversationTurn(sessionId, turn.messages, index, index < latestTurnIndex));
+  const turns = splitMessagesIntoTurns(messages).map((turnMessages, index) => ({ messages: turnMessages, index }));
+  const conversationTurns = turns.map((turn, index) => createConversationTurn(sessionId, turn.messages, index, true));
   autoCollapsePreviousTurns(sessionId, conversationTurns);
   return conversationTurns;
+}
+
+function splitMessagesIntoTurns(messages) {
+  const turns = [];
+  let current = null;
+  for (const message of messages || []) {
+    if (!current || message.role === 'user') {
+      current = [];
+      turns.push(current);
+    }
+    current.push(message);
+  }
+  return turns;
 }
 
 function createConversationTurn(sessionId, messages, index, defaultCollapsed) {
@@ -1142,7 +1151,7 @@ function autoCollapsePreviousTurns(sessionId, turns) {
   const next = { ...(states && typeof states === 'object' ? states : {}) };
   let changed = false;
   for (const turn of turns) {
-    const collapsed = turn.id !== latest.id;
+    const collapsed = true;
     if (next[turn.id] !== collapsed) {
       next[turn.id] = collapsed;
       changed = true;
@@ -1889,8 +1898,10 @@ async function loadSession(id, options = {}) {
       scheduleResourceCleanup();
       return;
     }
-    const limit = options.full === true ? maxHistoryLimit() : firstPageLimit();
-    const data = await api(sessionMessagesUrl(id, { limit }));
+    const data = await api(sessionMessagesUrl(
+      id,
+      options.full === true ? { limit: maxHistoryLimit() } : { turnLimit: firstPageLimit() }
+    ));
     const session = data.session || { id };
     mergeSessionSnapshot(session);
     const cached = state.messages.get(id) || [];
@@ -1932,14 +1943,16 @@ async function loadOlderMessages(sessionId) {
   state.messagePages.set(sessionId, { ...page, loading: true });
   renderActive({ messages: false });
   try {
-    const limit = Math.min(HISTORY_PAGE_SIZE, remaining);
-    const data = await api(sessionMessagesUrl(sessionId, { limit, beforeSeq: page.beforeSeq || '' }));
+    const data = await api(sessionMessagesUrl(sessionId, {
+      turnLimit: HISTORY_TURN_PAGE_SIZE,
+      beforeSeq: page.beforeSeq || ''
+    }));
     if (data.session) mergeSessionSnapshot(data.session);
-    const loadedOlderCount = Array.isArray(data.messages) ? data.messages.length : 0;
+    const loadedOlderTurns = Number(data.loadedTurns || countMessageTurns(data.messages || []));
     const merged = mergeMessages(data.messages || [], loadMessages(sessionId));
     state.messages.set(sessionId, trimMessagesForStorage(merged));
     state.lastSeq.set(sessionId, lastRealSeq(merged));
-    expandRenderedMessageLimit(sessionId, loadedOlderCount);
+    expandRenderedTurnLimit(sessionId, loadedOlderTurns);
     setMessagePage(sessionId, {
       ...data,
       hasMore: data.hasMoreBefore === true && merged.length < maxHistoryLimit()
@@ -1966,7 +1979,7 @@ async function refreshActiveContext() {
     const page = state.messagePages.get(session.id);
     const currentMessages = loadMessages(session.id);
     const afterSeq = page?.latestSeq || Math.max(0, ...currentMessages.map((message) => Number(message.orderSeq || 0)).filter(Boolean));
-    const data = await api(sessionMessagesUrl(session.id, { limit: firstPageLimit(), afterSeq }));
+    const data = await api(sessionMessagesUrl(session.id, { limit: REFRESH_MESSAGE_LIMIT, afterSeq }));
     const nextMessages = data.messages || [];
     const currentLast = currentMessages.at(-1);
     const nextLast = nextMessages.at(-1);

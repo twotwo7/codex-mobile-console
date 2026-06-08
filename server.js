@@ -1551,6 +1551,11 @@ function normalizeMessageQueryOffset(value) {
   return Number.isFinite(raw) ? Math.max(0, Math.min(50000, Math.floor(raw))) : 0;
 }
 
+function normalizeTurnQueryLimit(value) {
+  const raw = Number(value ?? 0);
+  return Number.isFinite(raw) ? Math.max(0, Math.min(200, Math.floor(raw))) : 0;
+}
+
 async function displayMessagePage(session, options = {}) {
   const limit = normalizeMessageQueryLimit(options.limit, 500);
   const offset = normalizeMessageQueryOffset(options.offset);
@@ -1572,8 +1577,10 @@ async function displayMessagePage(session, options = {}) {
 
 async function displayMessageRange(session, options = {}) {
   const limit = normalizeMessageQueryLimit(options.limit, 120);
+  const turnLimit = normalizeTurnQueryLimit(options.turnLimit);
   const sorted = await indexedDisplayMessages(session);
   const total = sorted.length;
+  const totalTurns = countMessageTurns(sorted);
   const firstSeq = sorted[0]?.orderSeq || 0;
   const latestSeq = sorted.at(-1)?.orderSeq || 0;
   const afterSeq = Number(options.afterSeq || 0);
@@ -1584,7 +1591,10 @@ async function displayMessageRange(session, options = {}) {
     return {
       messages,
       limit,
+      turnLimit,
       total,
+      totalTurns,
+      loadedTurns: countMessageTurns(messages),
       firstSeq,
       latestSeq,
       beforeSeq: messages[0]?.orderSeq || 0,
@@ -1598,12 +1608,17 @@ async function displayMessageRange(session, options = {}) {
     ? sorted.findIndex((message) => Number(message.orderSeq || 0) >= beforeSeq)
     : sorted.length;
   const end = endIndex < 0 ? sorted.length : Math.max(0, endIndex);
-  const start = turnBoundaryStart(sorted, limit > 0 ? Math.max(0, end - limit) : 0);
+  const start = turnLimit > 0
+    ? turnWindowStart(sorted, end, turnLimit)
+    : turnBoundaryStart(sorted, limit > 0 ? Math.max(0, end - limit) : 0);
   const messages = sorted.slice(start, end);
   return {
     messages,
     limit,
+    turnLimit,
     total,
+    totalTurns,
+    loadedTurns: countMessageTurns(messages),
     firstSeq,
     latestSeq,
     beforeSeq: messages[0]?.orderSeq || 0,
@@ -1617,6 +1632,27 @@ function turnBoundaryStart(messages, start) {
   let index = Math.max(0, Math.min(Number(start || 0), messages.length));
   while (index > 0 && messages[index]?.role !== 'user') index -= 1;
   return index;
+}
+
+function turnWindowStart(messages, end, turnLimit) {
+  const targetTurns = Math.max(1, Number(turnLimit || 1));
+  let index = Math.max(0, Math.min(Number(end || 0), messages.length));
+  let turns = 0;
+  while (index > 0) {
+    index -= 1;
+    if (index === 0 || messages[index]?.role === 'user') {
+      turns += 1;
+      if (turns >= targetTurns) return index;
+    }
+  }
+  return 0;
+}
+
+function countMessageTurns(messages) {
+  if (!messages?.length) return 0;
+  return messages.reduce((count, message, index) => (
+    count + (index === 0 || message.role === 'user' ? 1 : 0)
+  ), 0);
 }
 
 async function listCodexSessions() {
@@ -2162,6 +2198,7 @@ async function handleApi(req, res, url) {
     reconcileSessionRunState(session, 'message-list');
     const range = await displayMessageRange(session, {
       limit: url.searchParams.get('limit'),
+      turnLimit: url.searchParams.get('turnLimit'),
       beforeSeq: url.searchParams.get('beforeSeq'),
       afterSeq: url.searchParams.get('afterSeq')
     });
