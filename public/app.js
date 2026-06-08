@@ -593,7 +593,14 @@ async function api(path, options = {}) {
     error.detail = data.message || '';
     throw error;
   }
+  markConnectionOnline();
   return data;
+}
+
+function markConnectionOnline() {
+  if (state.online === true) return;
+  state.online = true;
+  renderActive({ messages: false });
 }
 
 function parseEventData(event, fallback = null) {
@@ -2239,7 +2246,7 @@ async function loadOlderMessages(sessionId) {
 
 async function refreshActiveContext() {
   const session = getActiveSession();
-  if (!session?.codexSessionId || !state.online || state.contextRefreshInFlight) return;
+  if (!session?.codexSessionId || state.contextRefreshInFlight) return;
   state.contextRefreshInFlight = true;
   try {
     const page = state.messagePages.get(session.id);
@@ -2288,14 +2295,14 @@ function startContextRefreshLoop() {
 
 function connectEvents(id) {
   if (state.eventSource) state.eventSource.close();
-  if (!id || !navigator.onLine) return;
+  if (!id) return;
 
   const after = state.lastSeq.get(id) || 0;
   const source = new EventSource(`/api/events?sessionId=${encodeURIComponent(id)}&after=${after}`);
   state.eventSource = source;
 
   source.addEventListener('hello', (event) => {
-    state.online = true;
+    markConnectionOnline();
     let sessionChanged = false;
     const data = parseEventData(event, {});
     sessionChanged = data?.session ? mergeSessionSnapshot(data.session) : false;
@@ -2763,7 +2770,7 @@ window.addEventListener('online', () => {
 
 window.addEventListener('offline', () => {
   state.online = false;
-  if (state.eventSource) state.eventSource.close();
+  if (state.eventSource && navigator.onLine === false) state.eventSource.close();
   clearInterval(state.contextRefreshTimer);
   renderActive({ messages: false });
 });
@@ -2777,6 +2784,7 @@ document.addEventListener('visibilitychange', () => {
   }
   if (!document.hidden) {
     state.foregroundRefreshTimer = setTimeout(() => {
+      if (state.activeId) connectEvents(state.activeId);
       refreshActiveContext();
     }, 600);
   }

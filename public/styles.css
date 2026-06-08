@@ -734,6 +734,7 @@ button:disabled {
   flex-direction: column;
   gap: 12px;
   contain: layout style;
+  animation: turn-body-in 0.14s ease-out;
 }
 
 .turn-summary-button {
@@ -773,17 +774,13 @@ button:disabled {
   white-space: normal;
   display: -webkit-box;
   -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 1;
   overflow: hidden;
 }
 
 .conversation-turn.collapsed .turn-summary-button {
   background: var(--surface);
   border-color: var(--line);
-}
-
-.conversation-turn.collapsed .turn-summary-text {
-  -webkit-line-clamp: 2;
 }
 
 .message.menu-open {
@@ -1916,6 +1913,17 @@ button:disabled {
   to {
     opacity: 1;
     transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes turn-body-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
