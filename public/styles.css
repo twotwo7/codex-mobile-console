@@ -946,6 +946,35 @@ button:disabled {
   gap: 8px;
 }
 
+.bottom-follow-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  margin-left: auto;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.bottom-follow-toggle input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.bottom-follow-toggle:has(input:checked) {
+  color: #06100e;
+  background: var(--accent);
+  border-color: transparent;
+}
+
 .prompt-row {
   display: grid;
   grid-template-columns: 1fr 74px;
