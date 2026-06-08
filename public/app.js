@@ -1,52 +1,5 @@
 import { createMessageScheduler } from './message-scheduler.js?v=1';
-
-function storageGet(key, fallback = '') {
-  try {
-    return localStorage.getItem(key) ?? fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function storageSet(key, value) {
-  try {
-    localStorage.setItem(key, String(value));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function storageJsonGet(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch {
-    return fallback;
-  }
-}
-
-function storageJsonSet(key, value) {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function scheduleIdle(fn, timeout = 1500) {
-  if ('requestIdleCallback' in window) {
-    return window.requestIdleCallback(fn, { timeout });
-  }
-  return window.setTimeout(fn, Math.min(timeout, 300));
-}
-
-function cancelIdle(handle) {
-  if (!handle) return;
-  if ('cancelIdleCallback' in window) window.cancelIdleCallback(handle);
-  else window.clearTimeout(handle);
-}
+import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
