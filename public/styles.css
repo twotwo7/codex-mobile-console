@@ -647,6 +647,8 @@ button:disabled {
 .message-pane {
   min-height: 0;
   overflow: auto;
+  overflow-anchor: none;
+  overscroll-behavior: contain;
   padding: 18px 18px 24px;
   display: flex;
   flex-direction: column;
@@ -662,8 +664,6 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface);
-  content-visibility: auto;
-  contain-intrinsic-size: auto 96px;
   animation: message-in 0.18s ease-out;
 }
 

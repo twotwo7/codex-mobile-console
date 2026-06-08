@@ -819,6 +819,18 @@ function restoreMessageAnchor(anchor) {
   return true;
 }
 
+function settleMessagesToBottom() {
+  setProgrammaticMessageScrollTop(el.messagePane.scrollHeight);
+  requestAnimationFrame(() => {
+    setProgrammaticMessageScrollTop(el.messagePane.scrollHeight);
+    requestAnimationFrame(() => {
+      setProgrammaticMessageScrollTop(el.messagePane.scrollHeight);
+    });
+  });
+  setTimeout(() => setProgrammaticMessageScrollTop(el.messagePane.scrollHeight), 80);
+  setTimeout(() => setProgrammaticMessageScrollTop(el.messagePane.scrollHeight), 240);
+}
+
 function getActiveSession() {
   return state.sessions.find((item) => item.id === state.activeId);
 }
@@ -905,7 +917,7 @@ function renderMessages(sessionId, options = {}) {
       return;
     }
     if (stickToBottom) {
-      setProgrammaticMessageScrollTop(el.messagePane.scrollHeight);
+      settleMessagesToBottom();
       releaseProgrammaticMessageScroll(renderScrollToken);
       return;
     }
@@ -1317,9 +1329,7 @@ function isNearMessageBottom() {
 }
 
 function scrollMessagesToBottom() {
-  requestAnimationFrame(() => {
-    setProgrammaticMessageScrollTop(el.messagePane.scrollHeight);
-  });
+  settleMessagesToBottom();
 }
 
 function renderPendingImages() {
