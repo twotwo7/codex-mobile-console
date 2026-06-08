@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=62">
+    <link rel="stylesheet" href="/styles.css?v=63">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -75,6 +75,7 @@
           <div class="prompt-tools">
             <button id="stopButton" class="stop-button" type="button" hidden>停止</button>
             <button id="commandButton" class="command-button" type="button">命令</button>
+            <button id="skillButton" class="command-button" type="button">技能</button>
             <button id="imageButton" class="command-button" type="button">图片</button>
             <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
           </div>
@@ -226,6 +227,18 @@
       <div id="commandList" class="command-list"></div>
     </dialog>
 
+    <dialog id="skillDialog" class="session-dialog skill-dialog">
+      <div class="dialog-head">
+        <h2>Skills</h2>
+        <button class="icon-button" type="button" id="closeSkillDialog" aria-label="关闭技能列表">×</button>
+      </div>
+      <div class="skill-toolbar">
+        <input id="skillSearch" type="search" placeholder="搜索 skill..." autocomplete="off">
+        <button id="refreshSkillsButton" class="ghost-button inline" type="button">刷新</button>
+      </div>
+      <div id="skillList" class="skill-list">加载中...</div>
+    </dialog>
+
     <dialog id="runtimeDialog" class="session-dialog runtime-dialog">
       <div class="dialog-head">
         <h2>运行时</h2>
@@ -293,6 +306,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=62" type="module"></script>
+    <script src="/app.js?v=63" type="module"></script>
   </body>
 </html>

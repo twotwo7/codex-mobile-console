@@ -1262,6 +1262,10 @@ button:disabled {
   width: min(760px, calc(100% - 22px));
 }
 
+.skill-dialog {
+  width: min(680px, calc(100% - 22px));
+}
+
 .runtime-panel {
   display: grid;
   gap: 10px;
@@ -1535,13 +1539,31 @@ button:disabled {
   accent-color: var(--accent-2);
 }
 
-.command-list {
+.command-list,
+.skill-list {
   display: grid;
   gap: 8px;
   margin-top: 14px;
 }
 
-.command-item {
+.skill-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.skill-toolbar input {
+  min-width: 0;
+}
+
+.skill-list {
+  max-height: min(64vh, 560px);
+  overflow: auto;
+}
+
+.command-item,
+.skill-item {
   display: grid;
   gap: 4px;
   min-height: 52px;
@@ -1552,14 +1574,44 @@ button:disabled {
   text-align: left;
 }
 
-.command-item strong {
+.command-item strong,
+.skill-item strong {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
 }
 
-.command-item span {
+.command-item span,
+.skill-item span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.skill-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.skill-row strong,
+.skill-item > span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-row em {
+  color: var(--muted);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.skill-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .drawer-scrim {
@@ -1729,8 +1781,17 @@ button:disabled {
     padding: 14px;
   }
 
+  .skill-dialog {
+    width: min(100% - 14px, 680px);
+    padding: 14px;
+  }
+
   .runtime-panel {
     max-height: 76vh;
+  }
+
+  .skill-list {
+    max-height: 70vh;
   }
 
   .runtime-grid {

@@ -16,6 +16,10 @@ const RESTART_MARKER_FILE = path.join(DATA_DIR, 'restart-marker.json');
 const PASSWORD_FILE = path.join(DATA_DIR, 'admin-password.txt');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const CODEX_HOME = process.env.CODEX_HOME || '/root/.codex';
+const SKILL_ROOTS = (process.env.SKILL_ROOTS || `${path.join(CODEX_HOME, 'skills')},/root/.agents/skills`)
+  .split(',')
+  .map((item) => item.trim())
+  .filter(Boolean);
 const CODEX_BIN = process.env.CODEX_BIN || '/root/.nvm/versions/node/v22.22.0/bin/codex';
 const CODEX_NODE = process.env.CODEX_NODE || process.execPath;
 const CODEX_BIN_DIR = path.dirname(CODEX_BIN);
@@ -971,6 +975,90 @@ function stripCodexImageTags(text) {
     .trim();
 }
 
+function parseSkillMarkdown(raw, fallbackName) {
+  const text = String(raw || '');
+  const meta = {};
+  const match = text.match(/^---\n([\s\S]*?)\n---/);
+  if (match) {
+    for (const line of match[1].split('\n')) {
+      const item = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
+      if (item) meta[item[1]] = item[2].trim().replace(/^["']|["']$/g, '');
+    }
+  }
+  const heading = text.match(/^#\s+(.+)$/m)?.[1]?.trim() || '';
+  return {
+    name: meta.name || fallbackName,
+    description: meta.description || meta['short-description'] || '',
+    title: heading || meta.name || fallbackName,
+    shortDescription: meta['short-description'] || ''
+  };
+}
+
+function skillSource(root, file) {
+  const normalizedRoot = path.resolve(root);
+  const normalizedFile = path.resolve(file);
+  const relative = path.relative(normalizedRoot, normalizedFile);
+  const parts = relative.split(path.sep).filter(Boolean);
+  const system = parts.includes('.system');
+  if (normalizedRoot.includes(`${path.sep}.agents${path.sep}`)) return system ? 'agents-system' : 'agents';
+  return system ? 'codex-system' : 'codex';
+}
+
+async function walkSkillFiles(root, out = [], limit = 200) {
+  if (out.length >= limit) return out;
+  let entries = [];
+  try {
+    entries = await readdir(root, { withFileTypes: true });
+  } catch {
+    return out;
+  }
+  for (const entry of entries) {
+    if (out.length >= limit) break;
+    const full = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === 'node_modules' || entry.name === '.git') continue;
+      await walkSkillFiles(full, out, limit);
+    } else if (entry.isFile() && entry.name === 'SKILL.md') {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+async function listInstalledSkills() {
+  const byName = new Map();
+  for (const root of SKILL_ROOTS) {
+    const files = await walkSkillFiles(root);
+    for (const file of files) {
+      try {
+        const raw = await readFile(file, 'utf8');
+        const info = await stat(file);
+        const fallbackName = path.basename(path.dirname(file));
+        const parsed = parseSkillMarkdown(raw, fallbackName);
+        const source = skillSource(root, file);
+        const skill = {
+          name: parsed.name,
+          title: parsed.title,
+          description: parsed.description,
+          shortDescription: parsed.shortDescription,
+          source,
+          system: source.includes('system'),
+          path: file,
+          updatedAt: new Date(info.mtimeMs).toISOString()
+        };
+        const existing = byName.get(skill.name);
+        if (!existing || existing.system && !skill.system) byName.set(skill.name, skill);
+      } catch {
+        // Ignore unreadable skill files; the rest of the list is still useful.
+      }
+    }
+  }
+  return [...byName.values()].sort((a, b) => {
+    if (a.system !== b.system) return a.system ? 1 : -1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
 async function readCodexThreadNames() {
   const indexFile = path.join(CODEX_HOME, 'session_index.jsonl');
   const names = new Map();
@@ -1768,6 +1856,13 @@ async function handleApi(req, res, url) {
     const mode = ['all', 'orphanUploads', 'runtime'].includes(body.mode) ? body.mode : 'all';
     const result = await cleanupStorage(mode, { manual: true });
     return json(res, 200, { ok: true, result, storage: await storageStats() });
+  }
+
+  if (url.pathname === '/api/skills' && req.method === 'GET') {
+    return json(res, 200, {
+      roots: SKILL_ROOTS,
+      skills: await listInstalledSkills()
+    });
   }
 
   if (url.pathname === '/api/admin/restart' && req.method === 'POST') {

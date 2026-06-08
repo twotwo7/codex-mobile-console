@@ -67,7 +67,9 @@ const state = {
   online: navigator.onLine,
   localRuntimeSnapshot: null,
   localRuntimeSnapshotAt: 0,
-  localRuntimeSessionId: ''
+  localRuntimeSessionId: '',
+  skills: [],
+  skillsLoadedAt: 0
 };
 
 const INITIAL_HISTORY_LIMIT = 120;
@@ -123,6 +125,7 @@ const el = {
   elevatedRun: document.querySelector('#elevatedRun'),
   stopButton: document.querySelector('#stopButton'),
   sendButton: document.querySelector('#sendButton'),
+  skillButton: document.querySelector('#skillButton'),
   themeSelect: document.querySelector('#themeSelect'),
   historyLimitInput: document.querySelector('#historyLimitInput'),
   sessionViewMode: document.querySelector('#sessionViewMode'),
@@ -154,6 +157,11 @@ const el = {
   commandDialog: document.querySelector('#commandDialog'),
   closeCommandDialog: document.querySelector('#closeCommandDialog'),
   commandList: document.querySelector('#commandList'),
+  skillDialog: document.querySelector('#skillDialog'),
+  closeSkillDialog: document.querySelector('#closeSkillDialog'),
+  skillSearch: document.querySelector('#skillSearch'),
+  refreshSkillsButton: document.querySelector('#refreshSkillsButton'),
+  skillList: document.querySelector('#skillList'),
   runtimeDialog: document.querySelector('#runtimeDialog'),
   closeRuntimeDialog: document.querySelector('#closeRuntimeDialog'),
   runtimePanel: document.querySelector('#runtimePanel'),
@@ -1496,6 +1504,20 @@ function updateRunSettingsState() {
     : '提权默认关闭';
 }
 
+function insertPromptText(text) {
+  const value = el.promptInput.value || '';
+  const start = el.promptInput.selectionStart ?? value.length;
+  const end = el.promptInput.selectionEnd ?? value.length;
+  const prefix = value.slice(0, start);
+  const suffix = value.slice(end);
+  const next = `${prefix}${text}${suffix}`;
+  el.promptInput.value = next;
+  const cursor = start + text.length;
+  el.promptInput.setSelectionRange(cursor, cursor);
+  autoSizePrompt();
+  el.promptInput.focus();
+}
+
 function renderCommandList() {
   el.commandList.innerHTML = '';
   for (const command of CODEX_COMMANDS) {
@@ -1513,6 +1535,56 @@ function renderCommandList() {
       el.promptInput.focus();
     });
     el.commandList.append(button);
+  }
+}
+
+function renderSkillList() {
+  const query = String(el.skillSearch.value || '').trim().toLowerCase();
+  const skills = state.skills.filter((skill) => {
+    const haystack = `${skill.name} ${skill.title} ${skill.description} ${skill.source}`.toLowerCase();
+    return !query || haystack.includes(query);
+  });
+  el.skillList.innerHTML = '';
+  if (!skills.length) {
+    el.skillList.innerHTML = '<p class="skill-empty">没有匹配的 skill</p>';
+    return;
+  }
+  for (const skill of skills) {
+    const item = document.createElement('button');
+    item.type = 'button';
+    item.className = 'skill-item';
+    item.innerHTML = `
+      <span class="skill-row"><strong>$${escapeHtml(skill.name)}</strong><em>${escapeHtml(skill.source || '')}</em></span>
+      <span>${escapeHtml(skill.description || skill.shortDescription || skill.title || '无说明')}</span>
+    `;
+    item.addEventListener('click', () => {
+      insertPromptText(`$${skill.name} `);
+      closeModal(el.skillDialog);
+    });
+    el.skillList.append(item);
+  }
+}
+
+async function loadSkills(force = false) {
+  const fresh = Date.now() - state.skillsLoadedAt < 60 * 1000;
+  if (!force && state.skills.length && fresh) {
+    renderSkillList();
+    return;
+  }
+  el.skillList.textContent = '加载中...';
+  const data = await api('/api/skills');
+  state.skills = data.skills || [];
+  state.skillsLoadedAt = Date.now();
+  renderSkillList();
+}
+
+async function openSkillDialog() {
+  openModal(el.skillDialog);
+  el.skillSearch.focus();
+  try {
+    await loadSkills();
+  } catch (error) {
+    el.skillList.textContent = error.message || '加载失败';
   }
 }
 
@@ -2302,6 +2374,14 @@ el.commandButton.addEventListener('click', () => {
   openModal(el.commandDialog);
 });
 el.closeCommandDialog.addEventListener('click', () => closeModal(el.commandDialog));
+el.skillButton.addEventListener('click', openSkillDialog);
+el.closeSkillDialog.addEventListener('click', () => closeModal(el.skillDialog));
+el.skillSearch.addEventListener('input', renderSkillList);
+el.refreshSkillsButton.addEventListener('click', () => {
+  loadSkills(true).catch((error) => {
+    el.skillList.textContent = error.message || '加载失败';
+  });
+});
 el.runtimeButton.addEventListener('click', openRuntimeDialog);
 el.closeRuntimeDialog.addEventListener('click', closeRuntimeDialog);
 el.runtimeDialog.addEventListener('close', () => {
