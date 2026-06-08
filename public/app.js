@@ -33,6 +33,19 @@ function storageJsonSet(key, value) {
   }
 }
 
+function scheduleIdle(fn, timeout = 1500) {
+  if ('requestIdleCallback' in window) {
+    return window.requestIdleCallback(fn, { timeout });
+  }
+  return window.setTimeout(fn, Math.min(timeout, 300));
+}
+
+function cancelIdle(handle) {
+  if (!handle) return;
+  if ('cancelIdleCallback' in window) window.cancelIdleCallback(handle);
+  else window.clearTimeout(handle);
+}
+
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
   return Array.isArray(value) ? value : [];
@@ -63,21 +76,31 @@ const state = {
   userScrolledDuringRender: false,
   suppressScrollTracking: false,
   drawerOpen: false,
+  sessionListDirty: true,
+  sessionRenderLimit: 40,
   loadingOlder: false,
   cleanupTimer: null,
+  localCacheCleanupHandle: null,
   online: navigator.onLine,
   localRuntimeSnapshot: null,
   localRuntimeSnapshotAt: 0,
   localRuntimeSessionId: '',
   skills: [],
-  skillsLoadedAt: 0
+  skillsLoadedAt: 0,
+  skillDialogMode: 'quick'
 };
 
 const INITIAL_HISTORY_LIMIT = 120;
 const HISTORY_PAGE_SIZE = 120;
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
+const MAX_BROWSER_CACHED_MESSAGES = 360;
 const MAX_RENDERED_MESSAGES = 220;
+const MOBILE_MESSAGE_CHUNK = 18;
+const DESKTOP_MESSAGE_CHUNK = 40;
+const SESSION_RENDER_STEP = 40;
+const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
+const LOCAL_CACHE_CLEANUP_BATCH = 3;
 
 const CODEX_COMMANDS = [
   { name: '/status', detail: '查看会话状态', value: '/status' },
@@ -109,6 +132,7 @@ const el = {
   closeDrawer: document.querySelector('#closeDrawer'),
   sessionList: document.querySelector('#sessionList'),
   newSessionButton: document.querySelector('#newSessionButton'),
+  skillManagerButton: document.querySelector('#skillManagerButton'),
   settingsButton: document.querySelector('#settingsButton'),
   logoutButton: document.querySelector('#logoutButton'),
   activeTitle: document.querySelector('#activeTitle'),
@@ -161,10 +185,15 @@ const el = {
   commandList: document.querySelector('#commandList'),
   skillDialog: document.querySelector('#skillDialog'),
   closeSkillDialog: document.querySelector('#closeSkillDialog'),
+  skillDialogHint: document.querySelector('#skillDialogHint'),
   skillSearch: document.querySelector('#skillSearch'),
   refreshSkillsButton: document.querySelector('#refreshSkillsButton'),
   skillStatus: document.querySelector('#skillStatus'),
   skillList: document.querySelector('#skillList'),
+  skillDetailDialog: document.querySelector('#skillDetailDialog'),
+  closeSkillDetailDialog: document.querySelector('#closeSkillDetailDialog'),
+  skillDetailTitle: document.querySelector('#skillDetailTitle'),
+  skillDetailBody: document.querySelector('#skillDetailBody'),
   runtimeDialog: document.querySelector('#runtimeDialog'),
   closeRuntimeDialog: document.querySelector('#closeRuntimeDialog'),
   runtimePanel: document.querySelector('#runtimePanel'),
@@ -199,11 +228,15 @@ function saveExpandedCwds() {
 function loadCachedSessions() {
   const sessions = storageJsonGet('cmc.sessions', []);
   state.sessions = Array.isArray(sessions) ? sessions : [];
+  state.sessionListDirty = true;
 }
 
 function saveMessages(id) {
   const messages = trimMessagesForStorage(mergeMessages([], state.messages.get(id) || []));
-  storageJsonSet(cacheKey(id), messages.map(cacheSafeMessage));
+  const cached = messages.slice(-MAX_BROWSER_CACHED_MESSAGES).map(cacheSafeMessage);
+  if (!storageJsonSet(cacheKey(id), cached)) {
+    scheduleLocalCacheCleanup(500);
+  }
 }
 
 function trimMessagesForStorage(messages) {
@@ -219,14 +252,14 @@ function cacheSafeMessage(message) {
   };
 }
 
-function loadMessages(id) {
+function loadMessages(id, options = {}) {
   if (state.messages.has(id)) return state.messages.get(id);
-  const cached = storageJsonGet(cacheKey(id), []);
+  const cached = options.fromCache === false ? [] : storageJsonGet(cacheKey(id), []);
   const messages = Array.isArray(cached) ? cached : [];
   const merged = trimMessagesForStorage(mergeMessages([], messages));
   state.messages.set(id, merged);
   state.lastSeq.set(id, lastRealSeq(merged));
-  loadMessagePage(id);
+  if (options.fromCache !== false) loadMessagePage(id);
   return merged;
 }
 
@@ -279,7 +312,7 @@ function setMessagePage(sessionId, page, options = {}) {
 function isMessageCacheFresh(sessionId, session) {
   if (!session?.updatedAt) return false;
   const page = loadMessagePage(sessionId);
-  const messages = loadMessages(sessionId);
+  const messages = state.messages.get(sessionId) || [];
   return Boolean(messages.length)
     && page?.sessionUpdatedAt === session.updatedAt
     && Number(page?.offset || 0) >= Math.min(firstPageLimit(), messages.length);
@@ -297,6 +330,40 @@ function cleanupIdleResources() {
 function scheduleResourceCleanup() {
   clearTimeout(state.cleanupTimer);
   state.cleanupTimer = setTimeout(cleanupIdleResources, 30000);
+}
+
+function cleanupLocalMessageCaches(deadline) {
+  let cleaned = 0;
+  try {
+    const keys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index) || '';
+      if (key.startsWith('cmc.messages.')) keys.push(key);
+    }
+    for (const key of keys) {
+      if (cleaned >= LOCAL_CACHE_CLEANUP_BATCH) break;
+      if (deadline?.timeRemaining && deadline.timeRemaining() < 8) break;
+      const raw = localStorage.getItem(key) || '';
+      if (raw.length <= MAX_LOCAL_MESSAGE_CACHE_BYTES) continue;
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) {
+        localStorage.removeItem(key);
+        cleaned += 1;
+        continue;
+      }
+      localStorage.setItem(key, JSON.stringify(parsed.slice(-MAX_BROWSER_CACHED_MESSAGES).map(cacheSafeMessage)));
+      cleaned += 1;
+    }
+  } catch {
+    // Local cleanup is best-effort and must never block chat.
+  }
+  state.localCacheCleanupHandle = null;
+  if (cleaned >= LOCAL_CACHE_CLEANUP_BATCH) scheduleLocalCacheCleanup(2500);
+}
+
+function scheduleLocalCacheCleanup(timeout = 2200) {
+  cancelIdle(state.localCacheCleanupHandle);
+  state.localCacheCleanupHandle = scheduleIdle(cleanupLocalMessageCaches, timeout);
 }
 
 function messageKey(message) {
@@ -357,6 +424,10 @@ function setAuthView(isAuthed) {
   el.appView.hidden = !isAuthed;
 }
 
+function isMobileViewport() {
+  return window.matchMedia('(max-width: 760px)').matches;
+}
+
 function setDrawer(open) {
   state.drawerOpen = open;
   state.renderJobId += 1;
@@ -364,6 +435,13 @@ function setDrawer(open) {
   document.body.classList.toggle('drawer-open', open);
   el.sessionDrawer.classList.toggle('open', open);
   el.drawerScrim.hidden = !open;
+  if (open && state.sessionListDirty) {
+    requestAnimationFrame(() => renderSessions({ force: true }));
+  }
+}
+
+function resetSessionRenderLimit() {
+  state.sessionRenderLimit = state.sessionViewMode === 'recent' ? 20 : SESSION_RENDER_STEP;
 }
 
 function openModal(dialog) {
@@ -395,14 +473,22 @@ function formatTime(iso) {
   return date.toLocaleString('zh-CN', { hour: '2-digit', minute: '2-digit', month: 'numeric', day: 'numeric' });
 }
 
-function renderSessions() {
+function renderSessions(options = {}) {
+  if (!options.force && isMobileViewport() && !state.drawerOpen) {
+    state.sessionListDirty = true;
+    return;
+  }
+  state.sessionListDirty = false;
   el.sessionList.innerHTML = '';
   const fragment = document.createDocumentFragment();
 
   const sessions = [...state.sessions]
     .filter((session) => state.sessionViewMode === 'trash' ? Boolean(session.trashedAt) : !session.trashedAt)
     .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
-  const visible = state.sessionViewMode === 'recent' ? sessions.slice(0, 20) : sessions;
+  const limit = state.sessionViewMode === 'recent'
+    ? 20
+    : Math.max(SESSION_RENDER_STEP, state.sessionRenderLimit || SESSION_RENDER_STEP);
+  const visible = sessions.slice(0, limit);
 
   if (!visible.length) {
     const empty = document.createElement('div');
@@ -444,12 +530,27 @@ function renderSessions() {
       }
       fragment.append(section);
     }
+    appendSessionListMore(fragment, sessions.length, visible.length);
     el.sessionList.append(fragment);
     return;
   }
 
   for (const session of visible) fragment.append(renderSessionButton(session));
+  appendSessionListMore(fragment, sessions.length, visible.length);
   el.sessionList.append(fragment);
+}
+
+function appendSessionListMore(fragment, total, visibleCount) {
+  if (state.sessionViewMode === 'recent' || visibleCount >= total) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'session-more-button';
+  button.textContent = `加载更多 ${Math.min(SESSION_RENDER_STEP, total - visibleCount)} / 剩余 ${total - visibleCount}`;
+  button.addEventListener('click', () => {
+    state.sessionRenderLimit = Math.min(total, visibleCount + SESSION_RENDER_STEP);
+    renderSessions({ force: true });
+  });
+  fragment.append(button);
 }
 
 function renderSessionButton(session) {
@@ -650,7 +751,8 @@ function renderMessages(sessionId, options = {}) {
     setMessageScrollTop(Math.max(0, el.messagePane.scrollHeight - previousBottomOffset));
   };
 
-  const chunkSize = messages.length <= 60 ? Math.max(1, messages.length) : 40;
+  const baseChunkSize = isMobileViewport() ? MOBILE_MESSAGE_CHUNK : DESKTOP_MESSAGE_CHUNK;
+  const chunkSize = messages.length <= baseChunkSize ? Math.max(1, messages.length) : baseChunkSize;
   let index = 0;
   const renderChunk = () => {
     if (renderJobId !== state.renderJobId || state.activeId !== sessionId) return;
@@ -1584,11 +1686,64 @@ function renderSkillList() {
       <span>${escapeHtml(summary)}</span>
     `;
     item.addEventListener('click', () => {
-      insertPromptText(`$${skill.name} `);
-      closeModal(el.skillDialog);
+      if (state.skillDialogMode === 'manage') {
+        openSkillDetail(skill);
+      } else {
+        insertPromptText(`$${skill.name} `);
+        closeModal(el.skillDialog);
+      }
     });
     el.skillList.append(item);
   }
+}
+
+function renderSkillSummaryBlock(skill) {
+  if (skill.summary && typeof skill.summary === 'object') {
+    const bullets = Array.isArray(skill.summary.bullets) ? skill.summary.bullets : [];
+    return `
+      <section class="skill-detail-section">
+        <h3>AI 中文总结</h3>
+        <strong>${escapeHtml(skill.summary.title || skill.title || skill.name)}</strong>
+        <p>${escapeHtml(skill.summary.overview || '暂无总结')}</p>
+        ${bullets.length ? `<ul>${bullets.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : ''}
+        <small>${escapeHtml(skill.summaryUpdatedAt ? `更新 ${formatTime(skill.summaryUpdatedAt)}` : '等待后台总结')}</small>
+      </section>
+    `;
+  }
+  return `
+    <section class="skill-detail-section">
+      <h3>AI 中文总结</h3>
+      <p>${escapeHtml(skill.summaryStatus === 'pending' ? '等待后台异步总结。' : '暂无总结。')}</p>
+    </section>
+  `;
+}
+
+function openSkillDetail(skill) {
+  if (!skill) return;
+  el.skillDetailTitle.textContent = `$${skill.name}`;
+  const nativeDescription = skill.description || skill.shortDescription || skill.title || '这个 skill 暂无原生介绍。';
+  const status = skill.summaryStatus === 'ready'
+    ? '已总结'
+    : skill.summaryStatus === 'pending'
+      ? '待总结'
+      : skill.summaryStatus || '未知';
+  el.skillDetailBody.innerHTML = `
+    ${renderSkillSummaryBlock(skill)}
+    <section class="skill-detail-section">
+      <h3>原生介绍</h3>
+      <p>${escapeHtml(nativeDescription)}</p>
+    </section>
+    <section class="skill-detail-section compact">
+      <h3>版本信息</h3>
+      <div class="skill-detail-grid">
+        <span>来源</span><strong>${escapeHtml(skill.source || '-')}</strong>
+        <span>状态</span><strong>${escapeHtml(status)}</strong>
+        <span>更新</span><strong>${escapeHtml(formatTime(skill.updatedAt) || '-')}</strong>
+        <span>Hash</span><strong>${escapeHtml(String(skill.hash || '').slice(0, 12) || '-')}</strong>
+      </div>
+    </section>
+  `;
+  openModal(el.skillDetailDialog);
 }
 
 function renderSkillStatus(data = {}) {
@@ -1633,7 +1788,13 @@ async function refreshSkillsInBackground() {
   }
 }
 
-async function openSkillDialog() {
+async function openSkillDialog(mode = 'quick') {
+  state.skillDialogMode = mode === 'manage' ? 'manage' : 'quick';
+  if (el.skillDialogHint) {
+    el.skillDialogHint.textContent = state.skillDialogMode === 'manage'
+      ? '点击 skill 查看详情；后台更新不会阻塞聊天。'
+      : '点击 skill 后插入到输入框。';
+  }
   openModal(el.skillDialog);
   el.skillSearch.focus();
   try {
@@ -1849,7 +2010,7 @@ async function loadSession(id, options = {}) {
     const data = await api(`/api/sessions/${id}?limit=${encodeURIComponent(limit)}&offset=0`);
     const session = data.session || { id };
     mergeSessionSnapshot(session);
-    const cached = loadMessages(id);
+    const cached = state.messages.get(id) || [];
     const merged = options.full === true
       ? mergeMessages([], data.messages || [])
       : mergeMessages(cached, data.messages || []);
@@ -2395,6 +2556,7 @@ el.elevatedRun.addEventListener('change', () => {
 el.sessionViewMode.addEventListener('change', () => {
   state.sessionViewMode = el.sessionViewMode.value;
   storageSet('cmc.sessionViewMode', state.sessionViewMode);
+  resetSessionRenderLimit();
   renderSessions();
 });
 
@@ -2424,13 +2586,15 @@ el.openDrawer.addEventListener('click', () => setDrawer(true));
 el.closeDrawer.addEventListener('click', () => setDrawer(false));
 el.drawerScrim.addEventListener('click', () => setDrawer(false));
 el.newSessionButton.addEventListener('click', () => openModal(el.dialog));
+el.skillManagerButton.addEventListener('click', () => openSkillDialog('manage'));
 el.commandButton.addEventListener('click', () => {
   renderCommandList();
   openModal(el.commandDialog);
 });
 el.closeCommandDialog.addEventListener('click', () => closeModal(el.commandDialog));
-el.skillButton.addEventListener('click', openSkillDialog);
+el.skillButton.addEventListener('click', () => openSkillDialog('quick'));
 el.closeSkillDialog.addEventListener('click', () => closeModal(el.skillDialog));
+el.closeSkillDetailDialog.addEventListener('click', () => closeModal(el.skillDetailDialog));
 el.skillSearch.addEventListener('input', renderSkillList);
 el.refreshSkillsButton.addEventListener('click', () => {
   refreshSkillsInBackground();
@@ -2582,25 +2746,31 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+function registerServiceWorkerLater() {
+  if (!('serviceWorker' in navigator)) return;
+  scheduleIdle(() => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  }, 3000);
 }
 
 async function boot() {
-  loadCachedSessions();
   setAuthView(false);
   try {
     await api('/api/me');
     setAuthView(true);
     await refreshSessions();
   } catch {
+    loadCachedSessions();
     if (!navigator.onLine && state.sessions.length) {
       setAuthView(true);
-      renderSessions();
+      renderSessions({ force: true });
       renderActive();
     } else {
       setAuthView(false);
     }
+  } finally {
+    registerServiceWorkerLater();
+    scheduleLocalCacheCleanup();
   }
 }
 

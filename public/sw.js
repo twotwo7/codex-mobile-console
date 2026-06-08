@@ -1,5 +1,6 @@
-const CACHE_NAME = 'codex-console-v70';
-const ASSETS = ['/', '/index.html', '/styles.css?v=65', '/app.js?v=65', '/manifest.json?v=2'];
+const CACHE_NAME = 'codex-console-v73';
+const ASSETS = ['/', '/index.html', '/styles.css?v=68', '/app.js?v=68', '/manifest.json?v=2'];
+const CACHEABLE_PATHS = new Set(['/', '/index.html', '/styles.css', '/app.js', '/manifest.json']);
 
 self.addEventListener('install', (event) => {
   event.waitUntil(caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS)));
@@ -19,6 +20,8 @@ self.addEventListener('fetch', (event) => {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
   if (url.origin !== self.location.origin) return;
   if (url.pathname.startsWith('/api/')) return;
+  if (event.request.method !== 'GET') return;
+  if (!CACHEABLE_PATHS.has(url.pathname)) return;
   event.respondWith(
     fetch(event.request)
       .then((response) => {
