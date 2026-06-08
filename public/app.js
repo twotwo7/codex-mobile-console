@@ -1175,6 +1175,7 @@ function groupMessagesIntoTurns(sessionId, messages) {
   const turns = splitMessagesIntoTurns(messages).map((turnMessages, index) => ({ messages: turnMessages, index }));
   const conversationTurns = turns.map((turn, index) => createConversationTurn(sessionId, turn.messages, index, true));
   autoCollapsePreviousTurns(sessionId, conversationTurns);
+  keepLiveTurnExpanded(sessionId, conversationTurns);
   enforceTurnCollapseLimit(sessionId, conversationTurns);
   return conversationTurns;
 }
@@ -1228,6 +1229,19 @@ function enforceTurnCollapseLimit(sessionId, turns) {
   if (!changed) return;
   state.turnCollapseStates.set(sessionId, states);
   scheduleTurnCollapseSave(sessionId);
+}
+
+function keepLiveTurnExpanded(sessionId, turns) {
+  const latest = turns.at(-1);
+  if (!latest) return;
+  const session = state.sessions.find((item) => item.id === sessionId);
+  const hasLiveMessage = latest.messages.some((message) => (
+    ['submitted', 'running', 'stopping'].includes(message.runState)
+    || ['running', 'stopping'].includes(message.status)
+    || message.streaming === true
+  ));
+  if (!isSessionRunning(session) && !hasLiveMessage) return;
+  latest.collapsed = false;
 }
 
 function conversationTurnId(messages, index) {
