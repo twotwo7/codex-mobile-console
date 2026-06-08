@@ -17,7 +17,6 @@ const state = {
   activeId: storageGet('cmc.activeId'),
   sessionViewMode: storageGet('cmc.sessionViewMode', 'recent'),
   theme: storageGet('cmc.theme', 'graphite'),
-  historyLimit: storageGet('cmc.historyLimit', '200'),
   autoFollowBottom: storageGet('cmc.autoFollowBottom', '1') === '1',
   elevated: storageGet('cmc.elevated') === '1',
   showStarredOnly: storageGet('cmc.showStarredOnly') === '1',
@@ -130,7 +129,6 @@ const el = {
   sendButton: document.querySelector('#sendButton'),
   skillButton: document.querySelector('#skillButton'),
   themeSelect: document.querySelector('#themeSelect'),
-  historyLimitInput: document.querySelector('#historyLimitInput'),
   autoFollowBottom: document.querySelector('#autoFollowBottom'),
   sessionViewMode: document.querySelector('#sessionViewMode'),
   dialog: document.querySelector('#newSessionDialog'),
@@ -232,7 +230,6 @@ if ('scrollRestoration' in history) {
 
 applyTheme(state.theme);
 el.themeSelect.value = state.theme;
-el.historyLimitInput.value = state.historyLimit;
 el.autoFollowBottom.checked = state.autoFollowBottom;
 el.elevatedRun.checked = state.elevated;
 el.sessionViewMode.value = state.sessionViewMode;
@@ -303,16 +300,11 @@ function loadMessagePage(id) {
 }
 
 function firstPageLimit() {
-  const configured = Number(state.historyLimit || 200);
-  const viewportLimit = renderedMessageLimit();
-  if (!Number.isFinite(configured) || configured <= 0) return viewportLimit;
-  return Math.max(20, Math.min(viewportLimit, configured));
+  return renderedMessageLimit();
 }
 
 function maxHistoryLimit() {
-  const configured = Number(state.historyLimit || 200);
-  if (!Number.isFinite(configured) || configured <= 0) return MAX_LOCAL_MESSAGES;
-  return Math.max(20, Math.min(MAX_LOCAL_MESSAGES, configured));
+  return MAX_LOCAL_MESSAGES;
 }
 
 function renderedMessageLimit() {
@@ -2084,14 +2076,6 @@ el.themeSelect.addEventListener('change', () => {
   state.theme = el.themeSelect.value;
   storageSet('cmc.theme', state.theme);
   applyTheme(state.theme);
-});
-
-el.historyLimitInput.addEventListener('change', async () => {
-  const value = Math.max(0, Math.min(5000, Number(el.historyLimitInput.value || 200)));
-  state.historyLimit = String(Number.isFinite(value) ? value : 200);
-  el.historyLimitInput.value = state.historyLimit;
-  storageSet('cmc.historyLimit', state.historyLimit);
-  if (state.activeId) await loadSession(state.activeId);
 });
 
 el.autoFollowBottom.addEventListener('change', () => {
