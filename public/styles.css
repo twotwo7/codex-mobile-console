@@ -576,14 +576,55 @@ button:disabled {
 }
 
 .connection-badge {
-  min-width: 54px;
-  padding: 7px 9px;
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  min-width: 34px;
+  min-height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
   border-radius: var(--radius);
   background: var(--surface-2);
-  color: var(--muted);
-  font-size: 12px;
-  font-weight: 800;
-  text-align: center;
+  border: 1px solid var(--line);
+}
+
+.connection-badge::before,
+.connection-badge::after {
+  content: '';
+  display: block;
+}
+
+.connection-badge[data-icon="online"]::before {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.connection-badge[data-icon="offline"]::before {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--muted);
+  border-radius: 999px;
+}
+
+.connection-badge[data-icon="offline"]::after {
+  position: absolute;
+  width: 18px;
+  height: 2px;
+  background: var(--muted);
+  transform: rotate(-45deg);
+}
+
+.connection-badge[data-icon="busy"]::before,
+.connection-badge[data-icon="running"]::before {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(243, 185, 95, 0.24);
+  border-top-color: var(--accent-2);
+  border-radius: 999px;
+  animation: status-spin 0.9s linear infinite;
 }
 
 .top-runtime-button {
@@ -600,16 +641,37 @@ button:disabled {
 }
 
 .top-stop-button {
+  position: relative;
   flex: 0 0 auto;
+  width: 34px;
+  min-width: 34px;
   min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid transparent;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.18);
   border-radius: var(--radius);
   background: var(--danger);
   color: #fff;
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
+}
+
+.top-stop-button::before {
+  content: '';
+  position: absolute;
+  inset: 3px;
+  border: 2px solid rgba(255, 255, 255, 0.28);
+  border-top-color: #fff;
+  border-radius: calc(var(--radius) - 2px);
+  animation: status-spin 0.8s linear infinite;
+}
+
+.top-stop-button span {
+  position: relative;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #fff;
 }
 
 .top-favorite-button {
@@ -630,17 +692,6 @@ button:disabled {
   color: #06100e;
   background: var(--accent);
   border-color: transparent;
-}
-
-.connection-badge.online {
-  color: #06100e;
-  background: var(--accent);
-}
-
-.connection-badge.running {
-  color: #151005;
-  background: var(--accent-2);
-  animation: badge-pulse 1.4s ease-in-out infinite;
 }
 
 .empty-state {
@@ -1830,13 +1881,9 @@ button:disabled {
   }
 }
 
-@keyframes badge-pulse {
-  0%,
-  100% {
-    box-shadow: 0 0 0 0 rgba(243, 185, 95, 0.22);
-  }
-  50% {
-    box-shadow: 0 0 0 4px rgba(243, 185, 95, 0);
+@keyframes status-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 

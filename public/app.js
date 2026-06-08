@@ -507,9 +507,20 @@ function closeModal(dialog) {
   }
 }
 
+function statusIconMode(mode = '') {
+  if (mode === 'online') return 'online';
+  if (mode === 'running') return 'running';
+  if (mode === 'busy') return 'busy';
+  return 'offline';
+}
+
 function setBadge(text, mode = '') {
-  el.connectionBadge.textContent = text;
+  const label = text || '离线';
+  el.connectionBadge.textContent = '';
   el.connectionBadge.className = `connection-badge ${mode}`.trim();
+  el.connectionBadge.dataset.icon = statusIconMode(mode);
+  el.connectionBadge.setAttribute('aria-label', label);
+  el.connectionBadge.title = label;
 }
 
 function renderSessions(options = {}) {
@@ -677,6 +688,8 @@ function renderActive(options = {}) {
   el.sendButton.disabled = !session || state.sending;
   el.stopButton.hidden = !isRunning;
   el.stopButton.disabled = !session || !canStop;
+  el.stopButton.setAttribute('aria-label', canStop ? '停止当前任务' : '正在停止当前任务');
+  el.stopButton.title = canStop ? '停止当前任务' : '正在停止当前任务';
   el.connectionBadge.hidden = isRunning;
 
   if (!session) {
@@ -1845,7 +1858,7 @@ function connectEvents(id) {
   source.onerror = () => {
     source.close();
     if (state.eventSource === source) state.eventSource = null;
-    setBadge('重连中');
+    setBadge('重连中', 'busy');
     setTimeout(() => {
       if (state.activeId === id) connectEvents(id);
     }, 1600);
@@ -1891,7 +1904,7 @@ async function forkSession(session) {
     return;
   }
   try {
-    setBadge('Fork 中');
+    setBadge('Fork 中', 'busy');
     const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/fork`, {
       method: 'POST',
       body: JSON.stringify({ title: session.title || '' })

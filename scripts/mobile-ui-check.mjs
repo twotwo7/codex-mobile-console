@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=55">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=77">
       </head>
       <body>
         <main class="workspace">
@@ -37,8 +37,8 @@ async function setFixture(page) {
             <div class="top-title"><strong>移动端检查</strong><span>/root/Projects</span></div>
             <button class="top-favorite-button active" type="button">★</button>
             <button class="top-runtime-button" type="button">运行时</button>
-            <span class="connection-badge running" hidden>运行中</span>
-            <button class="top-stop-button" type="button">停止</button>
+            <span class="connection-badge" data-icon="online" title="在线"></span>
+            <button class="top-stop-button" type="button" aria-label="停止当前任务"><span aria-hidden="true"></span></button>
           </header>
           <section class="message-pane">
             <article class="message user">

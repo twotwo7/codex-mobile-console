@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=76">
+    <link rel="stylesheet" href="/styles.css?v=77">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -74,8 +74,10 @@
           </div>
           <button id="favoritesButton" class="top-favorite-button" type="button" aria-label="只看收藏" aria-pressed="false">☆</button>
           <button id="runtimeButton" class="top-runtime-button" type="button">运行时</button>
-          <span id="connectionBadge" class="connection-badge">离线</span>
-          <button id="stopButton" class="top-stop-button" type="button" hidden>停止</button>
+          <span id="connectionBadge" class="connection-badge" role="status" aria-label="离线" title="离线" data-icon="offline"></span>
+          <button id="stopButton" class="top-stop-button" type="button" aria-label="停止当前任务" title="停止当前任务" hidden>
+            <span aria-hidden="true"></span>
+          </button>
         </header>
 
         <section id="emptyState" class="empty-state">
@@ -324,6 +326,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=90" type="module"></script>
+    <script src="/app.js?v=91" type="module"></script>
   </body>
 </html>
