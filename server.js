@@ -14,6 +14,7 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
 const RESTART_MARKER_FILE = path.join(DATA_DIR, 'restart-marker.json');
 const PASSWORD_FILE = path.join(DATA_DIR, 'admin-password.txt');
+const SKILL_SUMMARY_FILE = path.join(DATA_DIR, 'skill-summaries.json');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const CODEX_HOME = process.env.CODEX_HOME || '/root/.codex';
 const SKILL_ROOTS = (process.env.SKILL_ROOTS || `${path.join(CODEX_HOME, 'skills')},/root/.agents/skills`)
@@ -23,6 +24,9 @@ const SKILL_ROOTS = (process.env.SKILL_ROOTS || `${path.join(CODEX_HOME, 'skills
 const CODEX_BIN = process.env.CODEX_BIN || '/root/.nvm/versions/node/v22.22.0/bin/codex';
 const CODEX_NODE = process.env.CODEX_NODE || process.execPath;
 const CODEX_BIN_DIR = path.dirname(CODEX_BIN);
+const SKILL_SUMMARY_PROVIDER = process.env.SKILL_SUMMARY_PROVIDER || (process.env.ANTHROPIC_API_KEY ? 'anthropic' : 'local');
+const ANTHROPIC_BASE_URL = (process.env.ANTHROPIC_BASE_URL || 'https://api.anthropic.com').replace(/\/$/, '');
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-haiku-latest';
 const COOKIE_NAME = 'cmc_session';
 const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
 const RUNTIME_DIR = path.join(__dirname, 'runtime');
@@ -57,6 +61,10 @@ const clockTick = Number(process.env.CLK_TCK || 100);
 let totalRequests = 0;
 let activeRequests = 0;
 let packageMetaCache = null;
+let skillSummaryCache = { version: 1, summaries: {} };
+const skillSummaryJobs = new Map();
+const skillSummaryQueue = [];
+let skillSummaryQueueActive = false;
 
 async function exists(file) {
   try {
@@ -70,6 +78,7 @@ async function exists(file) {
 async function init() {
   await mkdir(DATA_DIR, { recursive: true });
   await mkdir(UPLOAD_DIR, { recursive: true });
+  await loadSkillSummaryCache();
   if (!(await exists(PASSWORD_FILE))) {
     const password = randomBytes(18).toString('base64url');
     await writeFile(PASSWORD_FILE, `${password}\n`, { mode: 0o600 });
@@ -994,6 +1003,238 @@ function parseSkillMarkdown(raw, fallbackName) {
   };
 }
 
+async function loadSkillSummaryCache() {
+  try {
+    const parsed = JSON.parse(await readFile(SKILL_SUMMARY_FILE, 'utf8'));
+    if (parsed && typeof parsed === 'object') {
+      skillSummaryCache = {
+        version: 1,
+        summaries: parsed.summaries && typeof parsed.summaries === 'object' ? parsed.summaries : {}
+      };
+    }
+  } catch {
+    skillSummaryCache = { version: 1, summaries: {} };
+  }
+}
+
+async function saveSkillSummaryCache() {
+  const tmp = `${SKILL_SUMMARY_FILE}.tmp`;
+  await writeFile(tmp, JSON.stringify(skillSummaryCache, null, 2), { mode: 0o600 });
+  await rename(tmp, SKILL_SUMMARY_FILE);
+}
+
+function skillSummaryKey(skill) {
+  return `${skill.source || 'unknown'}:${skill.name}`;
+}
+
+function normalizeSummaryLine(value, max = 120) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  return text.length > max ? `${text.slice(0, max - 1)}...` : text;
+}
+
+function markdownBodyWithoutFrontmatter(raw) {
+  return String(raw || '').replace(/^---\n[\s\S]*?\n---\s*/, '').trim();
+}
+
+function firstMarkdownLines(raw, limit = 8) {
+  return markdownBodyWithoutFrontmatter(raw)
+    .split('\n')
+    .map((line) => line
+      .replace(/^#{1,6}\s*/, '')
+      .replace(/^[-*]\s+/, '')
+      .replace(/`([^`]+)`/g, '$1')
+      .trim())
+    .filter((line) => line && !line.startsWith('---'))
+    .slice(0, limit);
+}
+
+function buildSkillSummary(skill, raw) {
+  const parsed = parseSkillMarkdown(raw, skill.name);
+  const lines = firstMarkdownLines(raw);
+  const title = normalizeSummaryLine(parsed.title || skill.title || skill.name, 80);
+  const description = normalizeSummaryLine(parsed.description || skill.description || lines[0] || '暂无说明', 180);
+  const usageLine = lines.find((line) => /use|trigger|when|适用|触发|使用|用于/i.test(line)) || description;
+  const workflowLines = lines
+    .filter((line) => line !== description && line !== usageLine)
+    .slice(0, 3)
+    .map((line) => normalizeSummaryLine(line, 120))
+    .filter(Boolean);
+  const bullets = [
+    `功能：${description}`,
+    `适用：${normalizeSummaryLine(usageLine, 140)}`,
+    workflowLines.length
+      ? `实现要点：${workflowLines.join('；')}`
+      : `实现要点：读取 ${skill.name} 的本地 SKILL.md 指令，在匹配任务时按其中流程执行。`
+  ];
+  return {
+    title,
+    overview: bullets.join('\n'),
+    bullets,
+    generatedBy: 'local-extractive-v1',
+    generatedAt: nowIso()
+  };
+}
+
+function attachSkillSummary(skill, raw = '') {
+  const hash = raw ? createHash('sha256').update(raw).digest('hex') : skill.hash;
+  const key = skillSummaryKey(skill);
+  const cached = skillSummaryCache.summaries[key];
+  const fresh = cached?.hash === hash && cached?.summary;
+  if (!fresh && raw) queueSkillSummary(skill, raw, hash);
+  const summary = fresh || cached?.summary ? cached.summary : null;
+  return {
+    ...publicSkill(skill),
+    hash,
+    summary,
+    summaryStatus: fresh ? 'ready' : cached?.summary ? 'stale' : 'pending',
+    summaryUpdatedAt: fresh ? cached.updatedAt : cached?.updatedAt || ''
+  };
+}
+
+function queueSkillSummary(skill, raw, hash, options = {}) {
+  const key = skillSummaryKey(skill);
+  const cached = skillSummaryCache.summaries[key];
+  if (cached?.hash === hash && cached?.summary) return;
+  if (skillSummaryJobs.has(key)) {
+    if (options.priority) {
+      const index = skillSummaryQueue.findIndex((item) => item.key === key);
+      if (index > 0) {
+        const [job] = skillSummaryQueue.splice(index, 1);
+        skillSummaryQueue.unshift(job);
+      }
+    }
+    return;
+  }
+  const job = { key, skill, raw, hash };
+  skillSummaryJobs.set(key, job);
+  if (options.priority) {
+    skillSummaryQueue.unshift(job);
+  } else {
+    skillSummaryQueue.push(job);
+  }
+  processSkillSummaryQueue();
+}
+
+async function processSkillSummaryQueue() {
+  if (skillSummaryQueueActive) return;
+  skillSummaryQueueActive = true;
+  while (skillSummaryQueue.length) {
+    const job = skillSummaryQueue.shift();
+    try {
+      const cached = skillSummaryCache.summaries[job.key];
+      if (cached?.hash === job.hash && cached?.summary) continue;
+      const summary = await generateSkillSummary(job.skill, job.raw);
+      skillSummaryCache.summaries[job.key] = {
+        version: 1,
+        hash: job.hash,
+        name: job.skill.name,
+        source: job.skill.source,
+        updatedAt: nowIso(),
+        summary
+      };
+      await saveSkillSummaryCache();
+    } catch (error) {
+      console.error('skill summary failed', job.key, error);
+    } finally {
+      skillSummaryJobs.delete(job.key);
+    }
+  }
+  skillSummaryQueueActive = false;
+}
+
+async function waitForSkillSummary(skill, raw, hash, timeoutMs = 8000) {
+  queueSkillSummary(skill, raw, hash, { priority: true });
+  const key = skillSummaryKey(skill);
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const cached = skillSummaryCache.summaries[key];
+    if (cached?.hash === hash && cached?.summary) return cached.summary;
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+  return skillSummaryCache.summaries[key]?.summary || null;
+}
+
+async function generateSkillSummary(skill, raw) {
+  if (SKILL_SUMMARY_PROVIDER === 'anthropic' && process.env.ANTHROPIC_API_KEY) {
+    return summarizeSkillWithAnthropic(skill, raw)
+      .catch((error) => {
+        console.error('anthropic skill summary fallback', skill.name, error.message || error);
+        return buildSkillSummary(skill, raw);
+      });
+  }
+  return buildSkillSummary(skill, raw);
+}
+
+async function summarizeSkillWithAnthropic(skill, raw) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  const trimmed = String(raw || '').slice(0, 18000);
+  try {
+    const response = await fetch(`${ANTHROPIC_BASE_URL}/v1/messages`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: ANTHROPIC_MODEL,
+        max_tokens: 700,
+        temperature: 0.2,
+        system: '你是面向中文开发者的技术文档编辑。请准确总结 Codex skill 的用途和实现流程，不展示或复述大段源码/原文。',
+        messages: [{
+          role: 'user',
+          content: [
+            `请为这个 Codex skill 生成中文概要，输出严格 JSON：`,
+            `{"title":"一句话中文标题","overview":"80字以内功能介绍","bullets":["适用场景","使用方式","实现要点"],"limitations":["注意事项"]}`,
+            `要求：不要直接展示 SKILL.md 原文；bullets 每项 40 字以内；limitations 最多 2 项。`,
+            `skill 名称：${skill.name}`,
+            `来源：${skill.source}`,
+            `SKILL.md 内容：\n${trimmed}`
+          ].join('\n\n')
+        }]
+      })
+    });
+    if (!response.ok) throw new Error(`anthropic_http_${response.status}`);
+    const data = await response.json();
+    const text = (data.content || [])
+      .map((part) => part.type === 'text' ? part.text : '')
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+    const parsed = parseSummaryJson(text);
+    return normalizeAiSummary(parsed, skill);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseSummaryJson(text) {
+  const cleaned = String(text || '').replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/```\s*$/i, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) return JSON.parse(match[0]);
+    throw new Error('summary_json_parse_failed');
+  }
+}
+
+function normalizeAiSummary(value, skill) {
+  const bullets = Array.isArray(value?.bullets) ? value.bullets : [];
+  const limitations = Array.isArray(value?.limitations) ? value.limitations : [];
+  return {
+    title: normalizeSummaryLine(value?.title || skill.title || skill.name, 80),
+    overview: normalizeSummaryLine(value?.overview || skill.description || '暂无说明', 180),
+    bullets: bullets.map((item) => normalizeSummaryLine(item, 80)).filter(Boolean).slice(0, 4),
+    limitations: limitations.map((item) => normalizeSummaryLine(item, 80)).filter(Boolean).slice(0, 2),
+    generatedBy: `anthropic:${ANTHROPIC_MODEL}`,
+    generatedAt: nowIso()
+  };
+}
+
 function publicSkill(skill) {
   return {
     name: skill.name,
@@ -1056,8 +1297,10 @@ async function listInstalledSkills() {
           source,
           system: source.includes('system'),
           path: file,
+          hash: createHash('sha256').update(raw).digest('hex'),
           updatedAt: new Date(info.mtimeMs).toISOString()
         };
+        queueSkillSummary(skill, raw, skill.hash);
         const existing = byName.get(skill.name);
         if (!existing || existing.system && !skill.system) byName.set(skill.name, skill);
       } catch {
@@ -1078,9 +1321,9 @@ async function getInstalledSkill(name) {
   const skill = skills.find((item) => item.name === normalizedName);
   if (!skill?.path) return null;
   const raw = await readFile(skill.path, 'utf8');
+  await waitForSkillSummary(skill, raw, skill.hash);
   return {
-    ...publicSkill(skill),
-    markdown: raw,
+    ...attachSkillSummary(skill, raw),
     path: skill.path
   };
 }
@@ -1885,9 +2128,10 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === '/api/skills' && req.method === 'GET') {
+    const skills = await listInstalledSkills();
     return json(res, 200, {
       roots: SKILL_ROOTS,
-      skills: await listInstalledSkills()
+      skills: skills.map((skill) => attachSkillSummary(skill))
     });
   }
 

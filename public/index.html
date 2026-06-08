@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=65">
+    <link rel="stylesheet" href="/styles.css?v=66">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -58,7 +58,6 @@
             <button id="drawerRefreshSkillsButton" class="ghost-button inline" type="button">刷新</button>
           </div>
           <div id="drawerSkillList" class="drawer-skill-list">加载中...</div>
-          <article id="drawerSkillDetail" class="drawer-skill-detail">选择一个 skill 查看说明和实现。</article>
         </section>
         <button id="logoutButton" class="ghost-button" type="button">退出登录</button>
       </aside>
@@ -253,6 +252,14 @@
       <div id="skillList" class="skill-list">加载中...</div>
     </dialog>
 
+    <dialog id="skillDetailDialog" class="session-dialog skill-detail-dialog">
+      <div class="dialog-head">
+        <h2 id="skillDetailTitle">Skill 介绍</h2>
+        <button class="icon-button" type="button" id="closeSkillDetailDialog" aria-label="关闭 skill 介绍">×</button>
+      </div>
+      <div id="skillDetailPanel" class="skill-detail-panel">加载中...</div>
+    </dialog>
+
     <dialog id="runtimeDialog" class="session-dialog runtime-dialog">
       <div class="dialog-head">
         <h2>运行时</h2>
@@ -320,6 +327,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=65" type="module"></script>
+    <script src="/app.js?v=66" type="module"></script>
   </body>
 </html>

@@ -169,10 +169,13 @@ const el = {
   skillSearch: document.querySelector('#skillSearch'),
   refreshSkillsButton: document.querySelector('#refreshSkillsButton'),
   skillList: document.querySelector('#skillList'),
+  skillDetailDialog: document.querySelector('#skillDetailDialog'),
+  closeSkillDetailDialog: document.querySelector('#closeSkillDetailDialog'),
+  skillDetailTitle: document.querySelector('#skillDetailTitle'),
+  skillDetailPanel: document.querySelector('#skillDetailPanel'),
   drawerSkillSearch: document.querySelector('#drawerSkillSearch'),
   drawerRefreshSkillsButton: document.querySelector('#drawerRefreshSkillsButton'),
   drawerSkillList: document.querySelector('#drawerSkillList'),
-  drawerSkillDetail: document.querySelector('#drawerSkillDetail'),
   runtimeDialog: document.querySelector('#runtimeDialog'),
   closeRuntimeDialog: document.querySelector('#closeRuntimeDialog'),
   runtimePanel: document.querySelector('#runtimePanel'),
@@ -1601,7 +1604,12 @@ function renderSkillList() {
 function skillFilter(query) {
   const normalized = String(query || '').trim().toLowerCase();
   return state.skills.filter((skill) => {
-    const haystack = `${skill.name} ${skill.title} ${skill.description} ${skill.source}`.toLowerCase();
+    const summaryText = [
+      skill.summary?.title,
+      skill.summary?.overview,
+      ...(skill.summary?.bullets || [])
+    ].filter(Boolean).join(' ');
+    const haystack = `${skill.name} ${skill.title} ${skill.description} ${skill.source} ${summaryText}`.toLowerCase();
     return !normalized || haystack.includes(normalized);
   });
 }
@@ -1622,106 +1630,119 @@ function renderDrawerSkillList() {
   el.drawerSkillList.innerHTML = '';
   if (!skills.length) {
     el.drawerSkillList.innerHTML = '<p class="skill-empty">没有匹配的 skill</p>';
-    renderDrawerSkillEmpty();
     return;
-  }
-  if (!state.selectedSkillName || !skills.some((skill) => skill.name === state.selectedSkillName)) {
-    state.selectedSkillName = skills[0].name;
   }
   for (const skill of skills) {
     const item = document.createElement('button');
     item.type = 'button';
     item.className = 'drawer-skill-item';
-    item.classList.toggle('active', skill.name === state.selectedSkillName);
+    const title = skill.summary?.title || skill.title || skill.name;
+    const summary = skill.summary?.overview || skill.description || skill.shortDescription || '概要生成中';
+    const status = skill.summaryStatus === 'ready' ? '已总结' : skill.summaryStatus === 'stale' ? '待更新' : '生成中';
     item.innerHTML = `
-      <span><strong>$${escapeHtml(skill.name)}</strong><em>${escapeHtml(sourceLabel(skill.source))}</em></span>
-      <small>${escapeHtml(summarizeText(skill.description || skill.shortDescription || skill.title || '无说明', 76))}</small>
+      <span><strong>$${escapeHtml(skill.name)}</strong><em>${escapeHtml(status)}</em></span>
+      <small>${escapeHtml(summarizeText(title, 64))} · ${escapeHtml(summarizeText(summary, 86))}</small>
     `;
     item.addEventListener('click', () => {
       state.selectedSkillName = skill.name;
-      renderDrawerSkillList();
+      openSkillDetail(skill.name).catch((error) => {
+        renderSkillDetailError(error?.message || '加载失败');
+      });
     });
     el.drawerSkillList.append(item);
   }
-  if (state.drawerPage === 'skills' && state.selectedSkillName) {
-    loadSkillDetail(state.selectedSkillName).catch((error) => {
-      renderDrawerSkillError(error?.message || '加载失败');
-    });
-  }
-}
-
-function renderDrawerSkillEmpty() {
-  if (!el.drawerSkillDetail) return;
-  el.drawerSkillDetail.innerHTML = `
-    <div class="drawer-skill-empty">
-      <strong>没有可显示的 skill</strong>
-      <span>刷新列表，或检查服务器上的 skill 目录。</span>
-    </div>
-  `;
 }
 
 function renderDrawerSkillError(message) {
   if (el.drawerSkillList && state.drawerPage === 'skills') {
     el.drawerSkillList.innerHTML = `<p class="skill-empty">${escapeHtml(message || '加载失败')}</p>`;
   }
-  if (!el.drawerSkillDetail) return;
-  el.drawerSkillDetail.innerHTML = `
-    <div class="drawer-skill-empty">
+}
+
+function renderSkillDetailLoading(name) {
+  el.skillDetailTitle.textContent = `$${name}`;
+  el.skillDetailPanel.innerHTML = `
+    <div class="skill-detail-empty">
+      <strong>正在生成中文概要</strong>
+      <span>首次打开或 skill 更新后会重新生成。</span>
+    </div>
+  `;
+}
+
+function renderSkillDetailError(message) {
+  openModal(el.skillDetailDialog);
+  el.skillDetailTitle.textContent = 'Skill 介绍';
+  el.skillDetailPanel.innerHTML = `
+    <div class="skill-detail-empty">
       <strong>加载失败</strong>
       <span>${escapeHtml(message || '未知错误')}</span>
     </div>
   `;
 }
 
-function renderDrawerSkillLoading(name) {
-  if (!el.drawerSkillDetail) return;
-  el.drawerSkillDetail.innerHTML = `
-    <div class="drawer-skill-empty">
-      <strong>$${escapeHtml(name)}</strong>
-      <span>正在读取 SKILL.md...</span>
-    </div>
-  `;
-}
-
-function renderDrawerSkillDetail(skill) {
-  if (!el.drawerSkillDetail || !skill) return;
-  const description = skill.description || skill.shortDescription || skill.title || '无说明';
+function renderSkillDetail(skill) {
+  if (!skill) return;
+  const summary = skill.summary || {};
+  const title = summary.title || skill.title || skill.name;
+  const overview = summary.overview || skill.description || skill.shortDescription || '中文概要生成中，请稍后刷新。';
+  const bullets = Array.isArray(summary.bullets) ? summary.bullets : [];
+  const limitations = Array.isArray(summary.limitations) ? summary.limitations : [];
   const updated = skill.updatedAt ? formatTime(skill.updatedAt) : '';
-  el.drawerSkillDetail.innerHTML = `
-    <div class="drawer-skill-detail-head">
+  const summaryUpdated = skill.summaryUpdatedAt ? formatTime(skill.summaryUpdatedAt) : '';
+  const status = skill.summaryStatus === 'ready' ? '概要已更新' : skill.summaryStatus === 'stale' ? '概要待更新' : '概要生成中';
+  el.skillDetailTitle.textContent = `$${skill.name}`;
+  el.skillDetailPanel.innerHTML = `
+    <div class="skill-detail-headline">
       <div>
-        <strong>$${escapeHtml(skill.name)}</strong>
-        <span>${escapeHtml(sourceLabel(skill.source))}${skill.system ? ' · 系统' : ''}${updated ? ` · ${escapeHtml(updated)}` : ''}</span>
+        <strong>${escapeHtml(title)}</strong>
+        <span>${escapeHtml(sourceLabel(skill.source))}${skill.system ? ' · 系统' : ''} · ${escapeHtml(status)}</span>
       </div>
       <button class="ghost-button inline" type="button" data-insert-skill="${escapeHtml(skill.name)}">插入</button>
     </div>
-    <p class="drawer-skill-desc">${escapeHtml(description)}</p>
-    <dl class="drawer-skill-meta">
+    <p class="skill-detail-overview">${escapeHtml(overview)}</p>
+    ${bullets.length ? `
+      <ul class="skill-detail-points">
+        ${bullets.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}
+      </ul>
+    ` : ''}
+    ${limitations.length ? `
+      <div class="skill-detail-note">
+        <strong>注意</strong>
+        <span>${limitations.map((item) => escapeHtml(item)).join('；')}</span>
+      </div>
+    ` : ''}
+    <dl class="skill-detail-meta">
+      <dt>来源</dt>
+      <dd>${escapeHtml(sourceLabel(skill.source))}</dd>
       <dt>文件</dt>
       <dd>${escapeHtml(skill.path || '')}</dd>
+      <dt>Skill 更新</dt>
+      <dd>${escapeHtml(updated || '-')}</dd>
+      <dt>概要版本</dt>
+      <dd>${escapeHtml((skill.hash || '').slice(0, 12) || '-')} ${summaryUpdated ? `· ${escapeHtml(summaryUpdated)}` : ''}</dd>
     </dl>
-    <pre class="drawer-skill-markdown">${escapeHtml(skill.markdown || '')}</pre>
   `;
-  el.drawerSkillDetail.querySelector('[data-insert-skill]')?.addEventListener('click', () => {
+  el.skillDetailPanel.querySelector('[data-insert-skill]')?.addEventListener('click', () => {
     insertPromptText(`$${skill.name} `);
   });
 }
 
 async function loadSkillDetail(name) {
-  if (!name) {
-    renderDrawerSkillEmpty();
-    return;
-  }
+  if (!name) return null;
   const cached = state.skillDetails.get(name);
-  if (cached) {
-    renderDrawerSkillDetail(cached);
-    return;
-  }
-  renderDrawerSkillLoading(name);
+  const listed = state.skills.find((skill) => skill.name === name);
+  if (cached?.summaryStatus === 'ready' && (!listed?.hash || listed.hash === cached.hash)) return cached;
   const data = await api(`/api/skills/${encodeURIComponent(name)}`);
   const skill = data.skill;
   state.skillDetails.set(name, skill);
-  if (state.selectedSkillName === name) renderDrawerSkillDetail(skill);
+  return skill;
+}
+
+async function openSkillDetail(name) {
+  openModal(el.skillDetailDialog);
+  renderSkillDetailLoading(name);
+  const skill = await loadSkillDetail(name);
+  if (skill) renderSkillDetail(skill);
 }
 
 async function loadSkills(force = false) {
@@ -2547,8 +2568,10 @@ el.commandButton.addEventListener('click', () => {
 el.closeCommandDialog.addEventListener('click', () => closeModal(el.commandDialog));
 el.skillButton.addEventListener('click', openSkillDialog);
 el.closeSkillDialog.addEventListener('click', () => closeModal(el.skillDialog));
+el.closeSkillDetailDialog.addEventListener('click', () => closeModal(el.skillDetailDialog));
 el.skillSearch.addEventListener('input', renderSkillList);
 el.refreshSkillsButton.addEventListener('click', () => {
+  state.skillDetails.clear();
   loadSkills(true).catch((error) => {
     el.skillList.textContent = skillErrorCopy(error);
   });
