@@ -1,5 +1,5 @@
-const CACHE_NAME = 'codex-console-v76';
-const ASSETS = ['/', '/index.html', '/styles.css?v=71', '/app.js?v=71', '/manifest.json?v=2'];
+const CACHE_NAME = 'codex-console-v77';
+const ASSETS = ['/', '/index.html', '/styles.css?v=71', '/app.js?v=72', '/manifest.json?v=2'];
 const CACHEABLE_PATHS = new Set(['/', '/index.html', '/styles.css', '/app.js', '/manifest.json']);
 
 self.addEventListener('install', (event) => {

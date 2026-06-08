@@ -75,6 +75,7 @@ const state = {
   renderingMessages: false,
   userScrolledDuringRender: false,
   suppressScrollTracking: false,
+  scrollSuppressToken: 0,
   drawerOpen: false,
   drawerPanel: 'sessions',
   sessionListDirty: true,
@@ -728,13 +729,75 @@ function renderActive(options = {}) {
   el.activeTitle.textContent = session.title;
   el.activeMeta.textContent = session.cwd || '';
   setBadge(isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线', isRunning ? 'running' : state.online ? 'online' : '');
-  if (shouldRenderMessages) renderMessages(session.id, { stickToBottom: options.stickToBottom ?? isNearMessageBottom() });
+  if (shouldRenderMessages) {
+    renderMessages(session.id, {
+      stickToBottom: options.stickToBottom ?? isNearMessageBottom(),
+      restoreAnchor: options.restoreAnchor || null
+    });
+  }
   else {
     updateQueuePanel();
     updateRunIndicator();
     syncStreamingMarkers();
   }
   updateFavoritesButton();
+}
+
+function setProgrammaticMessageScrollTop(value) {
+  state.suppressScrollTracking = true;
+  const token = beginProgrammaticMessageScroll();
+  el.messagePane.scrollTop = Math.max(0, value);
+  releaseProgrammaticMessageScroll(token);
+}
+
+function beginProgrammaticMessageScroll() {
+  state.suppressScrollTracking = true;
+  const token = state.scrollSuppressToken + 1;
+  state.scrollSuppressToken = token;
+  return token;
+}
+
+function releaseProgrammaticMessageScroll(token) {
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      if (state.scrollSuppressToken === token) state.suppressScrollTracking = false;
+    });
+  });
+}
+
+function messageBottomDistance() {
+  return Math.max(0, el.messagePane.scrollHeight - el.messagePane.scrollTop - el.messagePane.clientHeight);
+}
+
+function firstVisibleMessageAnchor() {
+  const paneTop = el.messagePane.getBoundingClientRect().top;
+  for (const node of el.messagePane.querySelectorAll('.message')) {
+    const rect = node.getBoundingClientRect();
+    if (rect.bottom < paneTop) continue;
+    return {
+      seq: node.dataset.seq || '',
+      id: node.dataset.messageId || '',
+      clientMessageId: node.dataset.clientMessageId || '',
+      offset: rect.top - paneTop
+    };
+  }
+  return null;
+}
+
+function restoreMessageAnchor(anchor) {
+  if (!anchor) return false;
+  const nodes = [...el.messagePane.querySelectorAll('.message')];
+  const target = nodes.find((node) => {
+    const ids = (node.dataset.messageIds || '').split(',').filter(Boolean);
+    return (anchor.id && (node.dataset.messageId === anchor.id || ids.includes(anchor.id)))
+      || (anchor.clientMessageId && node.dataset.clientMessageId === anchor.clientMessageId)
+      || (anchor.seq && Number(node.dataset.seq || 0) === Number(anchor.seq || 0));
+  });
+  if (!target) return false;
+  const paneTop = el.messagePane.getBoundingClientRect().top;
+  const targetTop = target.getBoundingClientRect().top;
+  setProgrammaticMessageScrollTop(el.messagePane.scrollTop + targetTop - paneTop - anchor.offset);
+  return true;
 }
 
 function getActiveSession() {
@@ -798,7 +861,9 @@ function renderMessages(sessionId, options = {}) {
   const renderJobId = ++state.renderJobId;
   state.renderingMessages = true;
   state.userScrolledDuringRender = false;
-  const previousBottomOffset = Math.max(0, el.messagePane.scrollHeight - el.messagePane.scrollTop);
+  const previousBottomDistance = messageBottomDistance();
+  const previousAnchor = stickToBottom ? null : options.restoreAnchor || firstVisibleMessageAnchor();
+  const renderScrollToken = beginProgrammaticMessageScroll();
   el.messagePane.innerHTML = '';
   const olderControl = renderOlderMessagesControl(sessionId);
   if (olderControl) el.messagePane.append(olderControl);
@@ -813,29 +878,31 @@ function renderMessages(sessionId, options = {}) {
     el.messagePane.append(renderFavoriteEmpty());
   }
 
-  const setMessageScrollTop = (value) => {
-    state.suppressScrollTracking = true;
-    el.messagePane.scrollTop = value;
-    requestAnimationFrame(() => {
-      state.suppressScrollTracking = false;
-    });
-  };
-
   const restoreScroll = (finalChunk = false) => {
-    if (state.userScrolledDuringRender) return;
-    if (stickToBottom) {
-      scrollMessagesToBottom();
+    if (!finalChunk) return;
+    if (state.userScrolledDuringRender) {
+      releaseProgrammaticMessageScroll(renderScrollToken);
       return;
     }
-    if (!finalChunk && el.messagePane.scrollHeight < previousBottomOffset) return;
-    setMessageScrollTop(Math.max(0, el.messagePane.scrollHeight - previousBottomOffset));
+    if (stickToBottom) {
+      setProgrammaticMessageScrollTop(el.messagePane.scrollHeight);
+      releaseProgrammaticMessageScroll(renderScrollToken);
+      return;
+    }
+    if (!restoreMessageAnchor(previousAnchor)) {
+      setProgrammaticMessageScrollTop(el.messagePane.scrollHeight - el.messagePane.clientHeight - previousBottomDistance);
+    }
+    releaseProgrammaticMessageScroll(renderScrollToken);
   };
 
   const baseChunkSize = isMobileViewport() ? MOBILE_MESSAGE_CHUNK : DESKTOP_MESSAGE_CHUNK;
   const chunkSize = messages.length <= baseChunkSize ? Math.max(1, messages.length) : baseChunkSize;
   let index = 0;
   const renderChunk = () => {
-    if (renderJobId !== state.renderJobId || state.activeId !== sessionId) return;
+    if (renderJobId !== state.renderJobId || state.activeId !== sessionId) {
+      releaseProgrammaticMessageScroll(renderScrollToken);
+      return;
+    }
     const fragment = document.createDocumentFragment();
     const end = Math.min(index + chunkSize, messages.length);
     for (; index < end; index += 1) {
@@ -843,7 +910,6 @@ function renderMessages(sessionId, options = {}) {
     }
     el.messagePane.append(fragment);
     if (index < messages.length) {
-      restoreScroll(false);
       requestAnimationFrame(renderChunk);
     } else {
       restoreScroll(true);
@@ -1225,16 +1291,12 @@ function removeQueuePanel() {
 }
 
 function isNearMessageBottom() {
-  return el.messagePane.scrollHeight - el.messagePane.scrollTop - el.messagePane.clientHeight < 96;
+  return messageBottomDistance() < 96;
 }
 
 function scrollMessagesToBottom() {
   requestAnimationFrame(() => {
-    state.suppressScrollTracking = true;
-    el.messagePane.scrollTop = el.messagePane.scrollHeight;
-    requestAnimationFrame(() => {
-      state.suppressScrollTracking = false;
-    });
+    setProgrammaticMessageScrollTop(el.messagePane.scrollHeight);
   });
 }
 
@@ -2146,8 +2208,8 @@ async function loadOlderMessages(sessionId) {
 
   state.loadingOlder = true;
   state.messagePages.set(sessionId, { ...page, loading: true });
+  const previousAnchor = firstVisibleMessageAnchor();
   renderActive({ messages: false });
-  const previousHeight = el.messagePane.scrollHeight;
   try {
     const limit = Math.min(HISTORY_PAGE_SIZE, remaining);
     const data = await api(`/api/sessions/${sessionId}?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(page.offset || 0)}`);
@@ -2162,14 +2224,7 @@ async function loadOlderMessages(sessionId) {
     saveMessages(sessionId);
     if (state.activeId === sessionId) {
       renderSessions();
-      renderActive({ stickToBottom: false });
-      requestAnimationFrame(() => {
-        state.suppressScrollTracking = true;
-        el.messagePane.scrollTop = Math.max(0, el.messagePane.scrollHeight - previousHeight);
-        requestAnimationFrame(() => {
-          state.suppressScrollTracking = false;
-        });
-      });
+      renderActive({ stickToBottom: false, restoreAnchor: previousAnchor });
     }
   } catch (error) {
     state.messagePages.set(sessionId, { ...page, loading: false });
@@ -2204,8 +2259,9 @@ async function refreshActiveContext() {
     }
     if (changed || sessionChanged) {
       if (state.activeId === session.id) {
+        const stickToBottom = isNearMessageBottom();
         renderSessions();
-        renderActive({ messages: changed });
+        renderActive({ messages: changed, stickToBottom });
       }
     }
   } catch {
