@@ -27,7 +27,6 @@ const state = {
   messages: new Map(),
   messagePages: new Map(),
   turnRenderLimits: new Map(),
-  retainedTurnBodies: new Map(),
   messageCollapseStates: new Map(),
   turnCollapseStates: new Map(),
   pendingTurnCollapseSaves: new Set(),
@@ -52,7 +51,7 @@ const state = {
   loadingOlder: false,
   cleanupTimer: null,
   localCacheCleanupHandle: null,
-  retainedTurnCleanupHandle: null,
+  promptResizeHandle: 0,
   online: navigator.onLine,
   localRuntimeSnapshot: null,
   localRuntimeSnapshotAt: 0,
@@ -68,8 +67,6 @@ const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
 const MAX_BROWSER_CACHED_MESSAGES = 360;
 const DEFAULT_RENDERED_TURNS = 10;
-const MAX_RETAINED_TURN_BODIES = 4;
-const TURN_BODY_IDLE_TTL_MS = 45_000;
 const MOBILE_MESSAGE_CHUNK = 18;
 const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
@@ -265,7 +262,8 @@ function messageCollapseId(message) {
   return message.clientMessageId
     || (message.ids || []).find(Boolean)
     || message.id
-    || (message.seq ? `seq:${message.seq}` : '');
+    || (message.seq ? `seq:${message.seq}` : '')
+    || (message.orderSeq ? `order:${message.orderSeq}` : '');
 }
 
 function getMessageCollapsed(message) {
@@ -366,6 +364,34 @@ function cacheSafeMessage(message) {
     images: (message.images || []).map(({ data, dataUrl, ...image }) => image),
     retryImages: (message.retryImages || []).map(({ data, dataUrl, ...image }) => image)
   };
+}
+
+function messageListSignature(messages) {
+  if (!Array.isArray(messages) || !messages.length) return '0';
+  const last = messages.at(-1) || {};
+  const middle = messages[Math.floor(messages.length / 2)] || {};
+  const checksum = messages.reduce((sum, message) => (
+    sum
+    + Number(message.orderSeq || message.seq || 0)
+    + String(message.text || '').length
+    + (message.pending ? 17 : 0)
+    + (message.streaming ? 31 : 0)
+    + (message.failed ? 47 : 0)
+  ), 0);
+  return [
+    messages.length,
+    checksum,
+    middle.id || middle.clientMessageId || middle.orderSeq || middle.seq || '',
+    last.id || '',
+    last.clientMessageId || '',
+    last.orderSeq || last.seq || '',
+    last.role || '',
+    last.at || '',
+    String(last.text || '').length,
+    last.pending ? 'p' : '',
+    last.streaming ? 's' : '',
+    last.failed ? 'f' : ''
+  ].join(':');
 }
 
 function loadMessages(id, options = {}) {
@@ -474,9 +500,7 @@ function cleanupIdleResources() {
     state.lastSeq.delete(id);
     state.messagePages.delete(id);
     state.messageCollapseStates.delete(id);
-    state.retainedTurnBodies.delete(id);
   }
-  pruneRetainedTurnBodies({ forceExpired: true });
 }
 
 function scheduleResourceCleanup() {
@@ -1126,6 +1150,7 @@ function conversationTurnId(messages, index) {
   const key = messageCollapseId(userMessage)
     || userMessage.id
     || userMessage.seq
+    || userMessage.orderSeq
     || userMessage.at
     || index;
   return `turn:${key}`;
@@ -1159,86 +1184,29 @@ function renderConversationTurn(sessionId, turn) {
 function createTurnBody(turn) {
   const body = document.createElement('div');
   body.className = 'turn-body';
-  body.dataset.turnSignature = turnMessageSignature(turn);
   for (const message of turn.messages) {
     body.append(messageView.renderMessage(message, { animate: false }));
   }
   return body;
 }
 
-function turnBodyCache(sessionId) {
-  if (!state.retainedTurnBodies.has(sessionId)) state.retainedTurnBodies.set(sessionId, new Map());
-  return state.retainedTurnBodies.get(sessionId);
-}
-
-function turnMessageSignature(turn) {
-  return turn.messages.map((message) => [
-    message.id || '',
-    message.clientMessageId || '',
-    message.seq || '',
-    message.role || '',
-    message.at || '',
-    String(message.text || '').length,
-    message.groupCount || 1,
-    message.pending ? 'p' : '',
-    message.failed ? 'f' : '',
-    message.streaming ? 's' : ''
-  ].join(':')).join('|');
-}
-
-function retainTurnBody(sessionId, turnId, body, turn, expanded) {
-  if (!sessionId || !turnId || !body) return;
-  const cache = turnBodyCache(sessionId);
-  const current = cache.get(turnId);
-  const signature = current?.body === body && current.signature
-    ? current.signature
-    : body.dataset.turnSignature || turnMessageSignature(turn);
-  body.dataset.turnSignature = signature;
-  cache.set(turnId, {
-    body,
-    signature,
-    expanded: expanded === true,
-    lastUsedAt: Date.now()
-  });
-  scheduleRetainedTurnCleanup();
-}
-
-function takeRetainedTurnBody(sessionId, turn) {
-  const entry = state.retainedTurnBodies.get(sessionId)?.get(turn.id);
-  if (!entry) return null;
-  if (entry.signature !== turnMessageSignature(turn)) {
-    entry.body.remove();
-    state.retainedTurnBodies.get(sessionId)?.delete(turn.id);
-    return null;
-  }
-  entry.lastUsedAt = Date.now();
-  return entry.body;
-}
-
 function attachTurnBody(sessionId, section, turn) {
-  let body = section.querySelector(':scope > .turn-body') || takeRetainedTurnBody(sessionId, turn);
+  let body = section.querySelector(':scope > .turn-body');
   if (!body) body = createTurnBody(turn);
   body.hidden = false;
   if (body.parentElement !== section) section.append(body);
-  retainTurnBody(sessionId, turn.id, body, turn, true);
 }
 
 function detachTurnBody(sessionId, section, turn) {
   const body = section.querySelector(':scope > .turn-body');
   if (!body) return;
   body.hidden = true;
-  const cache = turnBodyCache(sessionId);
-  const current = cache.get(turn.id);
-  const signature = current?.body === body && current.signature
-    ? current.signature
-    : body.dataset.turnSignature || '';
-  cache.set(turn.id, {
-    body,
-    signature,
-    expanded: false,
-    lastUsedAt: Date.now()
-  });
-  scheduleRetainedTurnCleanup();
+  const turnId = turn.id;
+  scheduleIdle(() => {
+    if (!section.isConnected || section.dataset.turnId !== turnId || !section.classList.contains('collapsed')) return;
+    const currentBody = section.querySelector(':scope > .turn-body');
+    if (currentBody?.hidden) currentBody.remove();
+  }, 2500);
 }
 
 function setTurnExpandedState(sessionId, section, turn, expanded) {
@@ -1249,77 +1217,6 @@ function setTurnExpandedState(sessionId, section, turn, expanded) {
   if (icon) icon.textContent = expanded ? '▾' : '▸';
   if (expanded) attachTurnBody(sessionId, section, turn);
   else detachTurnBody(sessionId, section, turn);
-  scheduleRetainedTurnCleanup();
-}
-
-function scheduleRetainedTurnCleanup(options = {}) {
-  if (state.retainedTurnCleanupHandle) return;
-  state.retainedTurnCleanupHandle = scheduleIdle(() => {
-    state.retainedTurnCleanupHandle = null;
-    pruneRetainedTurnBodies(options);
-  }, options.forceExpired ? 1000 : 1800);
-}
-
-function pruneRetainedTurnBodies(options = {}) {
-  const now = Date.now();
-  const all = [];
-  for (const [sessionId, cache] of state.retainedTurnBodies.entries()) {
-    if (sessionId !== state.activeId) {
-      for (const entry of cache.values()) entry.body.remove();
-      state.retainedTurnBodies.delete(sessionId);
-      continue;
-    }
-    for (const [turnId, entry] of cache.entries()) all.push({ sessionId, turnId, entry });
-  }
-
-  for (const item of all) {
-    const connected = item.entry.body.isConnected;
-    const expired = now - item.entry.lastUsedAt > TURN_BODY_IDLE_TTL_MS;
-    if (options.forceExpired && !connected && expired) {
-      item.entry.body.remove();
-      state.retainedTurnBodies.get(item.sessionId)?.delete(item.turnId);
-    }
-  }
-
-  const retained = [];
-  for (const [sessionId, cache] of state.retainedTurnBodies.entries()) {
-    for (const [turnId, entry] of cache.entries()) retained.push({ sessionId, turnId, entry });
-  }
-  const overflow = retained
-    .filter((item) => !item.entry.body.isConnected || item.entry.expanded !== true)
-    .sort((a, b) => a.entry.lastUsedAt - b.entry.lastUsedAt);
-  while (retained.length > MAX_RETAINED_TURN_BODIES && overflow.length) {
-    const item = overflow.shift();
-    item.entry.body.remove();
-    state.retainedTurnBodies.get(item.sessionId)?.delete(item.turnId);
-    const index = retained.indexOf(item);
-    if (index >= 0) retained.splice(index, 1);
-  }
-
-  const expandedOverflow = retained
-    .filter((item) => item.entry.body.isConnected && item.entry.expanded === true)
-    .sort((a, b) => a.entry.lastUsedAt - b.entry.lastUsedAt);
-  while (options.collapseExpanded === true && retained.length > MAX_RETAINED_TURN_BODIES && expandedOverflow.length) {
-    const item = expandedOverflow.shift();
-    collapseRetainedTurn(item);
-    const index = retained.indexOf(item);
-    if (index >= 0) retained.splice(index, 1);
-  }
-}
-
-function collapseRetainedTurn(item) {
-  const section = el.messagePane.querySelector(`.conversation-turn[data-turn-id="${CSS.escape(item.turnId)}"]`);
-  if (section) {
-    section.classList.add('collapsed');
-    const button = section.querySelector('.turn-summary-button');
-    const icon = section.querySelector('.turn-toggle-icon');
-    if (button) button.setAttribute('aria-expanded', 'false');
-    if (icon) icon.textContent = '▸';
-  }
-  item.entry.body.remove();
-  item.entry.expanded = false;
-  item.entry.lastUsedAt = Date.now();
-  setTurnCollapsed(item.sessionId, item.turnId, true);
 }
 
 function autoCollapsePreviousTurns(sessionId, turns) {
@@ -1331,6 +1228,7 @@ function autoCollapsePreviousTurns(sessionId, turns) {
   const states = loadTurnCollapseStates(sessionId);
   let changed = false;
   for (const turn of turns) {
+    if (turn.id === latest.id) continue;
     const collapsed = true;
     if (states[turn.id] !== collapsed) {
       states[turn.id] = collapsed;
@@ -2032,6 +1930,14 @@ function updateMessage(sessionId, message) {
 
 async function refreshSessions(options = {}) {
   try {
+    if (options.messages !== false) {
+      loadCachedSessions();
+      if (state.activeId) {
+        setActiveSessionId(state.activeId);
+        renderSessions({ force: true });
+        renderActive({ stickToBottom: true });
+      }
+    }
     const data = await api('/api/sessions');
     state.sessions = data.sessions || [];
     saveSessionCache();
@@ -2043,8 +1949,6 @@ async function refreshSessions(options = {}) {
     setActiveSessionId(state.activeId);
     renderSessions();
     if (state.activeId && options.messages !== false) {
-      renderActive({ messages: false });
-      renderSessionLoading();
       await loadSession(state.activeId, { showLoading: false });
     } else {
       renderActive({ messages: false });
@@ -2065,8 +1969,8 @@ window.cmcAfterLogin = async function cmcAfterLogin() {
 async function loadSession(id, options = {}) {
   lockInitialBottom(id);
   if (options.showLoading !== false && state.activeId === id) {
-    renderActive({ messages: false });
-    renderSessionLoading();
+    loadMessages(id);
+    renderActive({ stickToBottom: true });
   }
   try {
     const knownSession = state.sessions.find((item) => item.id === id);
@@ -2085,17 +1989,19 @@ async function loadSession(id, options = {}) {
     const session = data.session || { id };
     mergeSessionSnapshot(session);
     const cached = state.messages.get(id) || [];
+    const previousSignature = messageListSignature(cached);
     const merged = options.full === true
       ? mergeMessages([], data.messages || [])
       : mergeMessages(cached, data.messages || []);
     const trimmed = trimMessagesForStorage(merged);
+    const nextSignature = messageListSignature(trimmed);
     state.messages.set(id, trimmed);
     state.lastSeq.set(id, lastRealSeq(trimmed));
     setMessagePage(id, data, { preserveOffset: options.full !== true });
     saveSessionCache();
     saveMessages(id);
     renderSessions();
-    renderActive({ stickToBottom: true });
+    renderActive({ messages: previousSignature !== nextSignature, stickToBottom: true });
     connectEvents(id);
     startContextRefreshLoop();
     scheduleResourceCleanup();
@@ -2651,9 +2557,13 @@ async function loadDirectories(dir) {
 }
 
 function autoSizePrompt() {
-  el.promptInput.style.height = 'auto';
-  const maxHeight = Math.min(Math.round(window.innerHeight * 0.28), 180);
-  el.promptInput.style.height = `${Math.min(el.promptInput.scrollHeight, maxHeight)}px`;
+  if (state.promptResizeHandle) return;
+  state.promptResizeHandle = requestAnimationFrame(() => {
+    state.promptResizeHandle = 0;
+    el.promptInput.style.height = 'auto';
+    const maxHeight = Math.min(Math.round(window.innerHeight * 0.28), 180);
+    el.promptInput.style.height = `${Math.min(el.promptInput.scrollHeight, maxHeight)}px`;
+  });
 }
 
 el.promptInput.addEventListener('input', autoSizePrompt);
@@ -2683,7 +2593,6 @@ document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     messageScheduler.flushSaves();
     flushTurnCollapseSaves();
-    pruneRetainedTurnBodies({ forceExpired: true });
     return;
   }
   if (!document.hidden) {
@@ -2696,7 +2605,6 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('pagehide', () => {
   messageScheduler.flushSaves();
   flushTurnCollapseSaves();
-  pruneRetainedTurnBodies({ forceExpired: true });
 });
 
 function registerServiceWorkerLater() {
