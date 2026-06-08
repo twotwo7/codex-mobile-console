@@ -76,6 +76,7 @@ const state = {
   userScrolledDuringRender: false,
   suppressScrollTracking: false,
   drawerOpen: false,
+  drawerPanel: 'sessions',
   sessionListDirty: true,
   sessionRenderLimit: 40,
   loadingOlder: false,
@@ -130,6 +131,9 @@ const el = {
   drawerScrim: document.querySelector('#drawerScrim'),
   openDrawer: document.querySelector('#openDrawer'),
   closeDrawer: document.querySelector('#closeDrawer'),
+  drawerSessionsButton: document.querySelector('#drawerSessionsButton'),
+  drawerSessionsPanel: document.querySelector('#drawerSessionsPanel'),
+  drawerSkillsPanel: document.querySelector('#drawerSkillsPanel'),
   sessionList: document.querySelector('#sessionList'),
   newSessionButton: document.querySelector('#newSessionButton'),
   skillManagerButton: document.querySelector('#skillManagerButton'),
@@ -190,6 +194,10 @@ const el = {
   refreshSkillsButton: document.querySelector('#refreshSkillsButton'),
   skillStatus: document.querySelector('#skillStatus'),
   skillList: document.querySelector('#skillList'),
+  drawerSkillSearch: document.querySelector('#drawerSkillSearch'),
+  drawerRefreshSkillsButton: document.querySelector('#drawerRefreshSkillsButton'),
+  drawerSkillStatus: document.querySelector('#drawerSkillStatus'),
+  drawerSkillList: document.querySelector('#drawerSkillList'),
   skillDetailDialog: document.querySelector('#skillDetailDialog'),
   closeSkillDetailDialog: document.querySelector('#closeSkillDetailDialog'),
   skillDetailTitle: document.querySelector('#skillDetailTitle'),
@@ -435,13 +443,36 @@ function setDrawer(open) {
   document.body.classList.toggle('drawer-open', open);
   el.sessionDrawer.classList.toggle('open', open);
   el.drawerScrim.hidden = !open;
-  if (open && state.sessionListDirty) {
+  if (open && state.drawerPanel === 'sessions' && state.sessionListDirty) {
     requestAnimationFrame(() => renderSessions({ force: true }));
+  }
+  if (open && state.drawerPanel === 'skills') {
+    loadSkills().catch((error) => {
+      el.drawerSkillList.textContent = error.message || '加载失败';
+    });
   }
 }
 
 function resetSessionRenderLimit() {
   state.sessionRenderLimit = state.sessionViewMode === 'recent' ? 20 : SESSION_RENDER_STEP;
+}
+
+function setDrawerPanel(panel) {
+  state.drawerPanel = panel === 'skills' ? 'skills' : 'sessions';
+  const skillsActive = state.drawerPanel === 'skills';
+  el.drawerSessionsButton.classList.toggle('active', !skillsActive);
+  el.skillManagerButton.classList.toggle('active', skillsActive);
+  el.drawerSessionsButton.setAttribute('aria-selected', String(!skillsActive));
+  el.skillManagerButton.setAttribute('aria-selected', String(skillsActive));
+  el.drawerSessionsPanel.classList.toggle('active', !skillsActive);
+  el.drawerSkillsPanel.classList.toggle('active', skillsActive);
+  if (skillsActive) {
+    loadSkills().catch((error) => {
+      el.drawerSkillList.textContent = error.message || '加载失败';
+    });
+  } else {
+    renderSessions({ force: true });
+  }
 }
 
 function openModal(dialog) {
@@ -1659,9 +1690,9 @@ function renderCommandList() {
   }
 }
 
-function renderSkillList() {
-  const query = String(el.skillSearch.value || '').trim().toLowerCase();
-  const skills = state.skills.filter((skill) => {
+function filteredSkills(queryValue) {
+  const query = String(queryValue || '').trim().toLowerCase();
+  return state.skills.filter((skill) => {
     const summaryText = [
       skill.summary?.title,
       skill.summary?.overview,
@@ -1670,11 +1701,15 @@ function renderSkillList() {
     const haystack = `${skill.name} ${skill.title} ${skill.description} ${skill.source} ${summaryText}`.toLowerCase();
     return !query || haystack.includes(query);
   });
-  el.skillList.innerHTML = '';
+}
+
+function renderSkillListInto(list, skills, onSelect) {
+  list.innerHTML = '';
   if (!skills.length) {
-    el.skillList.innerHTML = '<p class="skill-empty">没有匹配的 skill</p>';
+    list.innerHTML = '<p class="skill-empty">没有匹配的 skill</p>';
     return;
   }
+  const fragment = document.createDocumentFragment();
   for (const skill of skills) {
     const item = document.createElement('button');
     item.type = 'button';
@@ -1685,16 +1720,26 @@ function renderSkillList() {
       <span class="skill-row"><strong>$${escapeHtml(skill.name)}</strong><em>${escapeHtml(status)}</em></span>
       <span>${escapeHtml(summary)}</span>
     `;
-    item.addEventListener('click', () => {
-      if (state.skillDialogMode === 'manage') {
-        openSkillDetail(skill);
-      } else {
-        insertPromptText(`$${skill.name} `);
-        closeModal(el.skillDialog);
-      }
-    });
-    el.skillList.append(item);
+    item.addEventListener('click', () => onSelect(skill));
+    fragment.append(item);
   }
+  list.append(fragment);
+}
+
+function renderSkillList() {
+  renderSkillListInto(el.skillList, filteredSkills(el.skillSearch.value), (skill) => {
+    insertPromptText(`$${skill.name} `);
+    closeModal(el.skillDialog);
+  });
+}
+
+function renderDrawerSkillList() {
+  renderSkillListInto(el.drawerSkillList, filteredSkills(el.drawerSkillSearch.value), openSkillDetail);
+}
+
+function renderSkillViews() {
+  renderSkillList();
+  renderDrawerSkillList();
 }
 
 function renderSkillSummaryBlock(skill) {
@@ -1746,54 +1791,63 @@ function openSkillDetail(skill) {
   openModal(el.skillDetailDialog);
 }
 
-function renderSkillStatus(data = {}) {
-  if (!el.skillStatus) return;
+function skillStatusText(data = {}) {
   const scanned = data.lastScanAt ? `扫描 ${formatTime(data.lastScanAt)}` : '尚未完成扫描';
   const scan = data.scanStatus && data.scanStatus !== 'idle' ? ` · ${data.scanStatus}` : '';
   const summary = data.summaryStatus && !['idle', 'disabled'].includes(data.summaryStatus) ? ` · 总结 ${data.summaryStatus}` : '';
   const count = Number.isFinite(Number(data.skills?.length)) ? ` · ${data.skills.length} 个` : '';
   const error = data.scanError || data.summaryError;
-  el.skillStatus.textContent = `${scanned}${count}${scan}${summary}${error ? ` · ${error}` : ''}`;
+  return `${scanned}${count}${scan}${summary}${error ? ` · ${error}` : ''}`;
+}
+
+function renderSkillStatus(data = {}) {
+  const text = skillStatusText(data);
+  if (el.skillStatus) el.skillStatus.textContent = text;
+  if (el.drawerSkillStatus) el.drawerSkillStatus.textContent = text;
 }
 
 async function loadSkills(force = false) {
   const fresh = Date.now() - state.skillsLoadedAt < 60 * 1000;
   if (!force && state.skills.length && fresh) {
-    renderSkillList();
+    renderSkillViews();
     return;
   }
   el.skillList.textContent = '加载中...';
+  el.drawerSkillList.textContent = '加载中...';
   const data = await api('/api/skills');
   state.skills = data.skills || [];
   state.skillsLoadedAt = Date.now();
   renderSkillStatus(data);
-  renderSkillList();
+  renderSkillViews();
 }
 
 async function refreshSkillsInBackground() {
   el.refreshSkillsButton.disabled = true;
+  el.drawerRefreshSkillsButton.disabled = true;
   el.skillStatus.textContent = '已提交后台更新，列表会从缓存读取。';
+  el.drawerSkillStatus.textContent = '已提交后台更新，列表会从缓存读取。';
   try {
     const data = await api('/api/skills/refresh', { method: 'POST' });
     renderSkillStatus(data);
     setTimeout(() => {
       loadSkills(true).catch((error) => {
         el.skillStatus.textContent = error.message || '刷新状态失败';
+        el.drawerSkillStatus.textContent = error.message || '刷新状态失败';
       });
     }, 1200);
   } catch (error) {
     el.skillStatus.textContent = error.message || '提交后台更新失败';
+    el.drawerSkillStatus.textContent = error.message || '提交后台更新失败';
   } finally {
     el.refreshSkillsButton.disabled = false;
+    el.drawerRefreshSkillsButton.disabled = false;
   }
 }
 
-async function openSkillDialog(mode = 'quick') {
-  state.skillDialogMode = mode === 'manage' ? 'manage' : 'quick';
+async function openSkillDialog() {
+  state.skillDialogMode = 'quick';
   if (el.skillDialogHint) {
-    el.skillDialogHint.textContent = state.skillDialogMode === 'manage'
-      ? '点击 skill 查看详情；后台更新不会阻塞聊天。'
-      : '点击 skill 后插入到输入框。';
+    el.skillDialogHint.textContent = '点击 skill 后插入到输入框。';
   }
   openModal(el.skillDialog);
   el.skillSearch.focus();
@@ -2585,18 +2639,23 @@ el.logoutButton.addEventListener('click', async () => {
 el.openDrawer.addEventListener('click', () => setDrawer(true));
 el.closeDrawer.addEventListener('click', () => setDrawer(false));
 el.drawerScrim.addEventListener('click', () => setDrawer(false));
+el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
 el.newSessionButton.addEventListener('click', () => openModal(el.dialog));
-el.skillManagerButton.addEventListener('click', () => openSkillDialog('manage'));
+el.skillManagerButton.addEventListener('click', () => setDrawerPanel('skills'));
 el.commandButton.addEventListener('click', () => {
   renderCommandList();
   openModal(el.commandDialog);
 });
 el.closeCommandDialog.addEventListener('click', () => closeModal(el.commandDialog));
-el.skillButton.addEventListener('click', () => openSkillDialog('quick'));
+el.skillButton.addEventListener('click', () => openSkillDialog());
 el.closeSkillDialog.addEventListener('click', () => closeModal(el.skillDialog));
 el.closeSkillDetailDialog.addEventListener('click', () => closeModal(el.skillDetailDialog));
 el.skillSearch.addEventListener('input', renderSkillList);
+el.drawerSkillSearch.addEventListener('input', renderDrawerSkillList);
 el.refreshSkillsButton.addEventListener('click', () => {
+  refreshSkillsInBackground();
+});
+el.drawerRefreshSkillsButton.addEventListener('click', () => {
   refreshSkillsInBackground();
 });
 el.runtimeButton.addEventListener('click', openRuntimeDialog);

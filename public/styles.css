@@ -293,18 +293,44 @@ button:disabled {
   align-items: end;
 }
 
+.drawer-mode-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.drawer-mode-row button {
+  min-height: 38px;
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.drawer-mode-row button.active {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.drawer-panel {
+  display: none;
+  min-height: 0;
+}
+
+.drawer-panel.active {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 10px;
+  flex: 1;
+}
+
+.drawer-skills-panel.active {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .drawer-action-row .new-session-button,
 .drawer-action-row .drawer-settings-button {
   width: auto;
   min-height: 44px;
-}
-
-.drawer-skill-button {
-  width: 100%;
-  min-height: 38px;
-  background: var(--surface-2);
-  color: var(--text);
-  border: 1px solid var(--line);
 }
 
 .compact-select-label {
@@ -350,6 +376,16 @@ button:disabled {
   gap: 8px;
   overflow: auto;
   padding-right: 2px;
+}
+
+.drawer-skill-toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.drawer-skill-toolbar input {
+  min-width: 0;
 }
 
 .session-group {
@@ -1596,6 +1632,11 @@ button:disabled {
 .skill-list {
   max-height: min(64vh, 560px);
   overflow: auto;
+}
+
+.drawer-skill-list {
+  max-height: none;
+  min-height: 0;
 }
 
 .command-item,
