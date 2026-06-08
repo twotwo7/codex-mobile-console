@@ -313,14 +313,20 @@ function renderedMessageLimit() {
 
 function setMessagePage(sessionId, page, options = {}) {
   const current = loadMessagePage(sessionId) || {};
-  const incomingOffset = Number(page?.nextOffset || 0);
+  const incomingOffset = Number(page?.nextOffset ?? page?.afterSeq ?? 0);
   const offset = options.preserveOffset ? Math.max(Number(current.offset || 0), incomingOffset) : incomingOffset;
   const total = Number(page?.total ?? current.total ?? 0);
   const loaded = state.messages.get(sessionId)?.length || 0;
-  const hasMore = page?.hasMore === true && loaded < maxHistoryLimit();
+  const hasMore = (page?.hasMore === true || page?.hasMoreBefore === true) && loaded < maxHistoryLimit();
+  const currentBeforeSeq = Number(current.beforeSeq || 0);
+  const incomingBeforeSeq = Number(page?.beforeSeq || 0);
   const next = {
     offset,
     total,
+    beforeSeq: currentBeforeSeq && incomingBeforeSeq ? Math.min(currentBeforeSeq, incomingBeforeSeq) : incomingBeforeSeq || currentBeforeSeq,
+    afterSeq: Number(page?.afterSeq || current.afterSeq || 0),
+    latestSeq: Number(page?.latestSeq || current.latestSeq || 0),
+    firstSeq: Number(page?.firstSeq || current.firstSeq || 0),
     hasMore: options.preserveOffset && current.offset > incomingOffset ? current.hasMore === true && loaded < maxHistoryLimit() : hasMore,
     loading: false
   };
@@ -340,8 +346,19 @@ function isMessageCacheFresh(sessionId, session) {
   const page = loadMessagePage(sessionId);
   const messages = state.messages.get(sessionId) || [];
   return Boolean(messages.length)
+    && Boolean(page?.beforeSeq || messages.some((message) => message.orderSeq))
     && page?.sessionUpdatedAt === session.updatedAt
     && Number(page?.offset || 0) >= Math.min(firstPageLimit(), messages.length);
+}
+
+function sessionMessagesUrl(sessionId, params = {}) {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value === undefined || value === null || value === '') continue;
+    search.set(key, String(value));
+  }
+  const suffix = search.toString();
+  return `/api/sessions/${encodeURIComponent(sessionId)}/messages${suffix ? `?${suffix}` : ''}`;
 }
 
 function cleanupIdleResources() {
@@ -1675,7 +1692,7 @@ async function loadSession(id, options = {}) {
       return;
     }
     const limit = options.full === true ? maxHistoryLimit() : firstPageLimit();
-    const data = await api(`/api/sessions/${id}?limit=${encodeURIComponent(limit)}&offset=0`);
+    const data = await api(sessionMessagesUrl(id, { limit }));
     const session = data.session || { id };
     mergeSessionSnapshot(session);
     const cached = state.messages.get(id) || [];
@@ -1719,14 +1736,14 @@ async function loadOlderMessages(sessionId) {
   renderActive({ messages: false });
   try {
     const limit = Math.min(HISTORY_PAGE_SIZE, remaining);
-    const data = await api(`/api/sessions/${sessionId}?limit=${encodeURIComponent(limit)}&offset=${encodeURIComponent(page.offset || 0)}`);
+    const data = await api(sessionMessagesUrl(sessionId, { limit, beforeSeq: page.beforeSeq || '' }));
     if (data.session) mergeSessionSnapshot(data.session);
     const merged = mergeMessages(data.messages || [], loadMessages(sessionId));
     state.messages.set(sessionId, trimMessagesForStorage(merged));
     state.lastSeq.set(sessionId, lastRealSeq(merged));
     setMessagePage(sessionId, {
       ...data,
-      hasMore: data.hasMore === true && merged.length < maxHistoryLimit()
+      hasMore: data.hasMoreBefore === true && merged.length < maxHistoryLimit()
     });
     saveMessages(sessionId);
     if (state.activeId === sessionId) {
@@ -1747,9 +1764,11 @@ async function refreshActiveContext() {
   if (!session?.codexSessionId || !state.online || state.contextRefreshInFlight) return;
   state.contextRefreshInFlight = true;
   try {
-    const data = await api(`/api/sessions/${session.id}?limit=${encodeURIComponent(firstPageLimit())}&offset=0`);
-    const nextMessages = data.messages || [];
+    const page = state.messagePages.get(session.id);
     const currentMessages = loadMessages(session.id);
+    const afterSeq = page?.latestSeq || Math.max(0, ...currentMessages.map((message) => Number(message.orderSeq || 0)).filter(Boolean));
+    const data = await api(sessionMessagesUrl(session.id, { limit: firstPageLimit(), afterSeq }));
+    const nextMessages = data.messages || [];
     const currentLast = currentMessages.at(-1);
     const nextLast = nextMessages.at(-1);
     const mergedMessages = mergeMessages(currentMessages, nextMessages);
@@ -1760,10 +1779,12 @@ async function refreshActiveContext() {
     if (changed) {
       state.messages.set(session.id, trimMessagesForStorage(mergedMessages));
       state.lastSeq.set(session.id, lastRealSeq(mergedMessages));
-      const page = state.messagePages.get(session.id);
-      if (!page) setMessagePage(session.id, data);
       messageScheduler.scheduleSave(session.id);
     }
+    setMessagePage(session.id, {
+      ...data,
+      hasMoreBefore: (state.messagePages.get(session.id)?.hasMore === true) || data.hasMoreBefore === true
+    }, { preserveOffset: true });
     if (changed || sessionChanged) {
       if (state.activeId === session.id) {
         const stickToBottom = shouldStickToBottom(session.id);

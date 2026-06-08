@@ -1619,11 +1619,7 @@ function compareDisplayMessages(a, b) {
   return Number(a.seq || 0) - Number(b.seq || 0);
 }
 
-async function displayMessagePage(session, options = {}) {
-  const rawLimit = Number(options.limit ?? 500);
-  const rawOffset = Number(options.offset ?? 0);
-  const limit = Number.isFinite(rawLimit) ? Math.max(0, Math.min(5000, Math.floor(rawLimit))) : 500;
-  const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.min(50000, Math.floor(rawOffset))) : 0;
+async function indexedDisplayMessages(session) {
   const codexMessages = session.codexSessionId ? await readCodexMessages(session.codexSessionId) : [];
   const out = [];
   const byDedupeKey = new Map();
@@ -1645,7 +1641,26 @@ async function displayMessagePage(session, options = {}) {
       byDedupeKey.set(dedupeKey, candidates);
     }
   }
-  const sorted = out.sort(compareDisplayMessages);
+  return out.sort(compareDisplayMessages).map((message, index) => ({
+    ...message,
+    orderSeq: index + 1
+  }));
+}
+
+function normalizeMessageQueryLimit(value, fallback = 500) {
+  const raw = Number(value ?? fallback);
+  return Number.isFinite(raw) ? Math.max(0, Math.min(5000, Math.floor(raw))) : fallback;
+}
+
+function normalizeMessageQueryOffset(value) {
+  const raw = Number(value ?? 0);
+  return Number.isFinite(raw) ? Math.max(0, Math.min(50000, Math.floor(raw))) : 0;
+}
+
+async function displayMessagePage(session, options = {}) {
+  const limit = normalizeMessageQueryLimit(options.limit, 500);
+  const offset = normalizeMessageQueryOffset(options.offset);
+  const sorted = await indexedDisplayMessages(session);
   const total = sorted.length;
   const end = Math.max(0, total - offset);
   const start = limit > 0 ? Math.max(0, end - limit) : 0;
@@ -1658,6 +1673,49 @@ async function displayMessagePage(session, options = {}) {
     total,
     nextOffset: offset + messages.length,
     hasMore: start > 0
+  };
+}
+
+async function displayMessageRange(session, options = {}) {
+  const limit = normalizeMessageQueryLimit(options.limit, 120);
+  const sorted = await indexedDisplayMessages(session);
+  const total = sorted.length;
+  const firstSeq = sorted[0]?.orderSeq || 0;
+  const latestSeq = sorted.at(-1)?.orderSeq || 0;
+  const afterSeq = Number(options.afterSeq || 0);
+  const beforeSeq = Number(options.beforeSeq || 0);
+
+  if (Number.isFinite(afterSeq) && afterSeq > 0) {
+    const messages = sorted.filter((message) => Number(message.orderSeq || 0) > afterSeq).slice(0, limit);
+    return {
+      messages,
+      limit,
+      total,
+      firstSeq,
+      latestSeq,
+      beforeSeq: messages[0]?.orderSeq || 0,
+      afterSeq,
+      hasMoreBefore: Boolean(messages.length && messages[0].orderSeq > firstSeq),
+      hasMoreAfter: Boolean(messages.length && messages.at(-1).orderSeq < latestSeq)
+    };
+  }
+
+  const endIndex = Number.isFinite(beforeSeq) && beforeSeq > 0
+    ? sorted.findIndex((message) => Number(message.orderSeq || 0) >= beforeSeq)
+    : sorted.length;
+  const end = endIndex < 0 ? sorted.length : Math.max(0, endIndex);
+  const start = limit > 0 ? Math.max(0, end - limit) : 0;
+  const messages = sorted.slice(start, end);
+  return {
+    messages,
+    limit,
+    total,
+    firstSeq,
+    latestSeq,
+    beforeSeq: messages[0]?.orderSeq || 0,
+    afterSeq: messages.at(-1)?.orderSeq || 0,
+    hasMoreBefore: start > 0,
+    hasMoreAfter: end < sorted.length
   };
 }
 
@@ -2199,6 +2257,18 @@ async function handleApi(req, res, url) {
       json(res, 404, { error: 'upload_not_found' });
     }
     return;
+  }
+
+  const messageListMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/);
+  if (messageListMatch && req.method === 'GET') {
+    const session = state.sessions[decodeURIComponent(messageListMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    const range = await displayMessageRange(session, {
+      limit: url.searchParams.get('limit'),
+      beforeSeq: url.searchParams.get('beforeSeq'),
+      afterSeq: url.searchParams.get('afterSeq')
+    });
+    return json(res, 200, { session: publicSession(session), ...range });
   }
 
   if (url.pathname === '/api/projects') {
