@@ -786,15 +786,9 @@ function renderSessionButton(session) {
   return row;
 }
 
-function renderActive(options = {}) {
-  const shouldRenderMessages = options.messages !== false;
-  const session = state.sessions.find((item) => item.id === state.activeId);
+function renderActiveStatus(session = getActiveSession()) {
   const isRunning = isSessionRunning(session);
   const canStop = session?.canStop !== false && isRunning && session?.status !== 'stopping';
-  el.emptyState.hidden = Boolean(session);
-  el.messagePane.hidden = !session;
-  el.promptInput.disabled = !session;
-  el.sendButton.disabled = !session || state.sending;
   el.stopButton.hidden = !isRunning;
   el.stopButton.disabled = !session || !canStop;
   el.stopButton.setAttribute('aria-label', canStop ? '停止当前任务' : '正在停止当前任务');
@@ -813,7 +807,26 @@ function renderActive(options = {}) {
 
   el.activeTitle.textContent = session.title;
   el.activeMeta.textContent = session.cwd || '';
-  setBadge(isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线', isRunning ? 'running' : state.online ? 'online' : '');
+  setBadge(
+    isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线',
+    isRunning ? 'running' : state.online ? 'online' : ''
+  );
+  updateFavoritesButton();
+}
+
+function renderActive(options = {}) {
+  const shouldRenderMessages = options.messages !== false;
+  const session = state.sessions.find((item) => item.id === state.activeId);
+  el.emptyState.hidden = Boolean(session);
+  el.messagePane.hidden = !session;
+  el.promptInput.disabled = !session;
+  el.sendButton.disabled = !session || state.sending;
+  renderActiveStatus(session);
+
+  if (!session) {
+    return;
+  }
+
   if (shouldRenderMessages) {
     renderMessages(session.id, {
       stickToBottom: options.stickToBottom ?? shouldStickToBottom(session.id),
@@ -826,7 +839,6 @@ function renderActive(options = {}) {
     if (options.stickToBottom === true && shouldFollowNewMessage(session.id)) settleMessagesToBottom();
     syncStreamingMarkers();
   }
-  updateFavoritesButton();
 }
 
 function setProgrammaticMessageScrollTop(value) {
@@ -979,6 +991,7 @@ function mergeSessionSnapshot(nextSession) {
   if (index < 0) {
     state.sessions.unshift(patch);
     saveSessionCache();
+    if (nextSession.id === state.activeId) renderActiveStatus(patch);
     return true;
   }
 
@@ -1008,6 +1021,7 @@ function mergeSessionSnapshot(nextSession) {
 
   state.sessions = state.sessions.map((item) => item.id === next.id ? next : item);
   saveSessionCache();
+  if (next.id === state.activeId) renderActiveStatus(next);
   return true;
 }
 

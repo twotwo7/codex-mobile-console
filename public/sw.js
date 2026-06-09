@@ -1,5 +1,5 @@
-const CACHE_NAME = 'codex-console-v125';
-const ASSETS = ['/', '/index.html', '/styles.css?v=99', '/app.js?v=109', '/message-scheduler.js?v=2', '/browser-utils.js?v=1', '/format-utils.js?v=1', '/message-utils.js?v=1', '/message-view.js?v=3', '/prompt-actions.js?v=4', '/queue-view.js?v=3', '/skill-view.js?v=3', '/manifest.json?v=2'];
+const CACHE_NAME = 'codex-console-v126';
+const ASSETS = ['/', '/index.html', '/styles.css?v=99', '/app.js?v=110', '/message-scheduler.js?v=2', '/browser-utils.js?v=1', '/format-utils.js?v=1', '/message-utils.js?v=1', '/message-view.js?v=3', '/prompt-actions.js?v=4', '/queue-view.js?v=3', '/skill-view.js?v=3', '/manifest.json?v=2'];
 const CACHEABLE_PATHS = new Set(['/', '/index.html', '/styles.css', '/app.js', '/message-scheduler.js', '/browser-utils.js', '/format-utils.js', '/message-utils.js', '/message-view.js', '/prompt-actions.js', '/queue-view.js', '/skill-view.js', '/manifest.json']);
 
 self.addEventListener('install', (event) => {
