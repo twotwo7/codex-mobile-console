@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=97">
+    <link rel="stylesheet" href="/styles.css?v=98">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -145,7 +145,16 @@
         <header class="topbar">
           <button id="openDrawer" class="icon-button" type="button" aria-label="打开会话列表">☰</button>
           <div class="top-title">
-            <strong id="activeTitle">Codex Console</strong>
+            <div class="top-title-row">
+              <strong id="activeTitle">Codex Console</strong>
+              <div class="top-more">
+                <button id="topMoreButton" class="top-more-button" type="button" aria-label="更多会话操作" aria-haspopup="menu" aria-expanded="false">▾</button>
+                <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
+                  <button id="favoritesButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">只看收藏</button>
+                  <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
+                </div>
+              </div>
+            </div>
             <span id="activeMeta">未选择会话</span>
           </div>
           <div class="top-actions">
@@ -153,13 +162,6 @@
             <button id="stopButton" class="top-stop-button" type="button" aria-label="停止当前任务" title="停止当前任务" hidden>
               <span aria-hidden="true"></span>
             </button>
-            <div class="top-more">
-              <button id="topMoreButton" class="top-more-button" type="button" aria-label="更多会话操作" aria-haspopup="menu" aria-expanded="false">⋯</button>
-              <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
-                <button id="favoritesButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">只看收藏</button>
-                <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
-              </div>
-            </div>
           </div>
         </header>
 
@@ -343,6 +345,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=107" type="module"></script>
+    <script src="/app.js?v=108" type="module"></script>
   </body>
 </html>

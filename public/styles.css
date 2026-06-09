@@ -833,11 +833,22 @@ button:disabled {
   flex: 1;
 }
 
+.top-title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+  min-width: 0;
+}
+
 .top-title strong,
 .top-title span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.top-title strong {
+  min-width: 0;
 }
 
 .top-title span {
@@ -937,15 +948,15 @@ button:disabled {
 
 .top-more-button {
   flex: 0 0 auto;
-  width: 34px;
-  min-width: 34px;
-  min-height: 34px;
+  width: 24px;
+  min-width: 24px;
+  min-height: 24px;
   padding: 0;
   border: 1px solid transparent;
-  border-radius: var(--radius);
+  border-radius: 6px;
   background: transparent;
   color: var(--muted);
-  font-size: 22px;
+  font-size: 13px;
   line-height: 1;
 }
 

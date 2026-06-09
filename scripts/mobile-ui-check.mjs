@@ -28,23 +28,28 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=97">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=98">
       </head>
       <body>
         <main class="workspace">
           <header class="topbar">
             <button class="icon-button" type="button">☰</button>
-            <div class="top-title"><strong>移动端检查</strong><span>/root/Projects</span></div>
+            <div class="top-title">
+              <div class="top-title-row">
+                <strong>移动端检查</strong>
+                <div class="top-more">
+                  <button class="top-more-button" type="button" aria-label="更多会话操作" aria-expanded="true">▾</button>
+                  <div class="top-more-menu" role="menu">
+                    <button class="top-menu-item active" type="button">已筛选收藏</button>
+                    <button class="top-menu-item" type="button">运行时信息</button>
+                  </div>
+                </div>
+              </div>
+              <span>/root/Projects</span>
+            </div>
             <div class="top-actions">
               <span class="connection-badge" data-icon="online" title="在线"></span>
               <button class="top-stop-button" type="button" aria-label="停止当前任务"><span aria-hidden="true"></span></button>
-              <div class="top-more">
-                <button class="top-more-button" type="button" aria-label="更多会话操作" aria-expanded="true">⋯</button>
-                <div class="top-more-menu" role="menu">
-                  <button class="top-menu-item active" type="button">已筛选收藏</button>
-                  <button class="top-menu-item" type="button">运行时信息</button>
-                </div>
-              </div>
             </div>
           </header>
           <section class="message-pane">
