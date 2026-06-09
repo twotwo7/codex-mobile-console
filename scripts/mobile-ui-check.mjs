@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=94">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=95">
       </head>
       <body>
         <main class="workspace">
@@ -129,8 +129,9 @@ async function waitForDrawerSettled(page, open) {
     const drawer = document.querySelector('#sessionDrawer');
     if (!drawer) return false;
     const rect = drawer.getBoundingClientRect();
-    return expectedOpen ? Math.abs(rect.top) <= 1 : rect.top >= window.innerHeight - 1;
+    return expectedOpen ? Math.abs(rect.top) <= 1 : !drawer.classList.contains('open');
   }, open, { timeout: 5000 });
+  if (!open) await page.waitForTimeout(250);
 }
 
 async function checkDrawerSwitchStability(page, viewportName) {

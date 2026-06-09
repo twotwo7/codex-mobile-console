@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=94">
+    <link rel="stylesheet" href="/styles.css?v=95">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -40,7 +40,7 @@
         </div>
         <section id="drawerSessionsPanel" class="drawer-panel active" role="tabpanel" aria-labelledby="drawerSessionsButton">
           <div class="drawer-session-controls">
-            <div class="drawer-view-row" role="radiogroup" aria-label="会话视图">
+            <div class="segmented-control drawer-view-row" role="radiogroup" aria-label="会话视图">
               <button type="button" data-session-view="recent">最近</button>
               <button type="button" data-session-view="flat">平铺</button>
               <button type="button" data-session-view="cwd">目录</button>
@@ -65,7 +65,7 @@
           <div id="drawerSkillList" class="skill-list drawer-skill-list">加载中...</div>
         </section>
         <section id="drawerSettingsPanel" class="drawer-panel drawer-settings-panel" role="tabpanel" aria-labelledby="drawerSettingsButton">
-          <div class="settings-tabs" role="tablist" aria-label="设置分类">
+          <div class="segmented-control settings-tabs" role="tablist" aria-label="设置分类">
             <button class="active" type="button" data-settings-tab="ui">界面</button>
             <button type="button" data-settings-tab="run">运行</button>
             <button type="button" data-settings-tab="storage">存储</button>
