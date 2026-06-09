@@ -1578,6 +1578,7 @@ async function displayMessageRange(session, options = {}) {
   const latestSeq = sorted.at(-1)?.orderSeq || 0;
   const afterSeq = Number(options.afterSeq || 0);
   const beforeSeq = Number(options.beforeSeq || 0);
+  const previousTurn = options.previousTurn === true || options.previousTurn === '1' || options.previousTurn === 'true';
 
   if (Number.isFinite(afterSeq) && afterSeq > 0) {
     const messages = sorted.filter((message) => Number(message.orderSeq || 0) > afterSeq).slice(0, limit);
@@ -1598,7 +1599,11 @@ async function displayMessageRange(session, options = {}) {
     ? sorted.findIndex((message) => Number(message.orderSeq || 0) >= beforeSeq)
     : sorted.length;
   const end = endIndex < 0 ? sorted.length : Math.max(0, endIndex);
-  const start = limit > 0 ? Math.max(0, end - limit) : 0;
+  let start = limit > 0 ? Math.max(0, end - limit) : 0;
+  if (previousTurn) {
+    start = Math.max(0, end - 1);
+    while (start > 0 && sorted[start]?.role !== 'user') start -= 1;
+  }
   const messages = sorted.slice(start, end);
   return {
     messages,
@@ -2157,7 +2162,8 @@ async function handleApi(req, res, url) {
     const range = await displayMessageRange(session, {
       limit: url.searchParams.get('limit'),
       beforeSeq: url.searchParams.get('beforeSeq'),
-      afterSeq: url.searchParams.get('afterSeq')
+      afterSeq: url.searchParams.get('afterSeq'),
+      previousTurn: url.searchParams.get('previousTurn')
     });
     return json(res, 200, { session: publicSession(session), ...range });
   }

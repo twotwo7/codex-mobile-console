@@ -26,6 +26,7 @@ const state = {
   expandedCwds: new Set(storedExpandedCwds),
   messages: new Map(),
   messagePages: new Map(),
+  messageRenderLimits: new Map(),
   messageCollapseStates: new Map(),
   lastSeq: new Map(),
   eventSource: null,
@@ -55,7 +56,6 @@ const state = {
   skillDialogMode: 'quick'
 };
 
-const HISTORY_PAGE_SIZE = 120;
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
 const MAX_BROWSER_CACHED_MESSAGES = 360;
@@ -350,6 +350,16 @@ function maxHistoryLimit() {
 
 function renderedMessageLimit() {
   return isMobileViewport() ? MOBILE_MAX_RENDERED_MESSAGES : DESKTOP_MAX_RENDERED_MESSAGES;
+}
+
+function sessionRenderedMessageLimit(sessionId = state.activeId) {
+  return Math.min(maxHistoryLimit(), Math.max(renderedMessageLimit(), Number(state.messageRenderLimits.get(sessionId) || 0)));
+}
+
+function expandRenderedMessageLimit(sessionId, count) {
+  if (!sessionId || !Number.isFinite(count) || count <= 0) return;
+  const current = sessionRenderedMessageLimit(sessionId);
+  state.messageRenderLimits.set(sessionId, Math.min(maxHistoryLimit(), current + count));
 }
 
 function setMessagePage(sessionId, page, options = {}) {
@@ -919,13 +929,6 @@ function renderMessages(sessionId, options = {}) {
   el.messagePane.innerHTML = '';
   const olderControl = renderOlderMessagesControl(sessionId);
   if (olderControl) el.messagePane.append(olderControl);
-  const allMessages = state.showStarredOnly ? messages : loadMessages(sessionId);
-  if (!state.showStarredOnly && allMessages.length > messages.length) {
-    const clipped = document.createElement('div');
-    clipped.className = 'session-loading compact';
-    clipped.textContent = `仅渲染最近 ${messages.length} 条，向上可加载更早内容`;
-    el.messagePane.append(clipped);
-  }
   if (state.showStarredOnly && !messages.length) {
     el.messagePane.append(renderFavoriteEmpty());
   }
@@ -981,7 +984,9 @@ function renderOlderMessagesControl(sessionId) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'older-messages-button';
-  button.textContent = page.loading ? '加载中...' : `加载更早 · ${page.offset}/${page.total || '?'}`;
+  button.textContent = page.loading ? '加载上一轮中...' : '加载上一轮对话';
+  button.title = '加载到上一轮对话的开始';
+  button.setAttribute('aria-label', button.title);
   button.disabled = page.loading === true;
   button.addEventListener('click', () => loadOlderMessages(sessionId));
   return button;
@@ -1002,7 +1007,7 @@ function closeImageViewer() {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
-  const maxRendered = renderedMessageLimit();
+  const maxRendered = sessionRenderedMessageLimit(sessionId);
   const visible = state.showStarredOnly ? filtered : filtered.slice(-maxRendered);
   return mergeDisplayMessages(visible);
 }
@@ -1806,12 +1811,12 @@ async function loadOlderMessages(sessionId) {
   const previousAnchor = firstVisibleMessageAnchor();
   renderActive({ messages: false });
   try {
-    const limit = Math.min(HISTORY_PAGE_SIZE, remaining);
-    const data = await api(sessionMessagesUrl(sessionId, { limit, beforeSeq: page.beforeSeq || '' }));
+    const data = await api(sessionMessagesUrl(sessionId, { previousTurn: 1, beforeSeq: page.beforeSeq || '' }));
     if (data.session) mergeSessionSnapshot(data.session);
     const merged = mergeMessages(data.messages || [], loadMessages(sessionId));
     state.messages.set(sessionId, trimMessagesForStorage(merged));
     state.lastSeq.set(sessionId, lastRealSeq(merged));
+    expandRenderedMessageLimit(sessionId, (data.messages || []).length);
     setMessagePage(sessionId, {
       ...data,
       hasMore: data.hasMoreBefore === true && merged.length < maxHistoryLimit()
