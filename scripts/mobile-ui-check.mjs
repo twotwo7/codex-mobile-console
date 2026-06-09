@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=83">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=94">
       </head>
       <body>
         <main class="workspace">
@@ -108,6 +108,52 @@ async function checkSkillDialog(page) {
   await page.waitForSelector('#skillDialog', { state: 'hidden', timeout: 5000 });
 }
 
+function assertStableBox(before, after, label, tolerance = 1) {
+  for (const key of ['x', 'y', 'width', 'height']) {
+    if (Math.abs(before[key] - after[key]) > tolerance) {
+      throw new Error(`${label} shifted on drawer switch: ${key} ${before[key]} -> ${after[key]}`);
+    }
+  }
+}
+
+async function getDrawerHeadBoxes(page) {
+  return {
+    titleSlot: await assertVisibleBox(page, '.drawer-title-slot', 'drawer title slot'),
+    modeRow: await assertVisibleBox(page, '#drawerModeRow', 'drawer mode row'),
+    closeButton: await assertVisibleBox(page, '#closeDrawer', 'drawer close button')
+  };
+}
+
+async function waitForDrawerSettled(page, open) {
+  await page.waitForFunction((expectedOpen) => {
+    const drawer = document.querySelector('#sessionDrawer');
+    if (!drawer) return false;
+    const rect = drawer.getBoundingClientRect();
+    return expectedOpen ? Math.abs(rect.top) <= 1 : rect.top >= window.innerHeight - 1;
+  }, open, { timeout: 5000 });
+}
+
+async function checkDrawerSwitchStability(page, viewportName) {
+  await page.click('#openDrawer');
+  await page.waitForSelector('#sessionDrawer.open', { timeout: 5000 });
+  await waitForDrawerSettled(page, true);
+  const baseline = await getDrawerHeadBoxes(page);
+
+  for (const selector of ['#skillManagerButton', '#drawerSettingsButton', '#drawerSessionsButton']) {
+    await page.click(selector);
+    await page.waitForFunction((activeSelector) => document.querySelector(activeSelector)?.classList.contains('active'), selector, { timeout: 5000 });
+    const current = await getDrawerHeadBoxes(page);
+    assertStableBox(baseline.titleSlot, current.titleSlot, `drawer title slot after ${selector}`);
+    assertStableBox(baseline.modeRow, current.modeRow, `drawer mode row after ${selector}`);
+    assertStableBox(baseline.closeButton, current.closeButton, `drawer close button after ${selector}`);
+  }
+
+  await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-drawer.png`), fullPage: false });
+  await page.click('#closeDrawer');
+  await page.waitForSelector('#sessionDrawer:not(.open)', { timeout: 5000 });
+  await waitForDrawerSettled(page, false);
+}
+
 async function run() {
   await mkdir(OUT_DIR, { recursive: true });
   const browser = await chromium.launch({
@@ -120,6 +166,7 @@ async function run() {
       const context = await browser.newContext({ viewport, isMobile: true, deviceScaleFactor: 2 });
       const page = await context.newPage();
       await loginSmoke(page);
+      await checkDrawerSwitchStability(page, viewport.name);
       await checkSkillDialog(page);
       await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-app.png`), fullPage: true });
 

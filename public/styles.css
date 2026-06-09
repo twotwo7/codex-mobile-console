@@ -270,16 +270,20 @@ button:disabled {
 
 .drawer-head {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: 64px minmax(0, 1fr) 34px;
   align-items: center;
 }
 
 .drawer-title-slot {
+  display: flex;
+  align-items: center;
+  height: 34px;
   min-width: 0;
 }
 
 .drawer-title-slot > strong {
   font-size: 15px;
+  line-height: 1;
   white-space: nowrap;
 }
 
@@ -305,6 +309,7 @@ button:disabled {
   display: flex;
   justify-content: flex-end;
   gap: 4px;
+  width: 34px;
 }
 
 .drawer-tool-button {
