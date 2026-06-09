@@ -1014,12 +1014,11 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 34px;
+  min-height: 30px;
   margin-left: auto;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  background: var(--surface-2);
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
@@ -1034,9 +1033,7 @@ button:disabled {
 }
 
 .bottom-follow-toggle:has(input:checked) {
-  color: #06111f;
-  background: #4da3ff;
-  border-color: transparent;
+  color: var(--text);
 }
 
 .prompt-row {
