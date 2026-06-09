@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=84">
+    <link rel="stylesheet" href="/styles.css?v=88">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -26,29 +26,29 @@
     <div id="appView" class="app-shell" hidden>
       <aside id="sessionDrawer" class="session-drawer" aria-label="会话列表">
         <div class="drawer-head">
-          <div>
-            <p class="eyebrow">Sessions</p>
-            <h2>Codex Console</h2>
+          <strong id="drawerTitle">会话</strong>
+          <div class="drawer-mode-row" role="tablist" aria-label="侧边栏视图">
+            <button id="drawerSessionsButton" class="active" type="button" role="tab" aria-selected="true" aria-controls="drawerSessionsPanel">会话</button>
+            <button id="skillManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSkillsPanel">Skills</button>
           </div>
-          <button id="closeDrawer" class="icon-button" type="button" aria-label="关闭会话列表">×</button>
-        </div>
-        <div class="drawer-mode-row" role="tablist" aria-label="侧边栏视图">
-          <button id="drawerSessionsButton" class="active" type="button" role="tab" aria-selected="true" aria-controls="drawerSessionsPanel">会话</button>
-          <button id="skillManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSkillsPanel">Skills</button>
+          <div class="drawer-toolbar">
+            <button id="newSessionButton" class="drawer-tool-button" type="button" aria-label="新建会话" title="新建会话">+</button>
+            <button id="settingsButton" class="drawer-tool-button" type="button" aria-label="设置" title="设置">⚙</button>
+            <button id="closeDrawer" class="drawer-tool-button" type="button" aria-label="关闭会话列表" title="关闭">×</button>
+          </div>
         </div>
         <section id="drawerSessionsPanel" class="drawer-panel active" role="tabpanel" aria-labelledby="drawerSessionsButton">
-          <div class="drawer-action-row">
-            <button id="newSessionButton" class="new-session-button" type="button">新建</button>
-            <label class="compact-select-label">
-              <span>视图</span>
-              <select id="sessionViewMode" name="sessionViewMode">
-                <option value="recent">最近</option>
-                <option value="flat">平铺</option>
-                <option value="cwd">按目录</option>
-                <option value="trash">回收站</option>
-              </select>
-            </label>
-            <button id="settingsButton" class="drawer-settings-button" type="button">设置</button>
+          <div class="drawer-view-row" role="radiogroup" aria-label="会话视图">
+            <button type="button" data-session-view="recent">最近</button>
+            <button type="button" data-session-view="flat">平铺</button>
+            <button type="button" data-session-view="cwd">目录</button>
+            <button type="button" data-session-view="trash">回收站</button>
+            <select id="sessionViewMode" name="sessionViewMode" class="visually-hidden" tabindex="-1" aria-hidden="true">
+              <option value="recent">最近</option>
+              <option value="flat">平铺</option>
+              <option value="cwd">按目录</option>
+              <option value="trash">回收站</option>
+            </select>
           </div>
           <div id="sessionList" class="session-list"></div>
         </section>
@@ -60,7 +60,7 @@
           <p id="drawerSkillStatus" class="skill-status">读取缓存列表，不阻塞聊天主流程。</p>
           <div id="drawerSkillList" class="skill-list drawer-skill-list">加载中...</div>
         </section>
-        <button id="logoutButton" class="ghost-button" type="button">退出登录</button>
+        <button id="logoutButton" class="ghost-button drawer-logout-button" type="button">退出登录</button>
       </aside>
 
       <div id="drawerScrim" class="drawer-scrim" hidden></div>
@@ -325,6 +325,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=99" type="module"></script>
+    <script src="/app.js?v=101" type="module"></script>
   </body>
 </html>

@@ -104,10 +104,12 @@ const el = {
   drawerScrim: document.querySelector('#drawerScrim'),
   openDrawer: document.querySelector('#openDrawer'),
   closeDrawer: document.querySelector('#closeDrawer'),
+  drawerTitle: document.querySelector('#drawerTitle'),
   drawerSessionsButton: document.querySelector('#drawerSessionsButton'),
   drawerSessionsPanel: document.querySelector('#drawerSessionsPanel'),
   drawerSkillsPanel: document.querySelector('#drawerSkillsPanel'),
   sessionList: document.querySelector('#sessionList'),
+  sessionViewButtons: [...document.querySelectorAll('[data-session-view]')],
   newSessionButton: document.querySelector('#newSessionButton'),
   skillManagerButton: document.querySelector('#skillManagerButton'),
   settingsButton: document.querySelector('#settingsButton'),
@@ -233,7 +235,7 @@ applyTheme(state.theme);
 el.themeSelect.value = state.theme;
 el.autoFollowBottom.checked = state.autoFollowBottom;
 el.elevatedRun.checked = state.elevated;
-el.sessionViewMode.value = state.sessionViewMode;
+syncSessionViewControls();
 updateRunSettingsState();
 
 function cacheKey(id) {
@@ -523,9 +525,29 @@ function resetSessionRenderLimit() {
   state.sessionRenderLimit = state.sessionViewMode === 'recent' ? 20 : SESSION_RENDER_STEP;
 }
 
+function syncSessionViewControls() {
+  if (el.sessionViewMode) el.sessionViewMode.value = state.sessionViewMode;
+  for (const button of el.sessionViewButtons) {
+    const active = button.dataset.sessionView === state.sessionViewMode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-checked', String(active));
+  }
+}
+
+function setSessionViewMode(mode) {
+  if (!['recent', 'flat', 'cwd', 'trash'].includes(mode)) return;
+  state.sessionViewMode = mode;
+  storageSet('cmc.sessionViewMode', state.sessionViewMode);
+  resetSessionRenderLimit();
+  syncSessionViewControls();
+  renderSessions({ force: true });
+}
+
 function setDrawerPanel(panel) {
   state.drawerPanel = panel === 'skills' ? 'skills' : 'sessions';
   const skillsActive = state.drawerPanel === 'skills';
+  if (el.drawerTitle) el.drawerTitle.textContent = skillsActive ? 'Skills' : '会话';
+  if (el.newSessionButton) el.newSessionButton.hidden = skillsActive;
   el.drawerSessionsButton.classList.toggle('active', !skillsActive);
   el.skillManagerButton.classList.toggle('active', skillsActive);
   el.drawerSessionsButton.setAttribute('aria-selected', String(!skillsActive));
@@ -655,77 +677,85 @@ function appendSessionListMore(fragment, total, visibleCount) {
   fragment.append(button);
 }
 
+function closeSessionMenus(except = null) {
+  for (const menu of el.sessionList.querySelectorAll('.session-menu[open]')) {
+    if (menu !== except) menu.removeAttribute('open');
+  }
+}
+
+function sessionStatusKind(session) {
+  if (session.trashedAt) return 'trashed';
+  if (isSessionRunning(session)) return 'running';
+  if (session.status === 'error') return 'error';
+  if (session.source === 'codex') return 'external';
+  return 'idle';
+}
+
+function sessionStatusLabel(session) {
+  if (session.trashedAt) return '回收站';
+  if (isSessionRunning(session)) return session.status === 'stopping' ? '停止中' : '运行中';
+  if (session.source === 'codex') return '全局 Codex';
+  return session.status || 'idle';
+}
+
+function formatSessionCwd(cwd = '') {
+  return cwd.replace(/^\/root\/Projects\/?/, '~/Projects/');
+}
+
+function appendSessionMenuAction(menu, label, action, options = {}) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = options.danger ? 'danger' : '';
+  button.textContent = label;
+  button.addEventListener('click', (event) => {
+    event.stopPropagation();
+    menu.removeAttribute('open');
+    action();
+  });
+  menu.append(button);
+}
+
 function renderSessionButton(session) {
   const row = document.createElement('div');
-  row.className = 'session-entry';
+  row.className = `session-entry ${session.id === state.activeId ? 'active' : ''}`.trim();
 
   const button = document.createElement('button');
   button.type = 'button';
   button.className = `session-item ${session.id === state.activeId ? 'active' : ''} ${session.source === 'codex' ? 'external' : ''} ${session.trashedAt ? 'trashed' : ''}`.trim();
   button.innerHTML = `
-    <strong>${escapeHtml(session.title)}</strong>
-    <span>${escapeHtml(session.trashedAt ? '回收站' : session.source === 'codex' ? '全局 Codex' : session.status || 'idle')} · ${escapeHtml(formatTime(session.trashedAt || session.updatedAt))}</span>
-    <span>${escapeHtml(session.cwd || '')}</span>
+    <span class="session-title-row">
+      <i class="session-status-dot ${sessionStatusKind(session)}" aria-hidden="true"></i>
+      <strong>${escapeHtml(session.title || '未命名会话')}</strong>
+      <time>${escapeHtml(formatTime(session.trashedAt || session.updatedAt))}</time>
+    </span>
+    <span class="session-meta-row">${escapeHtml(sessionStatusLabel(session))} · ${escapeHtml(formatSessionCwd(session.cwd || ''))}</span>
   `;
   if (!session.trashedAt) button.addEventListener('click', () => selectSession(session.id));
 
+  const menu = document.createElement('details');
+  menu.className = 'session-menu';
+  menu.addEventListener('toggle', () => {
+    if (menu.open) closeSessionMenus(menu);
+  });
+  const summary = document.createElement('summary');
+  summary.setAttribute('aria-label', `打开会话操作 ${session.title || session.id}`);
+  summary.textContent = '⋯';
+  summary.addEventListener('click', (event) => event.stopPropagation());
+  menu.append(summary);
+
   if (session.trashedAt) {
     row.classList.add('trashed');
-    const restoreButton = document.createElement('button');
-    restoreButton.type = 'button';
-    restoreButton.className = 'session-restore-button';
-    restoreButton.textContent = '还';
-    restoreButton.setAttribute('aria-label', `还原会话 ${session.title || session.id}`);
-    restoreButton.addEventListener('click', (event) => {
-      event.stopPropagation();
-      restoreSession(session);
-    });
-
-    const deleteButton = document.createElement('button');
-    deleteButton.type = 'button';
-    deleteButton.className = 'session-delete-button';
-    deleteButton.textContent = '删';
-    deleteButton.setAttribute('aria-label', `永久删除会话 ${session.title || session.id}`);
-    deleteButton.addEventListener('click', (event) => {
-      event.stopPropagation();
-      deleteSession(session);
-    });
-
-    row.append(button, restoreButton, deleteButton);
+    appendSessionMenuAction(menu, '还原', () => restoreSession(session));
+    appendSessionMenuAction(menu, '永久删除', () => deleteSession(session), { danger: true });
+    row.append(button, menu);
     return row;
   }
 
-  const forkButton = document.createElement('button');
-  forkButton.type = 'button';
-  forkButton.className = 'session-fork-button';
-  forkButton.textContent = '分';
-  forkButton.setAttribute('aria-label', `Fork 会话 ${session.title || session.id}`);
-  forkButton.addEventListener('click', (event) => {
-    event.stopPropagation();
-    forkSession(session);
-  });
+  appendSessionMenuAction(menu, '重命名', () => renameSession(session));
+  appendSessionMenuAction(menu, 'Fork', () => forkSession(session));
+  appendSessionMenuAction(menu, '删除', () => deleteSession(session), { danger: true });
 
-  const renameButton = document.createElement('button');
-  renameButton.type = 'button';
-  renameButton.className = 'session-rename-button';
-  renameButton.textContent = '改';
-  renameButton.setAttribute('aria-label', `重命名会话 ${session.title || session.id}`);
-  renameButton.addEventListener('click', (event) => {
-    event.stopPropagation();
-    renameSession(session);
-  });
-
-  const deleteButton = document.createElement('button');
-  deleteButton.type = 'button';
-  deleteButton.className = 'session-delete-button';
-  deleteButton.textContent = '删';
-  deleteButton.setAttribute('aria-label', `删除会话 ${session.title || session.id}`);
-  deleteButton.addEventListener('click', (event) => {
-    event.stopPropagation();
-    deleteSession(session);
-  });
-
-  row.append(button, forkButton, renameButton, deleteButton);
+  row.append(button, menu);
   return row;
 }
 
@@ -2192,11 +2222,12 @@ el.elevatedRun.addEventListener('change', () => {
 });
 
 el.sessionViewMode.addEventListener('change', () => {
-  state.sessionViewMode = el.sessionViewMode.value;
-  storageSet('cmc.sessionViewMode', state.sessionViewMode);
-  resetSessionRenderLimit();
-  renderSessions();
+  setSessionViewMode(el.sessionViewMode.value);
 });
+
+for (const button of el.sessionViewButtons) {
+  button.addEventListener('click', () => setSessionViewMode(button.dataset.sessionView));
+}
 
 el.newSessionForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -2223,6 +2254,9 @@ el.logoutButton.addEventListener('click', async () => {
 el.openDrawer.addEventListener('click', () => setDrawer(true));
 el.closeDrawer.addEventListener('click', () => setDrawer(false));
 el.drawerScrim.addEventListener('click', () => setDrawer(false));
+document.addEventListener('click', (event) => {
+  if (!event.target.closest?.('.session-menu')) closeSessionMenus();
+});
 el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
 el.newSessionButton.addEventListener('click', () => openModal(el.dialog));
 el.skillManagerButton.addEventListener('click', () => setDrawerPanel('skills'));
