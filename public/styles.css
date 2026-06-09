@@ -1499,11 +1499,37 @@ button:disabled {
   font-size: 13px;
 }
 
+.runtime-help {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  height: 16px;
+  margin: 0 3px 0 0;
+  padding: 0;
+  vertical-align: -2px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--soft);
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.runtime-help:focus,
+.runtime-help:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
 .runtime-section {
   padding: 9px;
 }
 
-.runtime-section strong {
+.runtime-section > strong {
   display: block;
   margin-bottom: 5px;
   font-size: 12px;
@@ -1523,6 +1549,11 @@ button:disabled {
 .runtime-process small {
   color: var(--muted);
   font-size: 11px;
+}
+
+.runtime-note {
+  display: block;
+  margin-top: 6px;
 }
 
 .runtime-meter {

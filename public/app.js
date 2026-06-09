@@ -1709,13 +1709,79 @@ function storageRatioText(usage, quota) {
   return `${formatBytes(usage)} / ${formatBytes(quota)} · ${Math.round((usage / quota) * 100)}%`;
 }
 
+const RUNTIME_HELP = {
+  codexStatus: ['当前 Codex 子进程是否仍在执行。', '如果长期运行中但没有输出，可能是命令卡住、网络等待或状态未同步。'],
+  codexPid: ['Codex 主子进程的系统进程号。', '为空表示当前没有运行中的 Codex；异常变化可能说明进程重启或已退出。'],
+  codexProcessCount: ['当前 Codex 进程树中的进程数量。', '数量持续升高可能表示子命令未退出，会增加资源占用。'],
+  codexMemory: ['Codex 进程树占用的常驻内存 RSS 总和。', '持续升高可能导致系统内存压力、变慢或被系统杀进程。'],
+  codexCpu: ['Codex 进程树累计消耗的 CPU 时间。', '快速增长通常表示正在高强度执行；长期增长但无输出可能是死循环或重任务。'],
+  codexUptime: ['当前 Codex 运行已持续的时间。', '运行过久可能意味着任务卡住、等待输入或命令没有结束。'],
+  browserNetwork: ['浏览器报告的网络状态。', '显示离线时实时连接可能中断，但手机浏览器该值不一定完全可靠。'],
+  browserVisibility: ['当前页面是前台可见还是后台隐藏。', '后台隐藏时浏览器可能限制定时器和连接，导致刷新延迟。'],
+  browserSw: ['Service Worker 是否已接管页面缓存。', '未接管可能导致离线缓存、自动更新和资源刷新行为不稳定。'],
+  browserCache: ['浏览器 Cache Storage 中的缓存包数量。', '过多可能占用存储；过少可能表示离线缓存未生效。'],
+  browserStorage: ['浏览器可用存储配额及已用比例。', '接近上限会导致本地缓存、图片和消息保存失败。'],
+  browserLocal: ['localStorage 当前估算占用。', '过大可能拖慢启动和同步，极端情况下写入会失败。'],
+  browserMessages: ['当前会话已缓存在浏览器内存中的消息数量和后端总量。', '数量过大可能导致渲染卡顿；过小可能需要频繁回源加载。'],
+  browserPage: ['当前消息分页游标和是否还有更早内容。', '异常时可能导致加载更早失效或重复拉取。'],
+  serviceVersion: ['当前 Web 服务版本信息。', '版本不符合预期时，前端功能可能和后端接口不匹配。'],
+  servicePid: ['Web 服务 Node 进程号。', '频繁变化表示服务反复重启，可能影响会话稳定性。'],
+  serviceUptime: ['Web 服务已连续运行时间。', '过短可能说明服务刚重启；频繁归零说明不稳定。'],
+  serviceSse: ['当前连接到服务的实时事件 SSE 客户端数量。', '为 0 时当前没有实时推送连接；过多会增加服务压力。'],
+  serviceRunning: ['服务端记录的运行中会话数量。', '不为 0 时安全重启会排队；异常偏高表示状态可能未回收。'],
+  serviceRequests: ['当前活跃请求数和累计请求数。', '活跃请求长期不降可能表示接口卡住或网络连接堆积。'],
+  serviceRss: ['Web 服务进程常驻内存 RSS。', '持续增长可能表示缓存过大或内存泄漏。'],
+  serviceHeap: ['Node.js 已使用的 JavaScript 堆内存。', '接近上限会导致 GC 频繁、卡顿甚至进程崩溃。'],
+  contextTokens: ['最近记录的当前上下文输入 token 数。', '接近窗口上限时，Codex 可能触发压缩或遗漏更早上下文。'],
+  contextWindow: ['当前模型可用的上下文窗口大小。', '过小会更早触发压缩；为 0 表示未读取到模型窗口。'],
+  contextRemaining: ['估算还能放入上下文的 token 数。', '过低时长任务可能更容易丢失早期细节或自动压缩。'],
+  contextPercent: ['当前上下文窗口占用比例。', '接近 100% 时继续输入可能触发压缩，响应也可能变慢。'],
+  currentInput: ['当前正在执行的用户输入。', '如果这里有内容但状态未运行，说明状态同步可能异常。'],
+  inputStarted: ['当前输入开始执行的时间和图片数量。', '时间过久或图片数量异常可能导致执行慢、上传失败或上下文过大。'],
+  queue: ['等待当前任务结束后执行的输入数量。', '队列过长会延迟后续任务；异常不清空会造成误执行。'],
+  processSummary: ['单个关联进程的 PID、状态和内存。', '状态异常或内存持续升高，可能表示命令卡住或资源泄漏。'],
+  processName: ['系统报告的进程名称。', '名称不符合预期可能表示关联到了错误子进程。'],
+  processCommand: ['启动该进程时的命令行。', '命令异常可能说明 Codex 或工具参数错误。'],
+  processCwd: ['该进程当前工作目录。', '目录错误会导致读写文件、执行命令的位置不符合预期。'],
+  runtimeChecked: ['运行时信息最后一次刷新时间。', '时间过旧说明刷新失败或页面被后台限制。'],
+  serviceFooter: ['服务运行环境、监听地址和服务器磁盘剩余空间。', '磁盘不足会导致日志、缓存、上传图片和会话保存失败。'],
+  browserFooter: ['浏览器本地缓存详情、JS 堆和最近缓存包。', 'JS 堆过高会造成前端卡顿；缓存异常会影响离线和更新。'],
+  tokenTotal: ['Codex 已记录的累计 token 用量。', '异常过高可能表示长会话成本和上下文压力较大。'],
+  tokenLast: ['最近一轮 token 用量和缓存输入量。', '最近一轮过大可能导致响应慢或更早触发压缩。']
+};
+
+function runtimeHelp(key) {
+  const copy = RUNTIME_HELP[key];
+  if (!copy) return '';
+  const text = `含义：${copy[0]}\n异常后果：${copy[1]}`;
+  return `<button class="runtime-help" type="button" data-runtime-help="${escapeHtml(text)}" aria-label="${escapeHtml(text)}" title="${escapeHtml(text)}">?</button>`;
+}
+
+function runtimeItem(label, valueHtml, helpKey) {
+  return `<span>${escapeHtml(label)} ${runtimeHelp(helpKey)}<strong>${valueHtml}</strong></span>`;
+}
+
+function runtimeNote(text, helpKey) {
+  return `<span class="runtime-note">${runtimeHelp(helpKey)}${escapeHtml(text)}</span>`;
+}
+
+function bindRuntimeHelp() {
+  for (const button of el.runtimePanel.querySelectorAll('[data-runtime-help]')) {
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      alert(button.dataset.runtimeHelp || button.title || '');
+    });
+  }
+}
+
 function renderTokenUsage(data) {
   const usage = data.codexUsage;
   if (!usage?.available) {
     return `
       <div class="runtime-section">
         <strong>Codex 会话</strong>
-        <p>${usage?.codexSessionId ? '暂未找到 token_count 记录。' : '当前会话还没有绑定 Codex 原始会话。'}</p>
+        <p>${runtimeHelp('contextTokens')}${usage?.codexSessionId ? '暂未找到 token_count 记录。' : '当前会话还没有绑定 Codex 原始会话。'}</p>
       </div>
     `;
   }
@@ -1726,13 +1792,13 @@ function renderTokenUsage(data) {
       <strong>Codex 会话</strong>
       <div class="runtime-meter"><i style="width:${Math.min(100, usage.contextPercent || 0)}%"></i></div>
       <div class="runtime-grid compact">
-        <span>上下文 <strong>${formatNumber(usage.contextTokens)}</strong></span>
-        <span>窗口 <strong>${formatNumber(usage.modelContextWindow)}</strong></span>
-        <span>剩余 <strong>${formatNumber(usage.contextRemaining)}</strong></span>
-        <span>占用 <strong>${usage.contextPercent || 0}%</strong></span>
+        ${runtimeItem('上下文', formatNumber(usage.contextTokens), 'contextTokens')}
+        ${runtimeItem('窗口', formatNumber(usage.modelContextWindow), 'contextWindow')}
+        ${runtimeItem('剩余', formatNumber(usage.contextRemaining), 'contextRemaining')}
+        ${runtimeItem('占用', `${usage.contextPercent || 0}%`, 'contextPercent')}
       </div>
-      <p>累计 ${formatNumber(total.totalTokens)} token · 输入 ${formatNumber(total.inputTokens)} · 输出 ${formatNumber(total.outputTokens)}</p>
-      <span>最近一轮 ${formatNumber(last.totalTokens)} · 缓存输入 ${formatNumber(last.cachedInputTokens)} · 自动压缩剩余为估算</span>
+      <p>${runtimeHelp('tokenTotal')}累计 ${formatNumber(total.totalTokens)} token · 输入 ${formatNumber(total.inputTokens)} · 输出 ${formatNumber(total.outputTokens)}</p>
+      ${runtimeNote(`最近一轮 ${formatNumber(last.totalTokens)} · 缓存输入 ${formatNumber(last.cachedInputTokens)} · 自动压缩剩余为估算`, 'tokenLast')}
     </div>
   `;
 }
@@ -1746,16 +1812,16 @@ function renderServiceRuntime(data) {
     <div class="runtime-section">
       <strong>服务状态</strong>
       <div class="runtime-grid compact">
-        <span>服务 <strong>${escapeHtml(service.version ? `v${service.version}` : service.name || '-')}</strong></span>
-        <span>PID <strong>${service.pid || '-'}</strong></span>
-        <span>启动 <strong>${escapeHtml(formatDuration(service.uptimeMs || 0))}</strong></span>
-        <span>SSE <strong>${service.sseClients || 0}</strong></span>
-        <span>运行 <strong>${service.runningSessions || 0}</strong></span>
-        <span>请求 <strong>${service.activeRequests || 0}/${formatNumber(service.totalRequests || 0)}</strong></span>
-        <span>RSS <strong>${escapeHtml(formatBytes(service.memory?.rssBytes || 0))}</strong></span>
-        <span>堆 <strong>${escapeHtml(formatBytes(service.memory?.heapUsedBytes || 0))}</strong></span>
+        ${runtimeItem('服务', escapeHtml(service.version ? `v${service.version}` : service.name || '-'), 'serviceVersion')}
+        ${runtimeItem('PID', String(service.pid || '-'), 'servicePid')}
+        ${runtimeItem('启动', escapeHtml(formatDuration(service.uptimeMs || 0)), 'serviceUptime')}
+        ${runtimeItem('SSE', String(service.sseClients || 0), 'serviceSse')}
+        ${runtimeItem('运行', String(service.runningSessions || 0), 'serviceRunning')}
+        ${runtimeItem('请求', `${service.activeRequests || 0}/${formatNumber(service.totalRequests || 0)}`, 'serviceRequests')}
+        ${runtimeItem('RSS', escapeHtml(formatBytes(service.memory?.rssBytes || 0)), 'serviceRss')}
+        ${runtimeItem('堆', escapeHtml(formatBytes(service.memory?.heapUsedBytes || 0)), 'serviceHeap')}
       </div>
-      <span>Node ${escapeHtml(service.node || '-')} · ${escapeHtml(service.host || '-')}:${service.port || '-'} · 磁盘 ${escapeHtml(diskText)}</span>
+      ${runtimeNote(`Node ${service.node || '-'} · ${service.host || '-'}:${service.port || '-'} · 磁盘 ${diskText}`, 'serviceFooter')}
     </div>
   `;
 }
@@ -1769,16 +1835,16 @@ function renderBrowserRuntime(local) {
     <div class="runtime-section">
       <strong>浏览器本地</strong>
       <div class="runtime-grid compact">
-        <span>网络 <strong>${local.online ? '在线' : '离线'}</strong></span>
-        <span>页面 <strong>${escapeHtml(local.visibility || '-')}</strong></span>
-        <span>SW <strong>${escapeHtml(local.serviceWorker)}</strong></span>
-        <span>缓存 <strong>${local.cacheNames?.length || 0}</strong></span>
-        <span>存储 <strong>${escapeHtml(storageRatioText(local.storageUsageBytes, local.storageQuotaBytes))}</strong></span>
-        <span>local <strong>${escapeHtml(formatBytes(local.localStorageBytes || 0))}</strong></span>
-        <span>消息 <strong>${local.currentCachedMessages}/${local.pageTotal || 0}</strong></span>
-        <span>分页 <strong>${local.pageOffset || 0}${local.pageHasMore ? '+' : ''}</strong></span>
+        ${runtimeItem('网络', local.online ? '在线' : '离线', 'browserNetwork')}
+        ${runtimeItem('页面', escapeHtml(local.visibility || '-'), 'browserVisibility')}
+        ${runtimeItem('SW', escapeHtml(local.serviceWorker), 'browserSw')}
+        ${runtimeItem('缓存', String(local.cacheNames?.length || 0), 'browserCache')}
+        ${runtimeItem('存储', escapeHtml(storageRatioText(local.storageUsageBytes, local.storageQuotaBytes)), 'browserStorage')}
+        ${runtimeItem('local', escapeHtml(formatBytes(local.localStorageBytes || 0)), 'browserLocal')}
+        ${runtimeItem('消息', `${local.currentCachedMessages}/${local.pageTotal || 0}`, 'browserMessages')}
+        ${runtimeItem('分页', `${local.pageOffset || 0}${local.pageHasMore ? '+' : ''}`, 'browserPage')}
       </div>
-      <span>localStorage ${local.cmcLocalStorageKeys}/${local.localStorageKeys} 项 · JS 堆 ${escapeHtml(heapText)} · ${escapeHtml(cacheText)}</span>
+      ${runtimeNote(`localStorage ${local.cmcLocalStorageKeys}/${local.localStorageKeys} 项 · JS 堆 ${heapText} · ${cacheText}`, 'browserFooter')}
     </div>
   `;
 }
@@ -1791,12 +1857,12 @@ async function renderRuntimePanel(data) {
     <div class="runtime-section">
       <strong>Codex 运行时</strong>
       <div class="runtime-grid compact">
-        <span>状态 <strong>${data.running ? '运行中' : '未运行'}</strong></span>
-        <span>PID <strong>${data.pid || '-'}</strong></span>
-        <span>进程 <strong>${data.processCount || 0}</strong></span>
-        <span>内存 <strong>${formatBytes((data.memoryKb || 0) * 1024)}</strong></span>
-        <span>CPU <strong>${formatDuration(data.cpuMs || 0)}</strong></span>
-        <span>时长 <strong>${formatDuration(data.uptimeMs || 0)}</strong></span>
+        ${runtimeItem('状态', data.running ? '运行中' : '未运行', 'codexStatus')}
+        ${runtimeItem('PID', String(data.pid || '-'), 'codexPid')}
+        ${runtimeItem('进程', String(data.processCount || 0), 'codexProcessCount')}
+        ${runtimeItem('内存', escapeHtml(formatBytes((data.memoryKb || 0) * 1024)), 'codexMemory')}
+        ${runtimeItem('CPU', escapeHtml(formatDuration(data.cpuMs || 0)), 'codexCpu')}
+        ${runtimeItem('时长', escapeHtml(formatDuration(data.uptimeMs || 0)), 'codexUptime')}
       </div>
     </div>
     ${renderBrowserRuntime(local)}
@@ -1804,25 +1870,26 @@ async function renderRuntimePanel(data) {
     ${renderTokenUsage(data)}
     <div class="runtime-section">
       <strong>当前输入</strong>
-      <p>${escapeHtml(active?.prompt || '无运行中的输入')}</p>
-      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0}` : '')}</span>
+      <p>${runtimeHelp('currentInput')}${escapeHtml(active?.prompt || '无运行中的输入')}</p>
+      ${runtimeNote(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0}` : '当前没有开始时间。', 'inputStarted')}
     </div>
     <div class="runtime-section">
       <strong>队列</strong>
-      <p>${data.queue?.length ? `${data.queue.length} 条等待执行` : '无排队输入'}</p>
+      <p>${runtimeHelp('queue')}${data.queue?.length ? `${data.queue.length} 条等待执行` : '无排队输入'}</p>
     </div>
     <div class="runtime-process-list">
       ${processes.length ? processes.map((item) => `
         <div class="runtime-process" style="--depth:${item.depth || 0}">
-          <span>PID ${item.pid} · ${escapeHtml(item.state || '-')} · ${formatBytes((item.memoryKb || 0) * 1024)}</span>
-          <strong>${escapeHtml(item.name || '-')}</strong>
-          <code>${escapeHtml(shortCommand(item.cmdline))}</code>
-          <small>${escapeHtml(item.cwd || '')}</small>
+          <span>${runtimeHelp('processSummary')}PID ${item.pid} · ${escapeHtml(item.state || '-')} · ${formatBytes((item.memoryKb || 0) * 1024)}</span>
+          <strong>${runtimeHelp('processName')}${escapeHtml(item.name || '-')}</strong>
+          <code>${runtimeHelp('processCommand')}${escapeHtml(shortCommand(item.cmdline))}</code>
+          <small>${runtimeHelp('processCwd')}${escapeHtml(item.cwd || '')}</small>
         </div>
       `).join('') : '<p class="runtime-empty">没有关联的 Codex 子进程。</p>'}
     </div>
-    <small class="runtime-checked">更新 ${escapeHtml(formatTime(data.checkedAt))}</small>
+    <small class="runtime-checked">${runtimeHelp('runtimeChecked')}更新 ${escapeHtml(formatTime(data.checkedAt))}</small>
   `;
+  bindRuntimeHelp();
 }
 
 function runtimeErrorCopy(error) {
