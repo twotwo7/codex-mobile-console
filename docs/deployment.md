@@ -16,7 +16,54 @@ codex doctor
 
 Make sure Codex is already authenticated and works from the same user that will run the service.
 
-## 2. Clone And Run Locally
+## 2. One-Command Install
+
+For a fresh Linux server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash
+```
+
+Defaults:
+
+| Setting | Value |
+| --- | --- |
+| Install directory | `/opt/codex-mobile-console` |
+| Service | `codex-mobile-console` |
+| Host | `127.0.0.1` |
+| Port | `7072` |
+| Project browser root | `$HOME/Projects` |
+
+Override values:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | \
+  INSTALL_DIR=/srv/codex-mobile-console \
+  PORT=7072 \
+  PROJECTS_ROOT=/root/Projects \
+  bash
+```
+
+The installer prints the local URL and generated password after startup.
+
+The systemd service runs as the user who executed the installer. This is important because Codex authentication usually lives under that user's home directory. Defaults derived from the install user:
+
+| Setting | Example |
+| --- | --- |
+| `HOME` | `/root` or `/home/alice` |
+| `CODEX_HOME` | `$HOME/.codex` |
+| `PROJECTS_ROOT` | `$HOME/Projects` |
+
+If Codex is authenticated as a different user, either run the installer as that user or pass explicit values:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | \
+  CODEX_HOME=/root/.codex \
+  PROJECTS_ROOT=/root/Projects \
+  bash
+```
+
+## 3. Clone And Run Locally
 
 ```bash
 git clone https://github.com/twotwo7/codex-mobile-console.git
@@ -41,7 +88,7 @@ Change it by editing that file and restarting the service.
 
 `COOKIE_SECURE=0` is only for local HTTP testing. Keep the default Secure cookie behavior when serving through HTTPS.
 
-## 3. Install As A systemd Service
+## 4. Install As A systemd Service
 
 From the project root:
 
@@ -58,13 +105,17 @@ sudo SERVICE_NAME=codex-mobile-console \
   HOST=127.0.0.1 \
   PORT=7072 \
   CODEX_BIN=/usr/bin/codex \
+  CODEX_HOME=/root/.codex \
   PROJECTS_ROOT=/root/Projects \
+  SERVICE_USER=root \
+  SERVICE_GROUP=root \
+  SERVICE_HOME=/root \
   ./scripts/install-systemd.sh
 ```
 
 The service intentionally binds to `127.0.0.1` by default. Use a reverse proxy for public access.
 
-## 4. Configure HTTPS With Caddy
+## 5. Configure HTTPS With Caddy
 
 Caddy is the simplest option when the domain already points at the server.
 
@@ -88,7 +139,7 @@ Then open:
 https://codex.example.com
 ```
 
-## 5. Configure HTTPS With Nginx
+## 6. Configure HTTPS With Nginx
 
 Example Nginx server block:
 
@@ -110,7 +161,7 @@ server {
 
 Then use Certbot or your existing certificate workflow to enable HTTPS.
 
-## 6. Safe Restart
+## 7. Safe Restart
 
 The app can have active Codex child processes. Prefer safe restart:
 
@@ -132,7 +183,7 @@ Logs:
 tail -f runtime/safe-restart.log
 ```
 
-## 7. Health Check
+## 8. Health Check
 
 ```bash
 curl -fsS http://127.0.0.1:7072/api/healthz
@@ -144,7 +195,7 @@ Expected:
 {"ok":true}
 ```
 
-## 8. Security Checklist
+## 9. Security Checklist
 
 - Use HTTPS for phone access.
 - Keep `HOST=127.0.0.1` when using a reverse proxy.

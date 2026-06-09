@@ -45,7 +45,17 @@ Prerequisites:
 
 - Linux server with Node.js 20+
 - Codex CLI installed and authenticated on the server
-- A project directory such as `/root/Projects`
+- A project directory such as `$HOME/Projects`
+
+One-command install on a Linux server:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash
+```
+
+This installs the app under `/opt/codex-mobile-console`, creates a systemd service, starts it on `127.0.0.1:7072`, and prints the generated admin password.
+
+The service runs as the user who executed the installer, so Codex should already be authenticated for that user.
 
 Clone and run:
 
