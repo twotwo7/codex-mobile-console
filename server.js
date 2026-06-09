@@ -936,7 +936,7 @@ function startRunMonitor() {
   clearInterval(runMonitorTimer);
   runMonitorTimer = setInterval(() => {
     for (const session of Object.values(state.sessions || {})) {
-      reconcileSessionRunState(session, 'monitor');
+      if (reconcileSessionRunState(session, 'monitor')) broadcastSession(session);
     }
   }, 10000);
   runMonitorTimer.unref();

@@ -931,6 +931,40 @@ function isActiveSessionRunning() {
   return isSessionRunning(getActiveSession());
 }
 
+function sessionStatusFromMessage(message) {
+  if (!message) return '';
+  if (['running', 'stopping', 'idle', 'error'].includes(message.status)) return message.status;
+  if (message.role !== 'system') return '';
+  const text = String(message.text || '');
+  if (text.includes('Codex run finished. Starting next queued prompt.')) return 'running';
+  if (text.includes('Codex is working')) return 'running';
+  if (text.includes('Stop requested.')) return 'stopping';
+  if (text.includes('Codex run finished.') || text.includes('Codex run stopped.') || text.includes('Recovered stale run state')) return 'idle';
+  if (text.includes('Codex exited with code') || text.includes('Failed to start Codex')) return 'error';
+  return '';
+}
+
+function messageSequenceValue(message) {
+  return Number(message?.orderSeq || message?.seq || 0);
+}
+
+function applySessionStatusFromMessage(sessionId, message, messages) {
+  const status = sessionStatusFromMessage(message);
+  if (!status) return false;
+  const messageSeq = messageSequenceValue(message);
+  const latestSeq = lastRealSeq(messages);
+  if (messageSeq && latestSeq && messageSeq < latestSeq) return false;
+  const nextRunning = status === 'running' || status === 'stopping';
+  return mergeSessionSnapshot({
+    id: sessionId,
+    status,
+    isRunning: nextRunning,
+    canStop: status === 'running',
+    queuedCount: message.queuedCount,
+    updatedAt: message.at
+  });
+}
+
 function syncStreamingMarkers() {
   if (isActiveSessionRunning()) return;
   for (const node of el.messagePane.querySelectorAll('.message.streaming')) {
@@ -1718,18 +1752,8 @@ function upsertMessage(sessionId, message) {
   state.lastSeq.set(sessionId, lastRealSeq(messages));
   messageScheduler.scheduleSave(sessionId);
 
-  if (renderedMessage.status) {
-    const nextRunning = renderedMessage.status === 'running' || renderedMessage.status === 'stopping';
-    const changed = mergeSessionSnapshot({
-      id: sessionId,
-      status: renderedMessage.status,
-      isRunning: nextRunning,
-      canStop: renderedMessage.status === 'running',
-      queuedCount: renderedMessage.queuedCount,
-      updatedAt: renderedMessage.at
-    });
-    if (changed) renderSessions();
-  }
+  const sessionChanged = applySessionStatusFromMessage(sessionId, renderedMessage, messages);
+  if (sessionChanged) renderSessions();
 
   if (sessionId === state.activeId) {
     const stickToBottom = isNewMessage ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
@@ -1771,7 +1795,10 @@ function updateMessage(sessionId, message) {
   messages.sort(compareMessages);
   state.lastSeq.set(sessionId, lastRealSeq(messages));
   messageScheduler.scheduleSave(sessionId);
+  const sessionChanged = applySessionStatusFromMessage(sessionId, updatedMessage, messages);
+  if (sessionChanged) renderSessions();
   if (sessionId === state.activeId) {
+    if (sessionChanged) renderActive({ messages: false });
     if (state.renderingMessages) {
       messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
       return;
@@ -1908,7 +1935,7 @@ async function loadOlderMessages(sessionId) {
 
 async function refreshActiveContext() {
   const session = getActiveSession();
-  if (!session?.codexSessionId || !state.online || state.contextRefreshInFlight) return;
+  if (!session?.id || !state.online || state.contextRefreshInFlight) return;
   state.contextRefreshInFlight = true;
   try {
     const page = state.messagePages.get(session.id);
@@ -1920,9 +1947,9 @@ async function refreshActiveContext() {
     const nextLast = nextMessages.at(-1);
     const mergedMessages = mergeMessages(currentMessages, nextMessages);
     const hasNewMessages = mergedMessages.length > currentMessages.length;
-    const changed = currentMessages.length !== mergedMessages.length
+    const changed = nextMessages.length > 0 && (currentMessages.length !== mergedMessages.length
       || currentLast?.at !== nextLast?.at
-      || currentLast?.text !== nextLast?.text;
+      || currentLast?.text !== nextLast?.text);
     const sessionChanged = mergeSessionSnapshot(data.session);
     if (changed) {
       state.messages.set(session.id, trimMessagesForStorage(mergedMessages));
@@ -1951,7 +1978,7 @@ async function refreshActiveContext() {
 function startContextRefreshLoop() {
   clearInterval(state.contextRefreshTimer);
   const session = getActiveSession();
-  if (!session?.codexSessionId) return;
+  if (!session?.id) return;
   state.contextRefreshTimer = setInterval(refreshActiveContext, 5000);
 }
 
@@ -1994,6 +2021,7 @@ function connectEvents(id) {
     source.close();
     if (state.eventSource === source) state.eventSource = null;
     setBadge('重连中', 'busy');
+    refreshActiveContext().catch(() => {});
     setTimeout(() => {
       if (state.activeId === id) connectEvents(id);
     }, 1600);
