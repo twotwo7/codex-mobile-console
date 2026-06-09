@@ -1711,6 +1711,11 @@ function broadcast(sessionId, message) {
   broadcastEvent(sessionId, 'message', message);
 }
 
+function broadcastSession(session) {
+  if (!session?.id) return;
+  broadcastEvent(session.id, 'session', publicSession(session));
+}
+
 function broadcastEvent(sessionId, event, data) {
   const set = clients.get(sessionId);
   if (!set) return;
@@ -1899,6 +1904,7 @@ function runCodex(session, prompt, options = {}) {
     stdio: ['pipe', 'pipe', 'pipe']
   });
   running.set(session.id, child);
+  broadcastSession(session);
 
   child.stdin.write(prompt);
   child.stdin.end();
@@ -1926,6 +1932,7 @@ function runCodex(session, prompt, options = {}) {
       text: `Failed to start Codex: ${error.message}`,
       status: 'error'
     });
+    broadcastSession(session);
     scheduleSave();
   });
 
@@ -1948,6 +1955,7 @@ function runCodex(session, prompt, options = {}) {
       status: nextStatus,
       queuedCount: session.queue?.length || 0
     });
+    broadcastSession(session);
 
     if (next?.prompt) {
       scheduleSave();
@@ -1984,6 +1992,7 @@ function stopRunningSession(session) {
     status: 'stopping',
     queuedCount: 0
   });
+  broadcastSession(session);
 
   try {
     if (child.pid) process.kill(-child.pid, 'SIGTERM');

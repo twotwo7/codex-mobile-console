@@ -863,6 +863,7 @@ function getActiveSession() {
 
 function isSessionRunning(session) {
   if (!session) return false;
+  if (['idle', 'error'].includes(session.status)) return false;
   if (typeof session.isRunning === 'boolean') return session.isRunning;
   return session.status === 'running' || session.status === 'stopping';
 }
@@ -1910,6 +1911,14 @@ function connectEvents(id) {
   source.addEventListener('message_update', (event) => {
     const message = parseEventData(event);
     if (message) updateMessage(id, message);
+  });
+
+  source.addEventListener('session', (event) => {
+    const session = parseEventData(event);
+    if (!session) return;
+    const changed = mergeSessionSnapshot(session);
+    if (changed) renderSessions();
+    if (session.id === state.activeId) renderActive({ messages: false });
   });
 
   source.onerror = () => {
