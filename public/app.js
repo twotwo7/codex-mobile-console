@@ -130,6 +130,8 @@ const el = {
   promptForm: document.querySelector('#promptForm'),
   promptInput: document.querySelector('#promptInput'),
   commandButton: document.querySelector('#commandButton'),
+  topMoreButton: document.querySelector('#topMoreButton'),
+  topMoreMenu: document.querySelector('#topMoreMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
   runtimeButton: document.querySelector('#runtimeButton'),
   imageButton: document.querySelector('#imageButton'),
@@ -798,12 +800,14 @@ function renderActive(options = {}) {
   el.stopButton.setAttribute('aria-label', canStop ? '停止当前任务' : '正在停止当前任务');
   el.stopButton.title = canStop ? '停止当前任务' : '正在停止当前任务';
   el.connectionBadge.hidden = isRunning;
+  el.runtimeButton.disabled = !session;
 
   if (!session) {
     el.connectionBadge.hidden = false;
     el.activeTitle.textContent = 'Codex Console';
     el.activeMeta.textContent = '未选择会话';
     setBadge(state.online ? '在线' : '离线', state.online ? 'online' : '');
+    updateFavoritesButton();
     return;
   }
 
@@ -1538,6 +1542,16 @@ function closeRuntimeDialog() {
   closeModal(el.runtimeDialog);
 }
 
+function setTopMoreMenu(open) {
+  if (!el.topMoreButton || !el.topMoreMenu) return;
+  el.topMoreMenu.hidden = !open;
+  el.topMoreButton.setAttribute('aria-expanded', String(open));
+}
+
+function closeTopMoreMenu() {
+  setTopMoreMenu(false);
+}
+
 function loadImage(dataUrl) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -2186,10 +2200,10 @@ function applyLocalStarred(sessionId, ids, starred) {
 
 function updateFavoritesButton() {
   el.favoritesButton.classList.toggle('active', state.showStarredOnly);
-  el.favoritesButton.setAttribute('aria-pressed', String(state.showStarredOnly));
+  el.favoritesButton.setAttribute('aria-checked', String(state.showStarredOnly));
   el.favoritesButton.setAttribute('aria-label', state.showStarredOnly ? '显示全部消息' : '只看收藏');
   el.favoritesButton.title = state.showStarredOnly ? '显示全部消息' : '只看收藏';
-  el.favoritesButton.textContent = state.showStarredOnly ? '★' : '☆';
+  el.favoritesButton.textContent = state.showStarredOnly ? '已筛选收藏' : '只看收藏';
 }
 
 el.promptForm.addEventListener('submit', async (event) => {
@@ -2202,19 +2216,33 @@ el.promptInput.addEventListener('keydown', (event) => {
   autoSizePrompt();
 });
 
-document.addEventListener('click', () => messageView.closeMessageMenus());
+document.addEventListener('click', () => {
+  messageView.closeMessageMenus();
+  closeTopMoreMenu();
+});
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') messageView.closeMessageMenus();
+  if (event.key === 'Escape') closeTopMoreMenu();
   if (event.key === 'Escape' && !el.sessionActionSheet?.hidden) closeSessionActionSheet();
   if (event.key === 'Escape' && !el.imageViewer.hidden) closeImageViewer();
 });
 
 el.stopButton.addEventListener('click', stopCurrentRun);
 
+el.topMoreButton.addEventListener('click', (event) => {
+  event.stopPropagation();
+  setTopMoreMenu(el.topMoreMenu.hidden);
+});
+
+el.topMoreMenu.addEventListener('click', (event) => {
+  event.stopPropagation();
+});
+
 el.favoritesButton.addEventListener('click', () => {
   state.showStarredOnly = !state.showStarredOnly;
   storageSet('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
+  closeTopMoreMenu();
   renderActive();
 });
 
@@ -2304,7 +2332,10 @@ el.refreshSkillsButton?.addEventListener('click', () => {
 el.drawerRefreshSkillsButton.addEventListener('click', () => {
   refreshSkillsInBackground();
 });
-el.runtimeButton.addEventListener('click', openRuntimeDialog);
+el.runtimeButton.addEventListener('click', () => {
+  closeTopMoreMenu();
+  openRuntimeDialog();
+});
 el.closeRuntimeDialog.addEventListener('click', closeRuntimeDialog);
 el.runtimeDialog.addEventListener('close', () => {
   clearInterval(state.runtimeTimer);

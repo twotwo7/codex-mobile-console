@@ -843,6 +843,14 @@ button:disabled {
   font-size: 12px;
 }
 
+.top-actions {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
 .connection-badge {
   position: relative;
   flex: 0 0 auto;
@@ -886,19 +894,6 @@ button:disabled {
   animation: status-spin 0.9s linear infinite;
 }
 
-.top-runtime-button {
-  flex: 0 0 auto;
-  min-height: 34px;
-  padding: 0 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--surface-2);
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 800;
-  white-space: nowrap;
-}
-
 .top-stop-button {
   position: relative;
   flex: 0 0 auto;
@@ -933,24 +928,69 @@ button:disabled {
   mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M17 4H7a3 3 0 0 0-3 3v10a3 3 0 0 0 3 3h10a3 3 0 0 0 3-3V7a3 3 0 0 0-3-3'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
-.top-favorite-button {
+.top-more {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.top-more-button {
   flex: 0 0 auto;
   width: 34px;
   min-width: 34px;
   min-height: 34px;
   padding: 0;
-  border: 1px solid var(--line);
+  border: 1px solid transparent;
   border-radius: var(--radius);
-  background: var(--surface-2);
+  background: transparent;
   color: var(--muted);
-  font-size: 18px;
+  font-size: 22px;
   line-height: 1;
 }
 
-.top-favorite-button.active {
-  color: #06100e;
-  background: var(--accent);
-  border-color: transparent;
+.top-more-button:focus-visible,
+.top-more-button[aria-expanded="true"] {
+  color: var(--text);
+  border-color: var(--line);
+  background: var(--surface-2);
+}
+
+.top-more-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 80;
+  display: grid;
+  gap: 4px;
+  min-width: 136px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22);
+}
+
+.top-more-menu[hidden] {
+  display: none;
+}
+
+.top-menu-item {
+  min-height: 34px;
+  padding: 0 10px;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  text-align: left;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.top-menu-item.active {
+  color: var(--accent-2);
+}
+
+.top-menu-item:disabled {
+  color: var(--soft);
+  opacity: 0.62;
 }
 
 .empty-state {
