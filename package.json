@@ -1,9 +1,25 @@
 {
   "name": "codex-mobile-console",
-  "version": "0.1.0",
-  "private": true,
+  "version": "1.2.0",
   "type": "module",
   "description": "Mobile-first Codex control console with persistent sessions",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/twotwo7/codex-mobile-console.git"
+  },
+  "bugs": {
+    "url": "https://github.com/twotwo7/codex-mobile-console/issues"
+  },
+  "homepage": "https://github.com/twotwo7/codex-mobile-console#readme",
+  "keywords": [
+    "codex",
+    "self-hosted",
+    "pwa",
+    "mobile",
+    "developer-tools",
+    "ai-coding"
+  ],
   "scripts": {
     "start": "node server.js",
     "check:mobile-ui": "node scripts/mobile-ui-check.mjs"
