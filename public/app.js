@@ -105,13 +105,13 @@ const el = {
   drawerScrim: document.querySelector('#drawerScrim'),
   openDrawer: document.querySelector('#openDrawer'),
   closeDrawer: document.querySelector('#closeDrawer'),
-  drawerBackButton: document.querySelector('#drawerBackButton'),
   drawerTitle: document.querySelector('#drawerTitle'),
   drawerModeRow: document.querySelector('#drawerModeRow'),
   drawerSessionsButton: document.querySelector('#drawerSessionsButton'),
   drawerSessionsPanel: document.querySelector('#drawerSessionsPanel'),
   drawerSkillsPanel: document.querySelector('#drawerSkillsPanel'),
   drawerSettingsPanel: document.querySelector('#drawerSettingsPanel'),
+  drawerSettingsButton: document.querySelector('#drawerSettingsButton'),
   sessionList: document.querySelector('#sessionList'),
   sessionViewButtons: [...document.querySelectorAll('[data-session-view]')],
   sessionActionSheet: document.querySelector('#sessionActionSheet'),
@@ -121,7 +121,6 @@ const el = {
   sessionActionButtons: document.querySelector('#sessionActionButtons'),
   newSessionButton: document.querySelector('#newSessionButton'),
   skillManagerButton: document.querySelector('#skillManagerButton'),
-  settingsButton: document.querySelector('#settingsButton'),
   logoutButton: document.querySelector('#logoutButton'),
   activeTitle: document.querySelector('#activeTitle'),
   activeMeta: document.querySelector('#activeMeta'),
@@ -556,15 +555,13 @@ function setDrawerPanel(panel) {
   const skillsActive = state.drawerPanel === 'skills';
   const settingsActive = state.drawerPanel === 'settings';
   if (el.drawerTitle) el.drawerTitle.textContent = settingsActive ? '设置' : skillsActive ? 'Skills' : '会话';
-  if (el.drawerTitle) el.drawerTitle.hidden = settingsActive;
-  if (el.drawerBackButton) el.drawerBackButton.hidden = !settingsActive;
-  if (el.drawerModeRow) el.drawerModeRow.hidden = settingsActive;
   if (el.newSessionButton) el.newSessionButton.hidden = skillsActive || settingsActive;
-  if (el.settingsButton) el.settingsButton.hidden = settingsActive;
   el.drawerSessionsButton.classList.toggle('active', !skillsActive && !settingsActive);
   el.skillManagerButton.classList.toggle('active', skillsActive);
+  el.drawerSettingsButton.classList.toggle('active', settingsActive);
   el.drawerSessionsButton.setAttribute('aria-selected', String(!skillsActive && !settingsActive));
   el.skillManagerButton.setAttribute('aria-selected', String(skillsActive));
+  el.drawerSettingsButton.setAttribute('aria-selected', String(settingsActive));
   el.drawerSessionsPanel.classList.toggle('active', !skillsActive && !settingsActive);
   el.drawerSkillsPanel.classList.toggle('active', skillsActive);
   el.drawerSettingsPanel.classList.toggle('active', settingsActive);
@@ -2289,9 +2286,9 @@ el.sessionActionSheet?.addEventListener('click', (event) => {
 });
 el.closeSessionActionSheet?.addEventListener('click', closeSessionActionSheet);
 el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
-el.drawerBackButton?.addEventListener('click', () => setDrawerPanel('sessions'));
 el.newSessionButton.addEventListener('click', () => openModal(el.dialog));
 el.skillManagerButton.addEventListener('click', () => setDrawerPanel('skills'));
+el.drawerSettingsButton.addEventListener('click', () => setDrawerPanel('settings'));
 el.commandButton.addEventListener('click', () => {
   skillView.renderCommandList();
   openModal(el.commandDialog);
@@ -2330,10 +2327,6 @@ function selectSettingsPage(page) {
   }
 }
 
-el.settingsButton.addEventListener('click', () => {
-  setDrawer(true);
-  setDrawerPanel('settings');
-});
 for (const tab of el.settingsTabs) {
   tab.addEventListener('click', () => selectSettingsPage(tab.dataset.settingsTab));
 }

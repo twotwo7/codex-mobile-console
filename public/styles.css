@@ -283,16 +283,6 @@ button:disabled {
   white-space: nowrap;
 }
 
-.drawer-back-button {
-  min-height: 34px;
-  padding: 0;
-  background: transparent;
-  color: var(--text);
-  border: 0;
-  font-size: 15px;
-  text-align: left;
-}
-
 .drawer-head h2 {
   font-size: 20px;
 }
@@ -345,7 +335,7 @@ button:disabled {
 
 .drawer-mode-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 4px;
   padding: 3px;
   border: 1px solid var(--line);
@@ -355,7 +345,7 @@ button:disabled {
 
 .drawer-mode-row button {
   min-height: 30px;
-  padding: 0 9px;
+  padding: 0 5px;
   background: transparent;
   color: var(--muted);
   border: 0;
