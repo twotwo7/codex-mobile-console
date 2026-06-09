@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=98">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=99">
       </head>
       <body>
         <main class="workspace">
@@ -167,6 +167,32 @@ async function checkDrawerSwitchStability(page, viewportName) {
   await waitForDrawerSettled(page, false);
 }
 
+async function checkLongTitleMenu(page, viewportName) {
+  await page.evaluate(() => {
+    document.querySelector('#activeTitle').textContent = '这是一个非常非常长的会话标题用于验证手机端标题省略和箭头固定可见';
+    document.querySelector('#activeMeta').textContent = '/root/Projects/very-long-directory-name/with/mobile/title/layout/check';
+  });
+  const titleRow = await assertVisibleBox(page, '.top-title-row', 'long title row');
+  const title = await assertVisibleBox(page, '#activeTitle', 'long title text');
+  const arrow = await assertVisibleBox(page, '#topMoreButton', 'title menu arrow');
+  const actions = await assertVisibleBox(page, '.top-actions', 'top actions');
+  if (arrow.x <= title.x || arrow.x + arrow.width > actions.x - 2) {
+    throw new Error(`title menu arrow is not stable: ${JSON.stringify({ title, arrow, actions })}`);
+  }
+  if (titleRow.height > 28) {
+    throw new Error(`long title row wrapped: ${JSON.stringify(titleRow)}`);
+  }
+  await page.click('#topMoreButton');
+  await page.waitForSelector('#topMoreMenu:not([hidden])', { timeout: 5000 });
+  const menu = await assertVisibleBox(page, '#topMoreMenu', 'title menu');
+  if (menu.x < 0 || menu.x + menu.width > page.viewportSize().width) {
+    throw new Error(`title menu overflows viewport: ${JSON.stringify(menu)}`);
+  }
+  await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-long-title-menu.png`), fullPage: false });
+  await page.click('.workspace');
+  await page.waitForFunction(() => document.querySelector('#topMoreMenu')?.hidden, null, { timeout: 5000 });
+}
+
 async function run() {
   await mkdir(OUT_DIR, { recursive: true });
   const browser = await chromium.launch({
@@ -180,6 +206,7 @@ async function run() {
       const page = await context.newPage();
       await loginSmoke(page);
       await checkDrawerSwitchStability(page, viewport.name);
+      await checkLongTitleMenu(page, viewport.name);
       await checkSkillDialog(page);
       await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-app.png`), fullPage: true });
 
