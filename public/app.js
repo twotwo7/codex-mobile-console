@@ -42,6 +42,7 @@ const state = {
   initialBottomLockSessionId: '',
   drawerOpen: false,
   drawerPanel: 'sessions',
+  sessionActionId: '',
   sessionListDirty: true,
   sessionRenderLimit: 40,
   loadingOlder: false,
@@ -110,6 +111,11 @@ const el = {
   drawerSkillsPanel: document.querySelector('#drawerSkillsPanel'),
   sessionList: document.querySelector('#sessionList'),
   sessionViewButtons: [...document.querySelectorAll('[data-session-view]')],
+  sessionActionSheet: document.querySelector('#sessionActionSheet'),
+  closeSessionActionSheet: document.querySelector('#closeSessionActionSheet'),
+  sessionActionTitle: document.querySelector('#sessionActionTitle'),
+  sessionActionMeta: document.querySelector('#sessionActionMeta'),
+  sessionActionButtons: document.querySelector('#sessionActionButtons'),
   newSessionButton: document.querySelector('#newSessionButton'),
   skillManagerButton: document.querySelector('#skillManagerButton'),
   settingsButton: document.querySelector('#settingsButton'),
@@ -508,6 +514,7 @@ function setDrawer(open) {
   state.drawerOpen = open;
   state.renderJobId += 1;
   state.renderingMessages = false;
+  if (!open) closeSessionActionSheet();
   document.body.classList.toggle('drawer-open', open);
   el.sessionDrawer.classList.toggle('open', open);
   el.drawerScrim.hidden = !open;
@@ -678,12 +685,6 @@ function appendSessionListMore(fragment, total, visibleCount) {
   fragment.append(button);
 }
 
-function closeSessionMenus(except = null) {
-  for (const menu of el.sessionList.querySelectorAll('.session-menu[open]')) {
-    if (menu !== except) menu.removeAttribute('open');
-  }
-}
-
 function sessionStatusKind(session) {
   if (session.trashedAt) return 'trashed';
   if (isSessionRunning(session)) return 'running';
@@ -703,17 +704,41 @@ function formatSessionCwd(cwd = '') {
   return cwd.replace(/^\/root\/Projects\/?/, '~/Projects/');
 }
 
-function appendSessionMenuAction(menu, label, action, options = {}) {
+function closeSessionActionSheet() {
+  state.sessionActionId = '';
+  if (el.sessionActionSheet) el.sessionActionSheet.hidden = true;
+  if (el.sessionActionButtons) el.sessionActionButtons.textContent = '';
+}
+
+function appendSessionActionButton(label, action, options = {}) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = options.danger ? 'danger' : '';
   button.textContent = label;
-  button.addEventListener('click', (event) => {
-    event.stopPropagation();
-    menu.removeAttribute('open');
+  button.addEventListener('click', () => {
+    closeSessionActionSheet();
     action();
   });
-  menu.append(button);
+  el.sessionActionButtons.append(button);
+}
+
+function openSessionActionSheet(session) {
+  if (!session?.id || !el.sessionActionSheet) return;
+  state.sessionActionId = session.id;
+  el.sessionActionTitle.textContent = session.title || '未命名会话';
+  el.sessionActionMeta.textContent = `${sessionStatusLabel(session)} · ${formatSessionCwd(session.cwd || '')}`;
+  el.sessionActionButtons.textContent = '';
+
+  if (session.trashedAt) {
+    appendSessionActionButton('还原', () => restoreSession(session));
+    appendSessionActionButton('永久删除', () => deleteSession(session), { danger: true });
+  } else {
+    appendSessionActionButton('重命名', () => renameSession(session));
+    appendSessionActionButton('Fork', () => forkSession(session));
+    appendSessionActionButton('删除', () => deleteSession(session), { danger: true });
+  }
+
+  el.sessionActionSheet.hidden = false;
 }
 
 function renderSessionButton(session) {
@@ -733,30 +758,23 @@ function renderSessionButton(session) {
   `;
   if (!session.trashedAt) button.addEventListener('click', () => selectSession(session.id));
 
-  const menu = document.createElement('details');
-  menu.className = 'session-menu';
-  menu.addEventListener('toggle', () => {
-    if (menu.open) closeSessionMenus(menu);
+  const menuButton = document.createElement('button');
+  menuButton.type = 'button';
+  menuButton.className = 'session-menu-button';
+  menuButton.textContent = '⋯';
+  menuButton.setAttribute('aria-label', `打开会话操作 ${session.title || session.id}`);
+  menuButton.addEventListener('click', (event) => {
+    event.stopPropagation();
+    openSessionActionSheet(session);
   });
-  const summary = document.createElement('summary');
-  summary.setAttribute('aria-label', `打开会话操作 ${session.title || session.id}`);
-  summary.textContent = '⋯';
-  summary.addEventListener('click', (event) => event.stopPropagation());
-  menu.append(summary);
 
   if (session.trashedAt) {
     row.classList.add('trashed');
-    appendSessionMenuAction(menu, '还原', () => restoreSession(session));
-    appendSessionMenuAction(menu, '永久删除', () => deleteSession(session), { danger: true });
-    row.append(button, menu);
+    row.append(button, menuButton);
     return row;
   }
 
-  appendSessionMenuAction(menu, '重命名', () => renameSession(session));
-  appendSessionMenuAction(menu, 'Fork', () => forkSession(session));
-  appendSessionMenuAction(menu, '删除', () => deleteSession(session), { danger: true });
-
-  row.append(button, menu);
+  row.append(button, menuButton);
   return row;
 }
 
@@ -2182,6 +2200,7 @@ document.addEventListener('click', () => messageView.closeMessageMenus());
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') messageView.closeMessageMenus();
+  if (event.key === 'Escape' && !el.sessionActionSheet?.hidden) closeSessionActionSheet();
   if (event.key === 'Escape' && !el.imageViewer.hidden) closeImageViewer();
 });
 
@@ -2255,9 +2274,10 @@ el.logoutButton.addEventListener('click', async () => {
 el.openDrawer.addEventListener('click', () => setDrawer(true));
 el.closeDrawer.addEventListener('click', () => setDrawer(false));
 el.drawerScrim.addEventListener('click', () => setDrawer(false));
-document.addEventListener('click', (event) => {
-  if (!event.target.closest?.('.session-menu')) closeSessionMenus();
+el.sessionActionSheet?.addEventListener('click', (event) => {
+  if (event.target === el.sessionActionSheet) closeSessionActionSheet();
 });
+el.closeSessionActionSheet?.addEventListener('click', closeSessionActionSheet);
 el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
 el.newSessionButton.addEventListener('click', () => openModal(el.dialog));
 el.skillManagerButton.addEventListener('click', () => setDrawerPanel('skills'));

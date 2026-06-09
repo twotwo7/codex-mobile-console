@@ -6,7 +6,7 @@
     <meta name="theme-color" content="#101215">
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=89">
+    <link rel="stylesheet" href="/styles.css?v=90">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -64,6 +64,18 @@
       </aside>
 
       <div id="drawerScrim" class="drawer-scrim" hidden></div>
+      <div id="sessionActionSheet" class="session-action-sheet" role="dialog" aria-modal="true" aria-labelledby="sessionActionTitle" hidden>
+        <div class="session-action-panel">
+          <div class="session-action-head">
+            <div>
+              <strong id="sessionActionTitle">会话操作</strong>
+              <span id="sessionActionMeta"></span>
+            </div>
+            <button id="closeSessionActionSheet" class="drawer-tool-button" type="button" aria-label="关闭会话操作">×</button>
+          </div>
+          <div id="sessionActionButtons" class="session-action-buttons"></div>
+        </div>
+      </div>
 
       <main class="workspace">
         <header class="topbar">
@@ -325,6 +337,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=102" type="module"></script>
+    <script src="/app.js?v=103" type="module"></script>
   </body>
 </html>

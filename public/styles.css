@@ -664,12 +664,7 @@ button:disabled {
   font-weight: 600;
 }
 
-.session-menu {
-  position: relative;
-  z-index: 2;
-}
-
-.session-menu summary {
+.session-menu-button {
   display: grid;
   place-items: center;
   width: 34px;
@@ -680,65 +675,87 @@ button:disabled {
   border-radius: var(--radius);
   color: var(--muted);
   cursor: pointer;
-  list-style: none;
   user-select: none;
+  background: transparent;
+  font-weight: 800;
 }
 
-.session-menu summary::-webkit-details-marker {
-  display: none;
-}
-
-.session-menu[open] {
-  z-index: 8;
-}
-
-.session-menu[open] summary {
+.session-menu-button:active,
+.session-menu-button:focus-visible {
   color: var(--text);
   border-color: var(--line);
   background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
 }
 
-.session-menu > button {
-  display: block;
-  position: absolute;
-  right: 0;
-  top: 40px;
-  z-index: 9;
-  width: 122px;
-  min-height: 34px;
-  margin-top: 4px;
+.session-action-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 42;
+  display: grid;
+  align-items: end;
+  padding: 0 12px calc(12px + env(safe-area-inset-bottom));
+  background: rgba(0, 0, 0, 0.32);
+}
+
+.session-action-panel {
+  display: grid;
+  gap: 8px;
+  width: min(520px, 100%);
+  margin: 0 auto;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--drawer-bg);
+}
+
+.session-action-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.session-action-head > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.session-action-head strong,
+.session-action-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-action-head strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.session-action-head span {
+  color: var(--soft);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.session-action-buttons {
+  display: grid;
+  gap: 6px;
+}
+
+.session-action-buttons button {
+  min-height: 42px;
   padding: 0 12px;
   border: 1px solid var(--line);
-  border-radius: 0;
-  background: var(--drawer-bg);
+  background: var(--surface);
   color: var(--text);
   text-align: left;
-  font-size: 12px;
+  font-size: 14px;
 }
 
-.session-menu > button:first-of-type {
-  border-top-left-radius: var(--radius);
-  border-top-right-radius: var(--radius);
-}
-
-.session-menu > button:last-of-type {
-  border-bottom-left-radius: var(--radius);
-  border-bottom-right-radius: var(--radius);
-}
-
-.session-menu > button + button {
-  margin-top: -1px;
-}
-
-.session-menu > button:nth-of-type(2) {
-  top: 73px;
-}
-
-.session-menu > button:nth-of-type(3) {
-  top: 106px;
-}
-
-.session-menu > button.danger {
+.session-action-buttons button.danger {
   color: var(--danger);
 }
 
