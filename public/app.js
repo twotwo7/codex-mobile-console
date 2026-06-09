@@ -555,7 +555,6 @@ function setDrawerPanel(panel) {
   const skillsActive = state.drawerPanel === 'skills';
   const settingsActive = state.drawerPanel === 'settings';
   if (el.drawerTitle) el.drawerTitle.textContent = settingsActive ? '设置' : skillsActive ? 'Skills' : '会话';
-  if (el.newSessionButton) el.newSessionButton.hidden = skillsActive || settingsActive;
   el.drawerSessionsButton.classList.toggle('active', !skillsActive && !settingsActive);
   el.skillManagerButton.classList.toggle('active', skillsActive);
   el.drawerSettingsButton.classList.toggle('active', settingsActive);

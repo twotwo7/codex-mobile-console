@@ -333,6 +333,32 @@ button:disabled {
   align-items: end;
 }
 
+.drawer-session-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.drawer-add-button {
+  width: 34px;
+  min-width: 34px;
+  min-height: 36px;
+  padding: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  font-size: 18px;
+  line-height: 1;
+}
+
+.drawer-add-button:active,
+.drawer-add-button:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface-2));
+}
+
 .drawer-mode-row {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
