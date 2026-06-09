@@ -1,11 +1,14 @@
 import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
+import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
 import { createMessageView } from './message-view.js?v=3';
 import { createPromptActions } from './prompt-actions.js?v=4';
 import { createQueueView } from './queue-view.js?v=3';
+import { createSessionStateController } from './session-state.js?v=1';
 import { createSkillView } from './skill-view.js?v=3';
+import { createTopbarView } from './topbar-view.js?v=1';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -30,6 +33,10 @@ const state = {
   messageCollapseStates: new Map(),
   lastSeq: new Map(),
   eventSource: null,
+  eventConnectionStatus: 'closed',
+  lastEventAt: '',
+  lastContextRefreshAt: '',
+  lastSessionSnapshotAt: '',
   contextRefreshTimer: null,
   contextRefreshInFlight: false,
   foregroundRefreshTimer: null,
@@ -57,6 +64,10 @@ const state = {
   skillDialogMode: 'quick'
 };
 
+let sessionState;
+let topbarView;
+const connectionState = createConnectionState({ online: state.online });
+
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
 const MAX_BROWSER_CACHED_MESSAGES = 360;
@@ -67,6 +78,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
+const APP_ASSET_VERSION = '111';
+const SW_CACHE_VERSION = 'codex-console-v127';
 
 const CODEX_COMMANDS = [
   { name: '/status', detail: '查看会话状态', value: '/status' },
@@ -192,6 +205,29 @@ const el = {
   closeImageViewer: document.querySelector('#closeImageViewer'),
   imageViewerImg: document.querySelector('#imageViewerImg')
 };
+
+topbarView = createTopbarView({
+  el,
+  getOnline: () => state.online,
+  isSessionRunning: (session) => sessionState ? sessionState.isSessionRunning(session) : false,
+  updateFavoritesButton
+});
+
+sessionState = createSessionStateController({
+  getActiveId: () => state.activeId,
+  getSessions: () => state.sessions,
+  setSessions: (sessions) => {
+    state.sessions = sessions;
+  },
+  saveSessionCache,
+  onActiveSessionChange: (session) => {
+    mirrorConnectionState(connectionState.markSessionSnapshot());
+    topbarView.renderActiveStatus(session);
+  },
+  onSessionChange: () => {
+    mirrorConnectionState(connectionState.markSessionSnapshot());
+  }
+});
 
 const promptActions = createPromptActions({
   api,
@@ -497,6 +533,15 @@ function parseEventData(event, fallback = null) {
   }
 }
 
+function mirrorConnectionState(snapshot = connectionState.snapshot()) {
+  state.online = snapshot.online;
+  state.eventConnectionStatus = snapshot.eventConnectionStatus;
+  state.lastEventAt = snapshot.lastEventAt;
+  state.lastContextRefreshAt = snapshot.lastContextRefreshAt;
+  state.lastSessionSnapshotAt = snapshot.lastSessionSnapshotAt;
+  return snapshot;
+}
+
 function setActiveSessionId(id = '') {
   state.activeId = id || '';
   storageSet('cmc.activeId', state.activeId);
@@ -596,20 +641,8 @@ function closeModal(dialog) {
   }
 }
 
-function statusIconMode(mode = '') {
-  if (mode === 'online') return 'online';
-  if (mode === 'running') return 'running';
-  if (mode === 'busy') return 'busy';
-  return 'offline';
-}
-
 function setBadge(text, mode = '') {
-  const label = text || '离线';
-  el.connectionBadge.textContent = '';
-  el.connectionBadge.className = `connection-badge ${mode}`.trim();
-  el.connectionBadge.dataset.icon = statusIconMode(mode);
-  el.connectionBadge.setAttribute('aria-label', label);
-  el.connectionBadge.title = label;
+  topbarView.setBadge(text, mode);
 }
 
 function renderSessions(options = {}) {
@@ -787,31 +820,7 @@ function renderSessionButton(session) {
 }
 
 function renderActiveStatus(session = getActiveSession()) {
-  const isRunning = isSessionRunning(session);
-  const canStop = session?.canStop !== false && isRunning && session?.status !== 'stopping';
-  el.stopButton.hidden = !isRunning;
-  el.stopButton.disabled = !session || !canStop;
-  el.stopButton.setAttribute('aria-label', canStop ? '停止当前任务' : '正在停止当前任务');
-  el.stopButton.title = canStop ? '停止当前任务' : '正在停止当前任务';
-  el.connectionBadge.hidden = isRunning;
-  el.runtimeButton.disabled = !session;
-
-  if (!session) {
-    el.connectionBadge.hidden = false;
-    el.activeTitle.textContent = 'Codex Console';
-    el.activeMeta.textContent = '未选择会话';
-    setBadge(state.online ? '在线' : '离线', state.online ? 'online' : '');
-    updateFavoritesButton();
-    return;
-  }
-
-  el.activeTitle.textContent = session.title;
-  el.activeMeta.textContent = session.cwd || '';
-  setBadge(
-    isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : state.online ? '在线' : '离线',
-    isRunning ? 'running' : state.online ? 'online' : ''
-  );
-  updateFavoritesButton();
+  topbarView.renderActiveStatus(session);
 }
 
 function renderActive(options = {}) {
@@ -929,52 +938,19 @@ function shouldFollowNewMessage(sessionId = state.activeId) {
 }
 
 function getActiveSession() {
-  return state.sessions.find((item) => item.id === state.activeId);
+  return sessionState.getActiveSession();
 }
 
 function isSessionRunning(session) {
-  if (!session) return false;
-  if (['idle', 'error'].includes(session.status)) return false;
-  if (typeof session.isRunning === 'boolean') return session.isRunning;
-  return session.status === 'running' || session.status === 'stopping';
+  return sessionState.isSessionRunning(session);
 }
 
 function isActiveSessionRunning() {
-  return isSessionRunning(getActiveSession());
-}
-
-function sessionStatusFromMessage(message) {
-  if (!message) return '';
-  if (['running', 'stopping', 'idle', 'error'].includes(message.status)) return message.status;
-  if (message.role !== 'system') return '';
-  const text = String(message.text || '');
-  if (text.includes('Codex run finished. Starting next queued prompt.')) return 'running';
-  if (text.includes('Codex is working')) return 'running';
-  if (text.includes('Stop requested.')) return 'stopping';
-  if (text.includes('Codex run finished.') || text.includes('Codex run stopped.') || text.includes('Recovered stale run state')) return 'idle';
-  if (text.includes('Codex exited with code') || text.includes('Failed to start Codex')) return 'error';
-  return '';
-}
-
-function messageSequenceValue(message) {
-  return Number(message?.orderSeq || message?.seq || 0);
+  return sessionState.isActiveSessionRunning();
 }
 
 function applySessionStatusFromMessage(sessionId, message, messages) {
-  const status = sessionStatusFromMessage(message);
-  if (!status) return false;
-  const messageSeq = messageSequenceValue(message);
-  const latestSeq = lastRealSeq(messages);
-  if (messageSeq && latestSeq && messageSeq < latestSeq) return false;
-  const nextRunning = status === 'running' || status === 'stopping';
-  return mergeSessionSnapshot({
-    id: sessionId,
-    status,
-    isRunning: nextRunning,
-    canStop: status === 'running',
-    queuedCount: message.queuedCount,
-    updatedAt: message.at
-  });
+  return sessionState.applySessionStatusFromMessage(sessionId, message, messages);
 }
 
 function syncStreamingMarkers() {
@@ -985,44 +961,7 @@ function syncStreamingMarkers() {
 }
 
 function mergeSessionSnapshot(nextSession) {
-  if (!nextSession?.id) return false;
-  const patch = Object.fromEntries(Object.entries(nextSession).filter(([, value]) => value !== undefined));
-  const index = state.sessions.findIndex((item) => item.id === nextSession.id);
-  if (index < 0) {
-    state.sessions.unshift(patch);
-    saveSessionCache();
-    if (nextSession.id === state.activeId) renderActiveStatus(patch);
-    return true;
-  }
-
-  const current = state.sessions[index];
-  const next = { ...current, ...patch };
-  const scalarKeys = [
-    'source',
-    'title',
-    'cwd',
-    'model',
-    'sandbox',
-    'approval',
-    'codexSessionId',
-    'status',
-    'trashedAt',
-    'createdAt',
-    'updatedAt',
-    'lastSeq',
-    'storedStatus',
-    'isRunning',
-    'canStop',
-    'queuedCount'
-  ];
-  const changed = scalarKeys.some((key) => current[key] !== next[key])
-    || JSON.stringify(current.queue || []) !== JSON.stringify(next.queue || []);
-  if (!changed) return false;
-
-  state.sessions = state.sessions.map((item) => item.id === next.id ? next : item);
-  saveSessionCache();
-  if (next.id === state.activeId) renderActiveStatus(next);
-  return true;
+  return sessionState.mergeSessionSnapshot(nextSession);
 }
 
 function renderMessages(sessionId, options = {}) {
@@ -1355,9 +1294,6 @@ function localStorageStats() {
 
 async function browserRuntimeInfo(sessionId) {
   const now = Date.now();
-  if (state.localRuntimeSnapshot && state.localRuntimeSessionId === sessionId && now - state.localRuntimeSnapshotAt < 5000) {
-    return state.localRuntimeSnapshot;
-  }
   const [storageEstimate, cacheNames] = await Promise.all([
     navigator.storage?.estimate ? navigator.storage.estimate().catch(() => null) : null,
     window.caches?.keys ? caches.keys().catch(() => []) : []
@@ -1365,7 +1301,21 @@ async function browserRuntimeInfo(sessionId) {
   const local = localStorageStats();
   const messages = sessionId ? loadMessages(sessionId) : [];
   const page = sessionId ? loadMessagePage(sessionId) : null;
+  const active = getActiveSession();
+  const connection = connectionState.snapshot();
   const snapshot = {
+    activeId: state.activeId,
+    activeStatus: active?.status || '',
+    activeStoredStatus: active?.storedStatus || '',
+    activeIsRunning: isSessionRunning(active),
+    activeCanStop: active?.canStop !== false && isSessionRunning(active) && active?.status !== 'stopping',
+    activeQueuedCount: active?.queuedCount || active?.queue?.length || 0,
+    appAssetVersion: APP_ASSET_VERSION,
+    swCacheVersion: SW_CACHE_VERSION,
+    eventConnectionStatus: connection.eventConnectionStatus,
+    lastEventAt: connection.lastEventAt,
+    lastContextRefreshAt: connection.lastContextRefreshAt,
+    lastSessionSnapshotAt: connection.lastSessionSnapshotAt,
     online: navigator.onLine,
     visibility: document.visibilityState || '',
     platform: navigator.userAgentData?.platform || navigator.platform || '',
@@ -1388,6 +1338,7 @@ async function browserRuntimeInfo(sessionId) {
     pageHasMore: page?.hasMore === true,
     pendingImages: state.pendingImages.length,
     renderingMessages: state.renderingMessages,
+    renderedMessages: el.messagePane.querySelectorAll('.message').length,
     updatedAt: new Date().toISOString()
   };
   state.localRuntimeSnapshot = snapshot;
@@ -1475,6 +1426,25 @@ function renderBrowserRuntime(local) {
   `;
 }
 
+function renderFrontendRuntime(local) {
+  return `
+    <div class="runtime-section">
+      <strong>前端状态</strong>
+      <div class="runtime-grid compact">
+        <span>会话 <strong>${escapeHtml(local.activeId || '-')}</strong></span>
+        <span>状态 <strong>${escapeHtml(local.activeStatus || '-')}</strong></span>
+        <span>运行 <strong>${local.activeIsRunning ? '是' : '否'}</strong></span>
+        <span>可停止 <strong>${local.activeCanStop ? '是' : '否'}</strong></span>
+        <span>SSE <strong>${escapeHtml(local.eventConnectionStatus || '-')}</strong></span>
+        <span>版本 <strong>${escapeHtml(local.appAssetVersion || '-')}</strong></span>
+        <span>渲染 <strong>${local.renderedMessages || 0}</strong></span>
+        <span>队列 <strong>${local.activeQueuedCount || 0}</strong></span>
+      </div>
+      <span>事件 ${escapeHtml(formatTime(local.lastEventAt) || '-')} · 主动刷新 ${escapeHtml(formatTime(local.lastContextRefreshAt) || '-')} · 状态快照 ${escapeHtml(formatTime(local.lastSessionSnapshotAt) || '-')} · SW ${escapeHtml(local.swCacheVersion)}</span>
+    </div>
+  `;
+}
+
 async function renderRuntimePanel(data) {
   const active = data.activeRun;
   const processes = data.processes || [];
@@ -1491,6 +1461,7 @@ async function renderRuntimePanel(data) {
         <span>时长 <strong>${formatDuration(data.uptimeMs || 0)}</strong></span>
       </div>
     </div>
+    ${renderFrontendRuntime(local)}
     ${renderBrowserRuntime(local)}
     ${renderServiceRuntime(data)}
     ${renderTokenUsage(data)}
@@ -1591,13 +1562,11 @@ function closeRuntimeDialog() {
 }
 
 function setTopMoreMenu(open) {
-  if (!el.topMoreButton || !el.topMoreMenu) return;
-  el.topMoreMenu.hidden = !open;
-  el.topMoreButton.setAttribute('aria-expanded', String(open));
+  topbarView.setTopMoreMenu(open);
 }
 
 function closeTopMoreMenu() {
-  setTopMoreMenu(false);
+  topbarView.closeTopMoreMenu();
 }
 
 function loadImage(dataUrl) {
@@ -1951,6 +1920,7 @@ async function refreshActiveContext() {
   const session = getActiveSession();
   if (!session?.id || !state.online || state.contextRefreshInFlight) return;
   state.contextRefreshInFlight = true;
+  mirrorConnectionState(connectionState.markContextRefresh());
   try {
     const page = state.messagePages.get(session.id);
     const currentMessages = loadMessages(session.id);
@@ -1998,14 +1968,19 @@ function startContextRefreshLoop() {
 
 function connectEvents(id) {
   if (state.eventSource) state.eventSource.close();
-  if (!id || !navigator.onLine) return;
+  if (!id || !navigator.onLine) {
+    mirrorConnectionState(connectionState.setEventStatus('closed'));
+    return;
+  }
 
   const after = state.lastSeq.get(id) || 0;
   const source = new EventSource(`/api/events?sessionId=${encodeURIComponent(id)}&after=${after}`);
   state.eventSource = source;
+  mirrorConnectionState(connectionState.setEventStatus('connecting'));
 
   source.addEventListener('hello', (event) => {
-    state.online = true;
+    mirrorConnectionState(connectionState.setOnline(true));
+    mirrorConnectionState(connectionState.markEvent('open'));
     let sessionChanged = false;
     const data = parseEventData(event, {});
     sessionChanged = data?.session ? mergeSessionSnapshot(data.session) : false;
@@ -2014,16 +1989,19 @@ function connectEvents(id) {
   });
 
   source.addEventListener('message', (event) => {
+    mirrorConnectionState(connectionState.markEvent('open'));
     const message = parseEventData(event);
     if (message) upsertMessage(id, message);
   });
 
   source.addEventListener('message_update', (event) => {
+    mirrorConnectionState(connectionState.markEvent('open'));
     const message = parseEventData(event);
     if (message) updateMessage(id, message);
   });
 
   source.addEventListener('session', (event) => {
+    mirrorConnectionState(connectionState.markEvent('open'));
     const session = parseEventData(event);
     if (!session) return;
     const changed = mergeSessionSnapshot(session);
@@ -2034,6 +2012,7 @@ function connectEvents(id) {
   source.onerror = () => {
     source.close();
     if (state.eventSource === source) state.eventSource = null;
+    mirrorConnectionState(connectionState.setEventStatus('reconnecting'));
     setBadge('重连中', 'busy');
     refreshActiveContext().catch(() => {});
     setTimeout(() => {
@@ -2489,14 +2468,15 @@ el.messagePane.addEventListener('scroll', () => {
 }, { passive: true });
 
 window.addEventListener('online', () => {
-  state.online = true;
+  mirrorConnectionState(connectionState.setOnline(true));
   refreshSessions({ messages: false }).catch(() => {});
   if (state.activeId) connectEvents(state.activeId);
   startContextRefreshLoop();
 });
 
 window.addEventListener('offline', () => {
-  state.online = false;
+  mirrorConnectionState(connectionState.setOnline(false));
+  mirrorConnectionState(connectionState.setEventStatus('closed'));
   if (state.eventSource) state.eventSource.close();
   clearInterval(state.contextRefreshTimer);
   renderActive({ messages: false });

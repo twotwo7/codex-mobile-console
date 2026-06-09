@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "start": "node server.js",
+    "check:state": "node scripts/state-controller-check.mjs",
     "check:mobile-ui": "node scripts/mobile-ui-check.mjs"
   },
   "devDependencies": {
