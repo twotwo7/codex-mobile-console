@@ -1596,7 +1596,7 @@ async function loadSkills(force = false) {
 }
 
 async function refreshSkillsInBackground() {
-  el.refreshSkillsButton.disabled = true;
+  if (el.refreshSkillsButton) el.refreshSkillsButton.disabled = true;
   el.drawerRefreshSkillsButton.disabled = true;
   el.skillStatus.textContent = '已提交扫描，列表会从缓存读取。';
   el.drawerSkillStatus.textContent = '已提交扫描，列表会从缓存读取。';
@@ -1613,7 +1613,7 @@ async function refreshSkillsInBackground() {
     el.skillStatus.textContent = error.message || '提交扫描失败';
     el.drawerSkillStatus.textContent = error.message || '提交扫描失败';
   } finally {
-    el.refreshSkillsButton.disabled = false;
+    if (el.refreshSkillsButton) el.refreshSkillsButton.disabled = false;
     el.drawerRefreshSkillsButton.disabled = false;
   }
 }
@@ -2227,7 +2227,7 @@ el.closeSkillDialog.addEventListener('click', () => closeModal(el.skillDialog));
 el.closeSkillDetailDialog.addEventListener('click', () => closeModal(el.skillDetailDialog));
 el.skillSearch.addEventListener('input', skillView.renderSkillList);
 el.drawerSkillSearch.addEventListener('input', skillView.renderDrawerSkillList);
-el.refreshSkillsButton.addEventListener('click', () => {
+el.refreshSkillsButton?.addEventListener('click', () => {
   refreshSkillsInBackground();
 });
 el.drawerRefreshSkillsButton.addEventListener('click', () => {
