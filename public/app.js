@@ -1,9 +1,9 @@
 import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
-import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=5';
+import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
 import { createMessageView } from './message-view.js?v=3';
-import { createPromptActions } from './prompt-actions.js?v=5';
+import { createPromptActions } from './prompt-actions.js?v=4';
 import { createQueueView } from './queue-view.js?v=3';
 import { createSkillView } from './skill-view.js?v=3';
 
@@ -26,12 +26,7 @@ const state = {
   expandedCwds: new Set(storedExpandedCwds),
   messages: new Map(),
   messagePages: new Map(),
-  turnRenderLimits: new Map(),
   messageCollapseStates: new Map(),
-  turnCollapseStates: new Map(),
-  pendingTurnCollapseSaves: new Set(),
-  turnCollapseSaveHandle: null,
-  latestTurnIds: new Map(),
   lastSeq: new Map(),
   eventSource: null,
   contextRefreshTimer: null,
@@ -51,10 +46,6 @@ const state = {
   loadingOlder: false,
   cleanupTimer: null,
   localCacheCleanupHandle: null,
-  promptResizeHandle: 0,
-  expandedTurnOrder: [],
-  collapsedTurnBodyOrder: [],
-  loadingTurnIds: new Set(),
   online: navigator.onLine,
   localRuntimeSnapshot: null,
   localRuntimeSnapshotAt: 0,
@@ -64,17 +55,16 @@ const state = {
   skillDialogMode: 'quick'
 };
 
-const HISTORY_TURN_PAGE_SIZE = 2;
-const REFRESH_MESSAGE_LIMIT = 120;
+const HISTORY_PAGE_SIZE = 120;
 const MAX_CACHED_SESSIONS = 2;
-const MAX_LOCAL_MESSAGES = 3000;
-const MAX_BROWSER_CACHED_MESSAGES = 3000;
-const MIN_BROWSER_CACHED_MESSAGES = 360;
-const DEFAULT_RENDERED_TURNS = 3;
-const MAX_EXPANDED_TURNS = 2;
-const MAX_COLLAPSED_TURN_BODIES = 3;
+const MAX_LOCAL_MESSAGES = 800;
+const MAX_BROWSER_CACHED_MESSAGES = 360;
+const DESKTOP_MAX_RENDERED_MESSAGES = 180;
+const MOBILE_MAX_RENDERED_MESSAGES = 120;
+const MOBILE_MESSAGE_CHUNK = 18;
+const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
-const MAX_LOCAL_MESSAGE_CACHE_BYTES = 4_500_000;
+const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
 
 const CODEX_COMMANDS = [
@@ -98,8 +88,6 @@ const IMAGE_PROMPTS = [
 const messageScheduler = createMessageScheduler({
   getActiveId: () => state.activeId,
   isRendering: () => state.renderingMessages,
-  renderDebounceMs: 220,
-  renderBusyDelayMs: 320,
   render: ({ sessionId, stickToBottom, restoreAnchor }) => {
     renderMessages(sessionId, { stickToBottom, restoreAnchor });
   },
@@ -260,16 +248,11 @@ function collapseStateKey(sessionId = state.activeId) {
   return `cmc.messageCollapsed.${sessionId || 'global'}`;
 }
 
-function turnCollapseStateKey(sessionId = state.activeId) {
-  return `cmc.turnCollapsed.${sessionId || 'global'}`;
-}
-
 function messageCollapseId(message) {
   return message.clientMessageId
     || (message.ids || []).find(Boolean)
     || message.id
-    || (message.seq ? `seq:${message.seq}` : '')
-    || (message.orderSeq ? `order:${message.orderSeq}` : '');
+    || (message.seq ? `seq:${message.seq}` : '');
 }
 
 function getMessageCollapsed(message) {
@@ -301,42 +284,6 @@ function loadMessageCollapseStates(sessionId = state.activeId || 'global') {
   return safeStates;
 }
 
-function loadTurnCollapseStates(sessionId = state.activeId || 'global') {
-  if (state.turnCollapseStates.has(sessionId)) return state.turnCollapseStates.get(sessionId);
-  const states = storageJsonGet(turnCollapseStateKey(sessionId), {});
-  const safeStates = states && typeof states === 'object' ? states : {};
-  state.turnCollapseStates.set(sessionId, safeStates);
-  return safeStates;
-}
-
-function setTurnCollapsed(sessionId, turnId, collapsed) {
-  if (!sessionId || !turnId) return;
-  const states = loadTurnCollapseStates(sessionId);
-  states[turnId] = collapsed === true;
-  state.turnCollapseStates.set(sessionId, states);
-  scheduleTurnCollapseSave(sessionId);
-}
-
-function scheduleTurnCollapseSave(sessionId) {
-  if (!sessionId) return;
-  state.pendingTurnCollapseSaves.add(sessionId);
-  if (state.turnCollapseSaveHandle) return;
-  state.turnCollapseSaveHandle = scheduleIdle(() => {
-    state.turnCollapseSaveHandle = null;
-    flushTurnCollapseSaves();
-  }, 1200);
-}
-
-function flushTurnCollapseSaves() {
-  cancelIdle(state.turnCollapseSaveHandle);
-  state.turnCollapseSaveHandle = null;
-  const ids = [...state.pendingTurnCollapseSaves];
-  state.pendingTurnCollapseSaves.clear();
-  for (const sessionId of ids) {
-    storageJsonSet(turnCollapseStateKey(sessionId), loadTurnCollapseStates(sessionId));
-  }
-}
-
 function saveSessionCache() {
   storageJsonSet('cmc.sessions', state.sessions);
 }
@@ -353,7 +300,10 @@ function loadCachedSessions() {
 
 function saveMessages(id) {
   const messages = trimMessagesForStorage(mergeMessages([], state.messages.get(id) || []));
-  if (!saveMessageCacheWithFallback(cacheKey(id), messages)) scheduleLocalCacheCleanup(500);
+  const cached = messages.slice(-MAX_BROWSER_CACHED_MESSAGES).map(cacheSafeMessage);
+  if (!storageJsonSet(cacheKey(id), cached)) {
+    scheduleLocalCacheCleanup(500);
+  }
 }
 
 function trimMessagesForStorage(messages) {
@@ -364,81 +314,9 @@ function trimMessagesForStorage(messages) {
 function cacheSafeMessage(message) {
   return {
     ...message,
-    images: (message.images || []).map(cacheSafeImage),
+    images: (message.images || []).map(({ data, dataUrl, ...image }) => image),
     retryImages: (message.retryImages || []).map(({ data, dataUrl, ...image }) => image)
   };
-}
-
-function cacheSafeImage(image) {
-  const { data, dataUrl, ...safe } = image || {};
-  if (!safe.url && safe.fileName) safe.url = `/api/uploads/${encodeURIComponent(safe.fileName)}`;
-  if (!safe.url && !safe.fileName && dataUrl) safe.dataUrl = dataUrl;
-  return safe;
-}
-
-function safeMessageCache(messages, limit) {
-  return messages.slice(-limit).map(cacheSafeMessage);
-}
-
-function saveMessageCacheWithFallback(key, messages) {
-  const attempts = [];
-  let limit = Math.min(MAX_BROWSER_CACHED_MESSAGES, messages.length || 0);
-  while (limit > MIN_BROWSER_CACHED_MESSAGES) {
-    attempts.push(limit);
-    limit = Math.max(MIN_BROWSER_CACHED_MESSAGES, Math.floor(limit / 2));
-  }
-  attempts.push(Math.min(MIN_BROWSER_CACHED_MESSAGES, messages.length || MIN_BROWSER_CACHED_MESSAGES));
-  for (const attempt of [...new Set(attempts.filter((item) => item > 0))]) {
-    if (storageJsonSet(key, safeMessageCache(messages, attempt))) return true;
-  }
-  return storageJsonSet(key, []);
-}
-
-function messageListSignature(messages) {
-  if (!Array.isArray(messages) || !messages.length) return '0';
-  const last = messages.at(-1) || {};
-  const middle = messages[Math.floor(messages.length / 2)] || {};
-  const checksum = messages.reduce((sum, message) => (
-    sum
-    + Number(message.orderSeq || message.seq || 0)
-    + String(message.text || '').length
-    + (message.pending ? 17 : 0)
-    + (message.streaming ? 31 : 0)
-    + (message.failed ? 47 : 0)
-  ), 0);
-  return [
-    messages.length,
-    checksum,
-    middle.id || middle.clientMessageId || middle.orderSeq || middle.seq || '',
-    last.id || '',
-    last.clientMessageId || '',
-    last.orderSeq || last.seq || '',
-    last.role || '',
-    last.at || '',
-    String(last.text || '').length,
-    last.pending ? 'p' : '',
-    last.streaming ? 's' : '',
-    last.failed ? 'f' : ''
-  ].join(':');
-}
-
-function mergeFetchedMessages(currentMessages, fetchedMessages, page = {}) {
-  const incoming = Array.isArray(fetchedMessages) ? fetchedMessages : [];
-  if (page?.compactTurns !== true) return mergeMessages(currentMessages, incoming);
-  const compactRanges = incoming
-    .map((message) => message.turnSummary)
-    .filter((summary) => summary && summary.full === false && Number(summary.startSeq || 0) > 0)
-    .map((summary) => ({
-      startSeq: Number(summary.startSeq || 0),
-      endSeq: Number(summary.endSeq || summary.startSeq || 0)
-    }));
-  if (!compactRanges.length) return mergeMessages(currentMessages, incoming);
-  const reduced = (currentMessages || []).filter((message) => {
-    const seq = Number(message.orderSeq || message.seq || 0);
-    if (!seq) return true;
-    return !compactRanges.some((range) => seq > range.startSeq && seq <= range.endSeq);
-  });
-  return mergeMessages(reduced, incoming);
 }
 
 function loadMessages(id, options = {}) {
@@ -463,21 +341,15 @@ function loadMessagePage(id) {
 }
 
 function firstPageLimit() {
-  return DEFAULT_RENDERED_TURNS;
+  return renderedMessageLimit();
 }
 
 function maxHistoryLimit() {
   return MAX_LOCAL_MESSAGES;
 }
 
-function sessionRenderedTurnLimit(sessionId = state.activeId) {
-  return Math.min(maxHistoryLimit(), Math.max(DEFAULT_RENDERED_TURNS, Number(state.turnRenderLimits.get(sessionId) || 0)));
-}
-
-function expandRenderedTurnLimit(sessionId, count) {
-  if (!sessionId || !Number.isFinite(count) || count <= 0) return;
-  const current = sessionRenderedTurnLimit(sessionId);
-  state.turnRenderLimits.set(sessionId, Math.min(maxHistoryLimit(), current + count));
+function renderedMessageLimit() {
+  return isMobileViewport() ? MOBILE_MAX_RENDERED_MESSAGES : DESKTOP_MAX_RENDERED_MESSAGES;
 }
 
 function setMessagePage(sessionId, page, options = {}) {
@@ -492,19 +364,6 @@ function setMessagePage(sessionId, page, options = {}) {
   const next = {
     offset,
     total,
-    totalTurns: Number(page?.totalTurns ?? current.totalTurns ?? 0),
-    loadedTurns: Number(page?.loadedTurns ?? countMessageTurns(state.messages.get(sessionId) || [])),
-    turnLimit: Number(page?.turnLimit || current.turnLimit || firstPageLimit()),
-    compactTurns: options.preserveOffset && page?.compactTurns === false
-      ? current.compactTurns === true
-      : page?.compactTurns === undefined
-      ? current.compactTurns === true
-      : page?.compactTurns === true || page?.compactTurns === 'true' || page?.compactTurns === 1,
-    latestFull: options.preserveOffset && page?.latestFull === false
-      ? current.latestFull === true
-      : page?.latestFull === undefined
-      ? current.latestFull === true
-      : page?.latestFull === true || page?.latestFull === 'true' || page?.latestFull === 1,
     beforeSeq: currentBeforeSeq && incomingBeforeSeq ? Math.min(currentBeforeSeq, incomingBeforeSeq) : incomingBeforeSeq || currentBeforeSeq,
     afterSeq: Number(page?.afterSeq || current.afterSeq || 0),
     latestSeq: Number(page?.latestSeq || current.latestSeq || 0),
@@ -530,16 +389,7 @@ function isMessageCacheFresh(sessionId, session) {
   return Boolean(messages.length)
     && Boolean(page?.beforeSeq || messages.some((message) => message.orderSeq))
     && page?.sessionUpdatedAt === session.updatedAt
-    && page?.compactTurns === true
-    && page?.turnLimit === firstPageLimit()
-    && countMessageTurns(messages) >= firstPageLimit();
-}
-
-function countMessageTurns(messages) {
-  if (!Array.isArray(messages) || !messages.length) return 0;
-  return messages.reduce((count, message, index) => (
-    count + (index === 0 || message.role === 'user' ? 1 : 0)
-  ), 0);
+    && Number(page?.offset || 0) >= Math.min(firstPageLimit(), messages.length);
 }
 
 function sessionMessagesUrl(sessionId, params = {}) {
@@ -586,7 +436,7 @@ function cleanupLocalMessageCaches(deadline) {
         cleaned += 1;
         continue;
       }
-      saveMessageCacheWithFallback(key, parsed);
+      localStorage.setItem(key, JSON.stringify(parsed.slice(-MAX_BROWSER_CACHED_MESSAGES).map(cacheSafeMessage)));
       cleaned += 1;
     }
   } catch {
@@ -616,14 +466,7 @@ async function api(path, options = {}) {
     error.detail = data.message || '';
     throw error;
   }
-  markConnectionOnline();
   return data;
-}
-
-function markConnectionOnline() {
-  if (state.online === true) return;
-  state.online = true;
-  renderActive({ messages: false });
 }
 
 function parseEventData(event, fallback = null) {
@@ -905,14 +748,12 @@ function renderActive(options = {}) {
   if (shouldRenderMessages) {
     renderMessages(session.id, {
       stickToBottom: options.stickToBottom ?? shouldStickToBottom(session.id),
-      restoreAnchor: options.restoreAnchor || null,
-      scrollToTop: options.scrollToTop === true
+      restoreAnchor: options.restoreAnchor || null
     });
   }
   else {
     updateQueuePanel();
     updateRunIndicator();
-    if (options.stickToBottom === true && isRunning && shouldFollowNewMessage(session.id)) settleMessagesToBottom();
     syncStreamingMarkers();
   }
   updateFavoritesButton();
@@ -946,11 +787,10 @@ function messageBottomDistance() {
 
 function firstVisibleMessageAnchor() {
   const paneTop = el.messagePane.getBoundingClientRect().top;
-  for (const node of el.messagePane.querySelectorAll('.message, .conversation-turn')) {
+  for (const node of el.messagePane.querySelectorAll('.message')) {
     const rect = node.getBoundingClientRect();
     if (rect.bottom < paneTop) continue;
     return {
-      turnId: node.dataset.turnId || '',
       seq: node.dataset.seq || '',
       id: node.dataset.messageId || '',
       clientMessageId: node.dataset.clientMessageId || '',
@@ -962,11 +802,10 @@ function firstVisibleMessageAnchor() {
 
 function restoreMessageAnchor(anchor) {
   if (!anchor) return false;
-  const nodes = [...el.messagePane.querySelectorAll('.message, .conversation-turn')];
+  const nodes = [...el.messagePane.querySelectorAll('.message')];
   const target = nodes.find((node) => {
     const ids = (node.dataset.messageIds || '').split(',').filter(Boolean);
-    return (anchor.turnId && node.dataset.turnId === anchor.turnId)
-      || (anchor.id && (node.dataset.messageId === anchor.id || ids.includes(anchor.id)))
+    return (anchor.id && (node.dataset.messageId === anchor.id || ids.includes(anchor.id)))
       || (anchor.clientMessageId && node.dataset.clientMessageId === anchor.clientMessageId)
       || (anchor.seq && Number(node.dataset.seq || 0) === Number(anchor.seq || 0));
   });
@@ -1077,24 +916,23 @@ function renderMessages(sessionId, options = {}) {
   const previousBottomDistance = messageBottomDistance();
   const previousAnchor = stickToBottom ? null : options.restoreAnchor || firstVisibleMessageAnchor();
   const renderScrollToken = beginProgrammaticMessageScroll();
-  const existingTurns = new Map([...el.messagePane.querySelectorAll(
-    `.conversation-turn[data-session-id="${CSS.escape(sessionId || '')}"]`
-  )].map((node) => [node.dataset.turnId, node]));
-  const nodes = [];
+  el.messagePane.innerHTML = '';
   const olderControl = renderOlderMessagesControl(sessionId);
-  if (olderControl) nodes.push(olderControl);
+  if (olderControl) el.messagePane.append(olderControl);
+  const allMessages = state.showStarredOnly ? messages : loadMessages(sessionId);
+  if (!state.showStarredOnly && allMessages.length > messages.length) {
+    const clipped = document.createElement('div');
+    clipped.className = 'session-loading compact';
+    clipped.textContent = `仅渲染最近 ${messages.length} 条，向上可加载更早内容`;
+    el.messagePane.append(clipped);
+  }
   if (state.showStarredOnly && !messages.length) {
-    nodes.push(renderFavoriteEmpty());
+    el.messagePane.append(renderFavoriteEmpty());
   }
 
   const restoreScroll = (finalChunk = false) => {
     if (!finalChunk) return;
     if (state.userScrolledDuringRender) {
-      releaseProgrammaticMessageScroll(renderScrollToken);
-      return;
-    }
-    if (options.scrollToTop) {
-      setProgrammaticMessageScrollTop(0);
       releaseProgrammaticMessageScroll(renderScrollToken);
       return;
     }
@@ -1109,30 +947,31 @@ function renderMessages(sessionId, options = {}) {
     releaseProgrammaticMessageScroll(renderScrollToken);
   };
 
-  const turns = groupMessagesIntoTurns(sessionId, messages);
-  for (const turn of turns) {
-    const signature = conversationTurnSignature(turn);
-    const existing = existingTurns.get(turn.id);
-    if (existing?.dataset.turnSignature === signature) {
-      nodes.push(existing);
-      continue;
+  const baseChunkSize = isMobileViewport() ? MOBILE_MESSAGE_CHUNK : DESKTOP_MESSAGE_CHUNK;
+  const chunkSize = messages.length <= renderedMessageLimit() ? Math.max(1, messages.length) : baseChunkSize;
+  let index = 0;
+  const renderChunk = () => {
+    if (renderJobId !== state.renderJobId || state.activeId !== sessionId) {
+      releaseProgrammaticMessageScroll(renderScrollToken);
+      return;
     }
-    const node = renderConversationTurn(sessionId, turn);
-    node.dataset.turnSignature = signature;
-    nodes.push(node);
-  }
-  if (renderJobId !== state.renderJobId || state.activeId !== sessionId) {
-    if (renderJobId === state.renderJobId) state.renderingMessages = false;
-    releaseProgrammaticMessageScroll(renderScrollToken);
-    return;
-  }
-  el.messagePane.replaceChildren(...nodes);
-  pruneTurnDomTracking(sessionId);
-  updateQueuePanel();
-  updateRunIndicator();
-  restoreScroll(true);
-  if (renderJobId === state.renderJobId) state.renderingMessages = false;
-  messageScheduler.flushRender();
+    const fragment = document.createDocumentFragment();
+    const end = Math.min(index + chunkSize, messages.length);
+    for (; index < end; index += 1) {
+      fragment.append(messageView.renderMessage(messages[index], { animate: false }));
+    }
+    el.messagePane.append(fragment);
+    if (index < messages.length) {
+      requestAnimationFrame(renderChunk);
+    } else {
+      restoreScroll(true);
+      updateQueuePanel();
+      updateRunIndicator();
+      if (renderJobId === state.renderJobId) state.renderingMessages = false;
+      messageScheduler.flushRender();
+    }
+  };
+  renderChunk();
 }
 
 function renderOlderMessagesControl(sessionId) {
@@ -1142,11 +981,7 @@ function renderOlderMessagesControl(sessionId) {
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'older-messages-button';
-  const shown = countMessageTurns(displayMessages(sessionId));
-  const total = Number(page.totalTurns || 0);
-  button.textContent = page.loading ? '加载中...' : '加载更早';
-  button.title = total ? `当前显示 ${shown} 轮，共 ${total} 轮` : `当前显示 ${shown} 轮`;
-  button.setAttribute('aria-label', page.loading ? '正在加载更早消息' : `${button.title}，加载更早消息`);
+  button.textContent = page.loading ? '加载中...' : `加载更早 · ${page.offset}/${page.total || '?'}`;
   button.disabled = page.loading === true;
   button.addEventListener('click', () => loadOlderMessages(sessionId));
   return button;
@@ -1167,353 +1002,9 @@ function closeImageViewer() {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
-  const displayable = state.showStarredOnly ? filtered : messagesForConversationTurns(filtered);
-  const visible = state.showStarredOnly ? displayable : visibleMessagesForSession(sessionId, displayable);
+  const maxRendered = renderedMessageLimit();
+  const visible = state.showStarredOnly ? filtered : filtered.slice(-maxRendered);
   return mergeDisplayMessages(visible);
-}
-
-function isQueuedUserMessage(message) {
-  return message?.role === 'user' && (message.runState === 'queued' || message.delivery === 'queued');
-}
-
-function messagesForConversationTurns(messages) {
-  return (messages || []).filter((message) => !isQueuedUserMessage(message));
-}
-
-function isConversationMessage(message) {
-  return Boolean(message && !isQueuedUserMessage(message));
-}
-
-function visibleMessagesForSession(sessionId, messages) {
-  if (!Array.isArray(messages) || !messages.length) return [];
-  const limit = sessionRenderedTurnLimit(sessionId);
-  const turns = splitMessagesIntoTurns(messages);
-  return turns.slice(-limit).flat();
-}
-
-function turnDomKey(sessionId, turnId) {
-  return `${sessionId || 'global'}::${turnId || ''}`;
-}
-
-function moveKeyToEnd(list, key) {
-  const index = list.indexOf(key);
-  if (index >= 0) list.splice(index, 1);
-  list.push(key);
-}
-
-function removeKey(list, key) {
-  const index = list.indexOf(key);
-  if (index >= 0) list.splice(index, 1);
-}
-
-function pruneTurnDomTracking(sessionId) {
-  const liveKeys = new Set([...el.messagePane.querySelectorAll(
-    `.conversation-turn[data-session-id="${CSS.escape(sessionId || '')}"]`
-  )].map((node) => turnDomKey(sessionId, node.dataset.turnId)));
-  state.expandedTurnOrder = state.expandedTurnOrder.filter((key) => !key.startsWith(`${sessionId || 'global'}::`) || liveKeys.has(key));
-  state.collapsedTurnBodyOrder = state.collapsedTurnBodyOrder.filter((key) => !key.startsWith(`${sessionId || 'global'}::`) || liveKeys.has(key));
-}
-
-function groupMessagesIntoTurns(sessionId, messages) {
-  if (state.showStarredOnly) {
-    return messages.map((message, index) => createConversationTurn(sessionId, [message], index, false));
-  }
-  const turns = splitMessagesIntoTurns(messages).map((turnMessages, index) => ({ messages: turnMessages, index }));
-  const conversationTurns = turns.map((turn, index) => createConversationTurn(sessionId, turn.messages, index, true));
-  autoCollapsePreviousTurns(sessionId, conversationTurns);
-  keepLiveTurnExpanded(sessionId, conversationTurns);
-  enforceTurnCollapseLimit(sessionId, conversationTurns);
-  return conversationTurns;
-}
-
-function splitMessagesIntoTurns(messages) {
-  const turns = [];
-  let current = null;
-  for (const message of messages || []) {
-    if (!current || message.role === 'user') {
-      current = [];
-      turns.push(current);
-    }
-    current.push(message);
-  }
-  return turns;
-}
-
-function createConversationTurn(sessionId, messages, index, defaultCollapsed) {
-  const userMessage = messages.find((message) => message.role === 'user') || messages[0] || {};
-  const summary = userMessage.turnSummary || {};
-  const startSeq = Number(summary.startSeq || userMessage.orderSeq || userMessage.seq || 0);
-  const turn = {
-    id: conversationTurnId(messages, index),
-    index,
-    messages,
-    defaultCollapsed,
-    startSeq,
-    endSeq: Number(summary.endSeq || messages.at(-1)?.orderSeq || messages.at(-1)?.seq || startSeq || 0),
-    full: summary.full === true || (summary.full !== false && messages.length > 1) || !summary.startSeq,
-    messageCount: Number(summary.messageCount || messages.length || 0),
-    replyCount: Number(summary.replyCount ?? messages.filter((message) => message.role === 'assistant').length),
-    toolCount: Number(summary.toolCount ?? messages.filter((message) => message.role === 'tool').length)
-  };
-  const states = loadTurnCollapseStates(sessionId);
-  turn.collapsed = typeof states[turn.id] === 'boolean' ? states[turn.id] : defaultCollapsed;
-  return turn;
-}
-
-function enforceTurnCollapseLimit(sessionId, turns) {
-  const expanded = turns.filter((turn) => !turn.collapsed);
-  if (expanded.length <= MAX_EXPANDED_TURNS) return;
-  const states = loadTurnCollapseStates(sessionId);
-  let changed = false;
-  for (const turn of expanded.slice(0, -MAX_EXPANDED_TURNS)) {
-    turn.collapsed = true;
-    if (states[turn.id] !== true) {
-      states[turn.id] = true;
-      changed = true;
-    }
-  }
-  if (!changed) return;
-  state.turnCollapseStates.set(sessionId, states);
-  scheduleTurnCollapseSave(sessionId);
-}
-
-function keepLiveTurnExpanded(sessionId, turns) {
-  const latest = turns.at(-1);
-  if (!latest) return;
-  const session = state.sessions.find((item) => item.id === sessionId);
-  const hasLiveMessage = latest.messages.some((message) => (
-    ['submitted', 'running', 'stopping'].includes(message.runState)
-    || ['submitted', 'running', 'stopping'].includes(message.delivery)
-    || ['running', 'stopping'].includes(message.status)
-    || message.streaming === true
-  ));
-  if (!isSessionRunning(session) && !hasLiveMessage) return;
-  latest.collapsed = false;
-}
-
-function conversationTurnId(messages, index) {
-  const userMessage = messages.find((message) => message.role === 'user') || messages[0] || {};
-  const key = messageCollapseId(userMessage)
-    || userMessage.id
-    || userMessage.seq
-    || userMessage.orderSeq
-    || userMessage.at
-    || index;
-  return `turn:${key}`;
-}
-
-function conversationTurnSignature(turn) {
-  const statePart = turn.collapsed ? 'c' : 'e';
-  const messagePart = turn.messages.map((message) => [
-    message.clientMessageId || message.id || message.seq || message.orderSeq || message.at || '',
-    message.role || '',
-    message.runState || '',
-    message.delivery || '',
-    message.status || '',
-    message.streaming ? '1' : '',
-    message.starred ? '1' : '',
-    message.pending ? '1' : '',
-    message.failed ? '1' : '',
-    String(message.text || '').length,
-    String(message.text || '').slice(0, 80),
-    String(message.text || '').slice(-80),
-    message.images?.length || 0
-  ].join(':')).join('|');
-  return `${statePart}:${turn.index}:${turn.startSeq}:${turn.endSeq}:${turn.messageCount}:${turn.replyCount}:${turn.toolCount}:${messagePart}`;
-}
-
-function renderConversationTurn(sessionId, turn) {
-  const section = document.createElement('section');
-  section.className = `conversation-turn${turn.collapsed ? ' collapsed' : ''}`;
-  section.dataset.sessionId = sessionId;
-  section.dataset.turnId = turn.id;
-  section.dataset.turnIndex = String(turn.index + 1);
-  section.dataset.turnStartSeq = String(turn.startSeq || '');
-
-  const summary = document.createElement('button');
-  summary.type = 'button';
-  summary.className = 'turn-summary-button';
-  summary.setAttribute('aria-expanded', turn.collapsed ? 'false' : 'true');
-  summary.innerHTML = `
-    <span class="turn-toggle-icon" aria-hidden="true">${turn.collapsed ? '▸' : '▾'}</span>
-    <span class="turn-summary-text">${escapeHtml(summarizeTurn(turn))}</span>
-  `;
-  summary.addEventListener('click', () => {
-    const collapsed = !section.classList.contains('collapsed');
-    setTurnCollapsed(sessionId, turn.id, collapsed);
-    setTurnExpandedState(sessionId, section, turn, !collapsed, { animate: !collapsed });
-    if (!collapsed) hydrateTurnIfNeeded(sessionId, section, turn).catch(() => {});
-  });
-  section.append(summary);
-
-  if (!turn.collapsed) {
-    attachTurnBody(sessionId, section, turn);
-    moveKeyToEnd(state.expandedTurnOrder, turnDomKey(sessionId, turn.id));
-  }
-  return section;
-}
-
-function createTurnBody(turn) {
-  const body = document.createElement('div');
-  body.className = 'turn-body';
-  for (const message of turn.messages) {
-    body.append(messageView.renderMessage(message, { animate: false }));
-  }
-  return body;
-}
-
-function attachTurnBody(sessionId, section, turn, options = {}) {
-  let body = section.querySelector(':scope > .turn-body');
-  if (!body) body = createTurnBody(turn);
-  body.classList.toggle('turn-body-animate', options.animate === true);
-  body.hidden = false;
-  if (body.parentElement !== section) section.append(body);
-  const key = turnDomKey(sessionId, turn.id);
-  removeKey(state.collapsedTurnBodyOrder, key);
-  moveKeyToEnd(state.expandedTurnOrder, key);
-  enforceExpandedTurnDomLimit(sessionId, key);
-}
-
-function detachTurnBody(sessionId, section, turn) {
-  const body = section.querySelector(':scope > .turn-body');
-  if (!body) return;
-  body.hidden = true;
-  const key = turnDomKey(sessionId, turn.id);
-  removeKey(state.expandedTurnOrder, key);
-  moveKeyToEnd(state.collapsedTurnBodyOrder, key);
-  pruneCollapsedTurnBodies();
-}
-
-function setTurnExpandedState(sessionId, section, turn, expanded, options = {}) {
-  section.classList.toggle('collapsed', !expanded);
-  const button = section.querySelector('.turn-summary-button');
-  const icon = section.querySelector('.turn-toggle-icon');
-  if (button) button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-  if (icon) icon.textContent = expanded ? '▾' : '▸';
-  if (expanded) attachTurnBody(sessionId, section, turn, options);
-  else detachTurnBody(sessionId, section, turn);
-}
-
-function findTurnSection(sessionId, turnId) {
-  return el.messagePane.querySelector(
-    `.conversation-turn[data-session-id="${CSS.escape(sessionId || '')}"][data-turn-id="${CSS.escape(turnId || '')}"]`
-  );
-}
-
-function findDisplayedTurn(sessionId, turnId) {
-  const turns = splitMessagesIntoTurns(displayMessages(sessionId))
-    .map((messages, index) => createConversationTurn(sessionId, messages, index, true));
-  return turns.find((turn) => turn.id === turnId) || null;
-}
-
-function findTurnBySeqRange(sessionId, sourceTurn) {
-  const startSeq = Number(sourceTurn?.startSeq || 0);
-  if (!startSeq) return null;
-  const endSeq = Number(sourceTurn?.endSeq || 0);
-  const turns = splitMessagesIntoTurns(loadMessages(sessionId));
-  const index = turns.findIndex((messages) => {
-    const userMessage = messages.find((message) => message.role === 'user') || messages[0] || {};
-    const summary = userMessage.turnSummary || {};
-    const userSeq = Number(summary.startSeq || userMessage.orderSeq || userMessage.seq || 0);
-    return userSeq === startSeq;
-  });
-  if (index < 0) return null;
-  const messages = turns[index].filter((message) => {
-    const seq = Number(message.orderSeq || message.seq || 0);
-    return !endSeq || !seq || seq <= endSeq;
-  });
-  return createConversationTurn(sessionId, messages.length ? messages : turns[index], index, false);
-}
-
-function enforceExpandedTurnDomLimit(sessionId, keepKey) {
-  const sessionPrefix = `${sessionId || 'global'}::`;
-  const sessionKeys = state.expandedTurnOrder.filter((key) => key.startsWith(sessionPrefix));
-  while (sessionKeys.length > MAX_EXPANDED_TURNS) {
-    const key = sessionKeys.find((candidate) => candidate !== keepKey) || sessionKeys[0];
-    removeKey(state.expandedTurnOrder, key);
-    removeKey(sessionKeys, key);
-    const [, turnId] = key.split('::');
-    const section = findTurnSection(sessionId, turnId);
-    const turn = findDisplayedTurn(sessionId, turnId);
-    if (!section || !turn || section.classList.contains('collapsed')) continue;
-    setTurnCollapsed(sessionId, turn.id, true);
-    setTurnExpandedState(sessionId, section, turn, false);
-  }
-}
-
-function pruneCollapsedTurnBodies() {
-  state.collapsedTurnBodyOrder = state.collapsedTurnBodyOrder.filter((key) => {
-    const [sessionId, turnId] = key.split('::');
-    const section = findTurnSection(sessionId, turnId);
-    const body = section?.querySelector(':scope > .turn-body');
-    return Boolean(section?.classList.contains('collapsed') && body?.hidden);
-  });
-  while (state.collapsedTurnBodyOrder.length > MAX_COLLAPSED_TURN_BODIES) {
-    const key = state.collapsedTurnBodyOrder.shift();
-    const [sessionId, turnId] = key.split('::');
-    const body = findTurnSection(sessionId, turnId)?.querySelector(':scope > .turn-body');
-    if (body?.hidden) body.remove();
-  }
-}
-
-async function hydrateTurnIfNeeded(sessionId, section, turn) {
-  const loadingKey = turnDomKey(sessionId, turn.id);
-  if (turn.full || !turn.startSeq || state.loadingTurnIds.has(loadingKey)) return;
-  state.loadingTurnIds.add(loadingKey);
-  section.classList.add('loading-turn');
-  try {
-    const data = await api(sessionMessagesUrl(sessionId, { turnStartSeq: turn.startSeq }));
-    if (data.session) mergeSessionSnapshot(data.session);
-    const merged = mergeMessages(loadMessages(sessionId), data.messages || []);
-    state.messages.set(sessionId, trimMessagesForStorage(merged));
-    state.lastSeq.set(sessionId, lastRealSeq(merged));
-    saveMessages(sessionId);
-    if (state.activeId !== sessionId || section.classList.contains('collapsed')) return;
-    const freshTurn = findTurnBySeqRange(sessionId, turn) || findDisplayedTurn(sessionId, turn.id);
-    if (!freshTurn) return;
-    const oldBody = section.querySelector(':scope > .turn-body');
-    if (oldBody) oldBody.remove();
-    attachTurnBody(sessionId, section, freshTurn);
-    const summary = section.querySelector('.turn-summary-text');
-    if (summary) summary.textContent = summarizeTurn(freshTurn);
-  } finally {
-    state.loadingTurnIds.delete(loadingKey);
-    section.classList.remove('loading-turn');
-  }
-}
-
-function autoCollapsePreviousTurns(sessionId, turns) {
-  const latest = turns.at(-1);
-  if (!latest) return;
-  const previousLatestId = state.latestTurnIds.get(sessionId);
-  state.latestTurnIds.set(sessionId, latest.id);
-  if (!previousLatestId || previousLatestId === latest.id) return;
-  const states = loadTurnCollapseStates(sessionId);
-  let changed = false;
-  for (const turn of turns) {
-    if (turn.id === latest.id) continue;
-    const collapsed = true;
-    if (states[turn.id] !== collapsed) {
-      states[turn.id] = collapsed;
-      changed = true;
-    }
-    turn.collapsed = collapsed;
-  }
-  if (!changed) return;
-  state.turnCollapseStates.set(sessionId, states);
-  scheduleTurnCollapseSave(sessionId);
-}
-
-function summarizeTurn(turn) {
-  const userMessage = turn.messages.find((message) => message.role === 'user') || turn.messages[0] || {};
-  const replies = turn.replyCount || turn.messages.filter((message) => message.role === 'assistant').reduce((sum, message) => sum + (message.groupCount || 1), 0);
-  const tools = turn.toolCount || turn.messages.filter((message) => message.role === 'tool').reduce((sum, message) => sum + (message.groupCount || 1), 0);
-  const title = userMessage.text || '(空消息)';
-  const parts = [`第 ${turn.index + 1} 轮`, title];
-  if (replies) parts.push(`回复 ${replies}`);
-  if (tools) parts.push(`工具 ${tools}`);
-  if (userMessage.images?.length) parts.push(`图 ${userMessage.images.length}`);
-  return parts.join(' · ');
 }
 
 function mergeDisplayMessages(messages) {
@@ -1624,6 +1115,14 @@ function updateQueuePanel() {
 function removeQueuePanel() {
   const existing = el.messagePane.querySelector('[data-queue-panel="1"]');
   if (existing) existing.remove();
+}
+
+function isNearMessageBottom() {
+  return messageBottomDistance() < 96;
+}
+
+function scrollMessagesToBottom() {
+  settleMessagesToBottom();
 }
 
 function renderPendingImages() {
@@ -1788,79 +1287,13 @@ function storageRatioText(usage, quota) {
   return `${formatBytes(usage)} / ${formatBytes(quota)} · ${Math.round((usage / quota) * 100)}%`;
 }
 
-const RUNTIME_HELP = {
-  codexStatus: ['当前 Codex 子进程是否仍在执行。', '如果长期运行中但没有输出，可能是命令卡住、网络等待或状态未同步。'],
-  codexPid: ['Codex 主子进程的系统进程号。', '为空表示当前没有运行中的 Codex；异常变化可能说明进程重启或已退出。'],
-  codexProcessCount: ['当前 Codex 进程树中的进程数量。', '数量持续升高可能表示子命令未退出，会增加资源占用。'],
-  codexMemory: ['Codex 进程树占用的常驻内存 RSS 总和。', '持续升高可能导致系统内存压力、变慢或被系统杀进程。'],
-  codexCpu: ['Codex 进程树累计消耗的 CPU 时间。', '快速增长通常表示正在高强度执行；长期增长但无输出可能是死循环或重任务。'],
-  codexUptime: ['当前 Codex 运行已持续的时间。', '运行过久可能意味着任务卡住、等待输入或命令没有结束。'],
-  browserNetwork: ['浏览器报告的网络状态。', '显示离线时实时连接可能中断，但手机浏览器该值不一定完全可靠。'],
-  browserVisibility: ['当前页面是前台可见还是后台隐藏。', '后台隐藏时浏览器可能限制定时器和连接，导致刷新延迟。'],
-  browserSw: ['Service Worker 是否已接管页面缓存。', '未接管可能导致离线缓存、自动更新和资源刷新行为不稳定。'],
-  browserCache: ['浏览器 Cache Storage 中的缓存包数量。', '过多可能占用存储；过少可能表示离线缓存未生效。'],
-  browserStorage: ['浏览器可用存储配额及已用比例。', '接近上限会导致本地缓存、图片和消息保存失败。'],
-  browserLocal: ['localStorage 当前估算占用。', '过大可能拖慢启动和同步，极端情况下写入会失败。'],
-  browserMessages: ['当前会话已缓存在浏览器内存中的消息数量和后端总量。', '数量过大可能导致渲染卡顿；过小可能需要频繁回源加载。'],
-  browserPage: ['当前消息分页游标和是否还有更早内容。', '异常时可能导致加载更早失效或重复拉取。'],
-  serviceVersion: ['当前 Web 服务版本信息。', '版本不符合预期时，前端功能可能和后端接口不匹配。'],
-  servicePid: ['Web 服务 Node 进程号。', '频繁变化表示服务反复重启，可能影响会话稳定性。'],
-  serviceUptime: ['Web 服务已连续运行时间。', '过短可能说明服务刚重启；频繁归零说明不稳定。'],
-  serviceSse: ['当前连接到服务的实时事件 SSE 客户端数量。', '为 0 时当前没有实时推送连接；过多会增加服务压力。'],
-  serviceRunning: ['服务端记录的运行中会话数量。', '不为 0 时安全重启会排队；异常偏高表示状态可能未回收。'],
-  serviceRequests: ['当前活跃请求数和累计请求数。', '活跃请求长期不降可能表示接口卡住或网络连接堆积。'],
-  serviceRss: ['Web 服务进程常驻内存 RSS。', '持续增长可能表示缓存过大或内存泄漏。'],
-  serviceHeap: ['Node.js 已使用的 JavaScript 堆内存。', '接近上限会导致 GC 频繁、卡顿甚至进程崩溃。'],
-  contextTokens: ['最近记录的当前上下文输入 token 数。', '接近窗口上限时，Codex 可能触发压缩或遗漏更早上下文。'],
-  contextWindow: ['当前模型可用的上下文窗口大小。', '过小会更早触发压缩；为 0 表示未读取到模型窗口。'],
-  contextRemaining: ['估算还能放入上下文的 token 数。', '过低时长任务可能更容易丢失早期细节或自动压缩。'],
-  contextPercent: ['当前上下文窗口占用比例。', '接近 100% 时继续输入可能触发压缩，响应也可能变慢。'],
-  currentInput: ['当前正在执行的用户输入。', '如果这里有内容但状态未运行，说明状态同步可能异常。'],
-  inputStarted: ['当前输入开始执行的时间和图片数量。', '时间过久或图片数量异常可能导致执行慢、上传失败或上下文过大。'],
-  queue: ['等待当前任务结束后执行的输入数量。', '队列过长会延迟后续任务；异常不清空会造成误执行。'],
-  processSummary: ['单个关联进程的 PID、状态和内存。', '状态异常或内存持续升高，可能表示命令卡住或资源泄漏。'],
-  processName: ['系统报告的进程名称。', '名称不符合预期可能表示关联到了错误子进程。'],
-  processCommand: ['启动该进程时的命令行。', '命令异常可能说明 Codex 或工具参数错误。'],
-  processCwd: ['该进程当前工作目录。', '目录错误会导致读写文件、执行命令的位置不符合预期。'],
-  runtimeChecked: ['运行时信息最后一次刷新时间。', '时间过旧说明刷新失败或页面被后台限制。'],
-  serviceFooter: ['服务运行环境、监听地址和服务器磁盘剩余空间。', '磁盘不足会导致日志、缓存、上传图片和会话保存失败。'],
-  browserFooter: ['浏览器本地缓存详情、JS 堆和最近缓存包。', 'JS 堆过高会造成前端卡顿；缓存异常会影响离线和更新。'],
-  tokenTotal: ['Codex 已记录的累计 token 用量。', '异常过高可能表示长会话成本和上下文压力较大。'],
-  tokenLast: ['最近一轮 token 用量和缓存输入量。', '最近一轮过大可能导致响应慢或更早触发压缩。']
-};
-
-function runtimeHelp(key) {
-  const copy = RUNTIME_HELP[key];
-  if (!copy) return '';
-  const text = `含义：${copy[0]}\n异常后果：${copy[1]}`;
-  return `<button class="runtime-help" type="button" data-runtime-help="${escapeHtml(text)}" aria-label="${escapeHtml(text)}" title="${escapeHtml(text)}">?</button>`;
-}
-
-function runtimeItem(label, valueHtml, helpKey) {
-  return `<span>${escapeHtml(label)} ${runtimeHelp(helpKey)}<strong>${valueHtml}</strong></span>`;
-}
-
-function runtimeNote(text, helpKey) {
-  return `<span class="runtime-note">${runtimeHelp(helpKey)}${escapeHtml(text)}</span>`;
-}
-
-function bindRuntimeHelp() {
-  for (const button of el.runtimePanel.querySelectorAll('[data-runtime-help]')) {
-    button.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      alert(button.dataset.runtimeHelp || button.title || '');
-    });
-  }
-}
-
 function renderTokenUsage(data) {
   const usage = data.codexUsage;
   if (!usage?.available) {
     return `
       <div class="runtime-section">
         <strong>Codex 会话</strong>
-        <p>${runtimeHelp('contextTokens')}${usage?.codexSessionId ? '暂未找到 token_count 记录。' : '当前会话还没有绑定 Codex 原始会话。'}</p>
+        <p>${usage?.codexSessionId ? '暂未找到 token_count 记录。' : '当前会话还没有绑定 Codex 原始会话。'}</p>
       </div>
     `;
   }
@@ -1871,13 +1304,13 @@ function renderTokenUsage(data) {
       <strong>Codex 会话</strong>
       <div class="runtime-meter"><i style="width:${Math.min(100, usage.contextPercent || 0)}%"></i></div>
       <div class="runtime-grid compact">
-        ${runtimeItem('上下文', formatNumber(usage.contextTokens), 'contextTokens')}
-        ${runtimeItem('窗口', formatNumber(usage.modelContextWindow), 'contextWindow')}
-        ${runtimeItem('剩余', formatNumber(usage.contextRemaining), 'contextRemaining')}
-        ${runtimeItem('占用', `${usage.contextPercent || 0}%`, 'contextPercent')}
+        <span>上下文 <strong>${formatNumber(usage.contextTokens)}</strong></span>
+        <span>窗口 <strong>${formatNumber(usage.modelContextWindow)}</strong></span>
+        <span>剩余 <strong>${formatNumber(usage.contextRemaining)}</strong></span>
+        <span>占用 <strong>${usage.contextPercent || 0}%</strong></span>
       </div>
-      <p>${runtimeHelp('tokenTotal')}累计 ${formatNumber(total.totalTokens)} token · 输入 ${formatNumber(total.inputTokens)} · 输出 ${formatNumber(total.outputTokens)}</p>
-      ${runtimeNote(`最近一轮 ${formatNumber(last.totalTokens)} · 缓存输入 ${formatNumber(last.cachedInputTokens)} · 自动压缩剩余为估算`, 'tokenLast')}
+      <p>累计 ${formatNumber(total.totalTokens)} token · 输入 ${formatNumber(total.inputTokens)} · 输出 ${formatNumber(total.outputTokens)}</p>
+      <span>最近一轮 ${formatNumber(last.totalTokens)} · 缓存输入 ${formatNumber(last.cachedInputTokens)} · 自动压缩剩余为估算</span>
     </div>
   `;
 }
@@ -1891,16 +1324,16 @@ function renderServiceRuntime(data) {
     <div class="runtime-section">
       <strong>服务状态</strong>
       <div class="runtime-grid compact">
-        ${runtimeItem('服务', escapeHtml(service.version ? `v${service.version}` : service.name || '-'), 'serviceVersion')}
-        ${runtimeItem('PID', String(service.pid || '-'), 'servicePid')}
-        ${runtimeItem('启动', escapeHtml(formatDuration(service.uptimeMs || 0)), 'serviceUptime')}
-        ${runtimeItem('SSE', String(service.sseClients || 0), 'serviceSse')}
-        ${runtimeItem('运行', String(service.runningSessions || 0), 'serviceRunning')}
-        ${runtimeItem('请求', `${service.activeRequests || 0}/${formatNumber(service.totalRequests || 0)}`, 'serviceRequests')}
-        ${runtimeItem('RSS', escapeHtml(formatBytes(service.memory?.rssBytes || 0)), 'serviceRss')}
-        ${runtimeItem('堆', escapeHtml(formatBytes(service.memory?.heapUsedBytes || 0)), 'serviceHeap')}
+        <span>服务 <strong>${escapeHtml(service.version ? `v${service.version}` : service.name || '-')}</strong></span>
+        <span>PID <strong>${service.pid || '-'}</strong></span>
+        <span>启动 <strong>${escapeHtml(formatDuration(service.uptimeMs || 0))}</strong></span>
+        <span>SSE <strong>${service.sseClients || 0}</strong></span>
+        <span>运行 <strong>${service.runningSessions || 0}</strong></span>
+        <span>请求 <strong>${service.activeRequests || 0}/${formatNumber(service.totalRequests || 0)}</strong></span>
+        <span>RSS <strong>${escapeHtml(formatBytes(service.memory?.rssBytes || 0))}</strong></span>
+        <span>堆 <strong>${escapeHtml(formatBytes(service.memory?.heapUsedBytes || 0))}</strong></span>
       </div>
-      ${runtimeNote(`Node ${service.node || '-'} · ${service.host || '-'}:${service.port || '-'} · 磁盘 ${diskText}`, 'serviceFooter')}
+      <span>Node ${escapeHtml(service.node || '-')} · ${escapeHtml(service.host || '-')}:${service.port || '-'} · 磁盘 ${escapeHtml(diskText)}</span>
     </div>
   `;
 }
@@ -1914,16 +1347,16 @@ function renderBrowserRuntime(local) {
     <div class="runtime-section">
       <strong>浏览器本地</strong>
       <div class="runtime-grid compact">
-        ${runtimeItem('网络', local.online ? '在线' : '离线', 'browserNetwork')}
-        ${runtimeItem('页面', escapeHtml(local.visibility || '-'), 'browserVisibility')}
-        ${runtimeItem('SW', escapeHtml(local.serviceWorker), 'browserSw')}
-        ${runtimeItem('缓存', String(local.cacheNames?.length || 0), 'browserCache')}
-        ${runtimeItem('存储', escapeHtml(storageRatioText(local.storageUsageBytes, local.storageQuotaBytes)), 'browserStorage')}
-        ${runtimeItem('local', escapeHtml(formatBytes(local.localStorageBytes || 0)), 'browserLocal')}
-        ${runtimeItem('消息', `${local.currentCachedMessages}/${local.pageTotal || 0}`, 'browserMessages')}
-        ${runtimeItem('分页', `${local.pageOffset || 0}${local.pageHasMore ? '+' : ''}`, 'browserPage')}
+        <span>网络 <strong>${local.online ? '在线' : '离线'}</strong></span>
+        <span>页面 <strong>${escapeHtml(local.visibility || '-')}</strong></span>
+        <span>SW <strong>${escapeHtml(local.serviceWorker)}</strong></span>
+        <span>缓存 <strong>${local.cacheNames?.length || 0}</strong></span>
+        <span>存储 <strong>${escapeHtml(storageRatioText(local.storageUsageBytes, local.storageQuotaBytes))}</strong></span>
+        <span>local <strong>${escapeHtml(formatBytes(local.localStorageBytes || 0))}</strong></span>
+        <span>消息 <strong>${local.currentCachedMessages}/${local.pageTotal || 0}</strong></span>
+        <span>分页 <strong>${local.pageOffset || 0}${local.pageHasMore ? '+' : ''}</strong></span>
       </div>
-      ${runtimeNote(`localStorage ${local.cmcLocalStorageKeys}/${local.localStorageKeys} 项 · JS 堆 ${heapText} · ${cacheText}`, 'browserFooter')}
+      <span>localStorage ${local.cmcLocalStorageKeys}/${local.localStorageKeys} 项 · JS 堆 ${escapeHtml(heapText)} · ${escapeHtml(cacheText)}</span>
     </div>
   `;
 }
@@ -1936,12 +1369,12 @@ async function renderRuntimePanel(data) {
     <div class="runtime-section">
       <strong>Codex 运行时</strong>
       <div class="runtime-grid compact">
-        ${runtimeItem('状态', data.running ? '运行中' : '未运行', 'codexStatus')}
-        ${runtimeItem('PID', String(data.pid || '-'), 'codexPid')}
-        ${runtimeItem('进程', String(data.processCount || 0), 'codexProcessCount')}
-        ${runtimeItem('内存', escapeHtml(formatBytes((data.memoryKb || 0) * 1024)), 'codexMemory')}
-        ${runtimeItem('CPU', escapeHtml(formatDuration(data.cpuMs || 0)), 'codexCpu')}
-        ${runtimeItem('时长', escapeHtml(formatDuration(data.uptimeMs || 0)), 'codexUptime')}
+        <span>状态 <strong>${data.running ? '运行中' : '未运行'}</strong></span>
+        <span>PID <strong>${data.pid || '-'}</strong></span>
+        <span>进程 <strong>${data.processCount || 0}</strong></span>
+        <span>内存 <strong>${formatBytes((data.memoryKb || 0) * 1024)}</strong></span>
+        <span>CPU <strong>${formatDuration(data.cpuMs || 0)}</strong></span>
+        <span>时长 <strong>${formatDuration(data.uptimeMs || 0)}</strong></span>
       </div>
     </div>
     ${renderBrowserRuntime(local)}
@@ -1949,26 +1382,25 @@ async function renderRuntimePanel(data) {
     ${renderTokenUsage(data)}
     <div class="runtime-section">
       <strong>当前输入</strong>
-      <p>${runtimeHelp('currentInput')}${escapeHtml(active?.prompt || '无运行中的输入')}</p>
-      ${runtimeNote(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0}` : '当前没有开始时间。', 'inputStarted')}
+      <p>${escapeHtml(active?.prompt || '无运行中的输入')}</p>
+      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0}` : '')}</span>
     </div>
     <div class="runtime-section">
       <strong>队列</strong>
-      <p>${runtimeHelp('queue')}${data.queue?.length ? `${data.queue.length} 条等待执行` : '无排队输入'}</p>
+      <p>${data.queue?.length ? `${data.queue.length} 条等待执行` : '无排队输入'}</p>
     </div>
     <div class="runtime-process-list">
       ${processes.length ? processes.map((item) => `
         <div class="runtime-process" style="--depth:${item.depth || 0}">
-          <span>${runtimeHelp('processSummary')}PID ${item.pid} · ${escapeHtml(item.state || '-')} · ${formatBytes((item.memoryKb || 0) * 1024)}</span>
-          <strong>${runtimeHelp('processName')}${escapeHtml(item.name || '-')}</strong>
-          <code>${runtimeHelp('processCommand')}${escapeHtml(shortCommand(item.cmdline))}</code>
-          <small>${runtimeHelp('processCwd')}${escapeHtml(item.cwd || '')}</small>
+          <span>PID ${item.pid} · ${escapeHtml(item.state || '-')} · ${formatBytes((item.memoryKb || 0) * 1024)}</span>
+          <strong>${escapeHtml(item.name || '-')}</strong>
+          <code>${escapeHtml(shortCommand(item.cmdline))}</code>
+          <small>${escapeHtml(item.cwd || '')}</small>
         </div>
       `).join('') : '<p class="runtime-empty">没有关联的 Codex 子进程。</p>'}
     </div>
-    <small class="runtime-checked">${runtimeHelp('runtimeChecked')}更新 ${escapeHtml(formatTime(data.checkedAt))}</small>
+    <small class="runtime-checked">更新 ${escapeHtml(formatTime(data.checkedAt))}</small>
   `;
-  bindRuntimeHelp();
 }
 
 function runtimeErrorCopy(error) {
@@ -2197,7 +1629,7 @@ async function openSkillDialog() {
 function upsertMessage(sessionId, message) {
   const messages = loadMessages(sessionId);
   const replacedIndex = findMessageIndex(messages, message);
-  const wasConversationMessage = replacedIndex >= 0 && isConversationMessage(messages[replacedIndex]);
+  const isNewMessage = replacedIndex < 0;
   const incoming = (message.id || message.seq) ? { ...message, pending: false, failed: false } : message;
   let renderedMessage = incoming;
   if (replacedIndex >= 0) {
@@ -2224,14 +1656,31 @@ function upsertMessage(sessionId, message) {
   }
 
   if (sessionId === state.activeId) {
-    const isVisibleConversationMessage = isConversationMessage(renderedMessage);
-    if (wasConversationMessage || isVisibleConversationMessage) {
-      messageScheduler.scheduleRender(sessionId, {
-        stickToBottom: replacedIndex < 0 ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId)
-      });
+    const stickToBottom = isNewMessage ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
+    if (state.renderingMessages || replacedIndex >= 0 || renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
+      messageScheduler.scheduleRender(sessionId, { stickToBottom });
+      return;
     }
-    renderActive({ messages: false, stickToBottom: false });
+    const nextNode = messageView.renderMessage(renderedMessage);
+    const existing = findRenderedMessageNode(renderedMessage);
+    removeRunIndicator();
+    removeQueuePanel();
+    if (existing) existing.replaceWith(nextNode);
+    else el.messagePane.append(nextNode);
+    updateQueuePanel();
+    updateRunIndicator();
+    if (stickToBottom) scrollMessagesToBottom();
+    renderActive({ messages: false });
   }
+}
+
+function findRenderedMessageNode(message) {
+  return [...el.messagePane.querySelectorAll('.message')].find((node) => {
+    const ids = (node.dataset.messageIds || '').split(',').filter(Boolean);
+    return (message.id && (node.dataset.messageId === message.id || ids.includes(message.id)))
+      || (message.clientMessageId && node.dataset.clientMessageId === message.clientMessageId)
+      || (message.seq && Number(node.dataset.seq || 0) === Number(message.seq || 0));
+  });
 }
 
 function updateMessage(sessionId, message) {
@@ -2241,30 +1690,32 @@ function updateMessage(sessionId, message) {
     upsertMessage(sessionId, message);
     return;
   }
-  const wasConversationMessage = isConversationMessage(messages[index]);
   const updatedMessage = mergeMessagePair(messages[index], message);
   messages[index] = updatedMessage;
   messages.sort(compareMessages);
   state.lastSeq.set(sessionId, lastRealSeq(messages));
   messageScheduler.scheduleSave(sessionId);
   if (sessionId === state.activeId) {
-    if (wasConversationMessage || isConversationMessage(updatedMessage)) {
+    if (state.renderingMessages) {
+      messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
+      return;
+    }
+    const node = findRenderedMessageNode(message);
+    if (node) {
+      const stickToBottom = shouldStickToBottom(sessionId);
+      node.replaceWith(messageView.renderMessage(updatedMessage, { animate: false }));
+      updateQueuePanel();
+      updateRunIndicator();
+      if (stickToBottom) scrollMessagesToBottom();
+      renderActive({ messages: false });
+    } else {
       messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
     }
-    renderActive({ messages: false, stickToBottom: false });
   }
 }
 
 async function refreshSessions(options = {}) {
   try {
-    if (options.messages !== false) {
-      loadCachedSessions();
-      if (state.activeId) {
-        setActiveSessionId(state.activeId);
-        renderSessions({ force: true });
-        renderActive({ stickToBottom: true });
-      }
-    }
     const data = await api('/api/sessions');
     state.sessions = data.sessions || [];
     saveSessionCache();
@@ -2276,6 +1727,8 @@ async function refreshSessions(options = {}) {
     setActiveSessionId(state.activeId);
     renderSessions();
     if (state.activeId && options.messages !== false) {
+      renderActive({ messages: false });
+      renderSessionLoading();
       await loadSession(state.activeId, { showLoading: false });
     } else {
       renderActive({ messages: false });
@@ -2296,8 +1749,8 @@ window.cmcAfterLogin = async function cmcAfterLogin() {
 async function loadSession(id, options = {}) {
   lockInitialBottom(id);
   if (options.showLoading !== false && state.activeId === id) {
-    loadMessages(id);
-    renderActive({ stickToBottom: true });
+    renderActive({ messages: false });
+    renderSessionLoading();
   }
   try {
     const knownSession = state.sessions.find((item) => item.id === id);
@@ -2309,28 +1762,22 @@ async function loadSession(id, options = {}) {
       scheduleResourceCleanup();
       return;
     }
-    const data = await api(sessionMessagesUrl(
-      id,
-      options.full === true
-        ? { limit: maxHistoryLimit() }
-        : { turnLimit: firstPageLimit(), compactTurns: 1, latestFull: 1 }
-    ));
+    const limit = options.full === true ? maxHistoryLimit() : firstPageLimit();
+    const data = await api(sessionMessagesUrl(id, { limit }));
     const session = data.session || { id };
     mergeSessionSnapshot(session);
     const cached = state.messages.get(id) || [];
-    const previousSignature = messageListSignature(cached);
     const merged = options.full === true
       ? mergeMessages([], data.messages || [])
-      : mergeFetchedMessages(cached, data.messages || [], data);
+      : mergeMessages(cached, data.messages || []);
     const trimmed = trimMessagesForStorage(merged);
-    const nextSignature = messageListSignature(trimmed);
     state.messages.set(id, trimmed);
     state.lastSeq.set(id, lastRealSeq(trimmed));
     setMessagePage(id, data, { preserveOffset: options.full !== true });
     saveSessionCache();
     saveMessages(id);
     renderSessions();
-    renderActive({ messages: previousSignature !== nextSignature, stickToBottom: true });
+    renderActive({ stickToBottom: true });
     connectEvents(id);
     startContextRefreshLoop();
     scheduleResourceCleanup();
@@ -2356,20 +1803,15 @@ async function loadOlderMessages(sessionId) {
 
   state.loadingOlder = true;
   state.messagePages.set(sessionId, { ...page, loading: true });
+  const previousAnchor = firstVisibleMessageAnchor();
   renderActive({ messages: false });
   try {
-    const data = await api(sessionMessagesUrl(sessionId, {
-      turnLimit: HISTORY_TURN_PAGE_SIZE,
-      beforeSeq: page.beforeSeq || '',
-      compactTurns: 1,
-      latestFull: 1
-    }));
+    const limit = Math.min(HISTORY_PAGE_SIZE, remaining);
+    const data = await api(sessionMessagesUrl(sessionId, { limit, beforeSeq: page.beforeSeq || '' }));
     if (data.session) mergeSessionSnapshot(data.session);
-    const loadedOlderTurns = Number(data.loadedTurns || countMessageTurns(data.messages || []));
-    const merged = mergeFetchedMessages(loadMessages(sessionId), data.messages || [], data);
+    const merged = mergeMessages(data.messages || [], loadMessages(sessionId));
     state.messages.set(sessionId, trimMessagesForStorage(merged));
     state.lastSeq.set(sessionId, lastRealSeq(merged));
-    expandRenderedTurnLimit(sessionId, loadedOlderTurns);
     setMessagePage(sessionId, {
       ...data,
       hasMore: data.hasMoreBefore === true && merged.length < maxHistoryLimit()
@@ -2377,7 +1819,7 @@ async function loadOlderMessages(sessionId) {
     saveMessages(sessionId);
     if (state.activeId === sessionId) {
       renderSessions();
-      renderActive({ stickToBottom: false, scrollToTop: true });
+      renderActive({ stickToBottom: false, restoreAnchor: previousAnchor });
     }
   } catch (error) {
     state.messagePages.set(sessionId, { ...page, loading: false });
@@ -2390,13 +1832,13 @@ async function loadOlderMessages(sessionId) {
 
 async function refreshActiveContext() {
   const session = getActiveSession();
-  if (!session?.codexSessionId || state.contextRefreshInFlight) return;
+  if (!session?.codexSessionId || !state.online || state.contextRefreshInFlight) return;
   state.contextRefreshInFlight = true;
   try {
     const page = state.messagePages.get(session.id);
     const currentMessages = loadMessages(session.id);
     const afterSeq = page?.latestSeq || Math.max(0, ...currentMessages.map((message) => Number(message.orderSeq || 0)).filter(Boolean));
-    const data = await api(sessionMessagesUrl(session.id, { limit: REFRESH_MESSAGE_LIMIT, afterSeq }));
+    const data = await api(sessionMessagesUrl(session.id, { limit: firstPageLimit(), afterSeq }));
     const nextMessages = data.messages || [];
     const currentLast = currentMessages.at(-1);
     const nextLast = nextMessages.at(-1);
@@ -2439,14 +1881,14 @@ function startContextRefreshLoop() {
 
 function connectEvents(id) {
   if (state.eventSource) state.eventSource.close();
-  if (!id) return;
+  if (!id || !navigator.onLine) return;
 
   const after = state.lastSeq.get(id) || 0;
   const source = new EventSource(`/api/events?sessionId=${encodeURIComponent(id)}&after=${after}`);
   state.eventSource = source;
 
   source.addEventListener('hello', (event) => {
-    markConnectionOnline();
+    state.online = true;
     let sessionChanged = false;
     const data = parseEventData(event, {});
     sessionChanged = data?.session ? mergeSessionSnapshot(data.session) : false;
@@ -2888,13 +2330,9 @@ async function loadDirectories(dir) {
 }
 
 function autoSizePrompt() {
-  if (state.promptResizeHandle) return;
-  state.promptResizeHandle = requestAnimationFrame(() => {
-    state.promptResizeHandle = 0;
-    el.promptInput.style.height = 'auto';
-    const maxHeight = Math.min(Math.round(window.innerHeight * 0.28), 180);
-    el.promptInput.style.height = `${Math.min(el.promptInput.scrollHeight, maxHeight)}px`;
-  });
+  el.promptInput.style.height = 'auto';
+  const maxHeight = Math.min(Math.round(window.innerHeight * 0.28), 180);
+  el.promptInput.style.height = `${Math.min(el.promptInput.scrollHeight, maxHeight)}px`;
 }
 
 el.promptInput.addEventListener('input', autoSizePrompt);
@@ -2914,7 +2352,7 @@ window.addEventListener('online', () => {
 
 window.addEventListener('offline', () => {
   state.online = false;
-  if (state.eventSource && navigator.onLine === false) state.eventSource.close();
+  if (state.eventSource) state.eventSource.close();
   clearInterval(state.contextRefreshTimer);
   renderActive({ messages: false });
 });
@@ -2923,21 +2361,16 @@ document.addEventListener('visibilitychange', () => {
   clearTimeout(state.foregroundRefreshTimer);
   if (document.hidden) {
     messageScheduler.flushSaves();
-    flushTurnCollapseSaves();
     return;
   }
   if (!document.hidden) {
     state.foregroundRefreshTimer = setTimeout(() => {
-      if (state.activeId) connectEvents(state.activeId);
       refreshActiveContext();
     }, 600);
   }
 });
 
-window.addEventListener('pagehide', () => {
-  messageScheduler.flushSaves();
-  flushTurnCollapseSaves();
-});
+window.addEventListener('pagehide', () => messageScheduler.flushSaves());
 
 function registerServiceWorkerLater() {
   if (!('serviceWorker' in navigator)) return;

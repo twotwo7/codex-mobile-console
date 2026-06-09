@@ -49,7 +49,7 @@ export function createPromptActions(options) {
     renderPendingImages();
   }
 
-  function optimisticMessage({ clientMessageId, elevated, images, prompt, queued }) {
+  function optimisticMessage({ clientMessageId, elevated, images, prompt }) {
     return {
       at: new Date().toISOString(),
       role: 'user',
@@ -58,8 +58,7 @@ export function createPromptActions(options) {
       clientMessageId,
       images: images.map((image) => ({ name: image.name, type: image.type, dataUrl: image.data })),
       retryImages: images,
-      delivery: queued ? 'queued' : 'sending',
-      runState: queued ? 'queued' : undefined,
+      delivery: 'sending',
       pending: true
     };
   }
@@ -97,10 +96,8 @@ export function createPromptActions(options) {
     const composerSnapshot = clearComposer(opts);
     const elevated = Boolean(el.elevatedRun.checked);
     const clientMessageId = createClientMessageId();
-    const activeSession = getActiveSession();
-    const queuedLocally = Boolean(activeSession?.isRunning || ['running', 'stopping'].includes(activeSession?.status));
     setSendState('sending');
-    upsertMessage(sessionId, optimisticMessage({ clientMessageId, elevated, images, prompt, queued: queuedLocally }));
+    upsertMessage(sessionId, optimisticMessage({ clientMessageId, elevated, images, prompt }));
 
     try {
       const data = await api(`/api/sessions/${sessionId}/messages`, {

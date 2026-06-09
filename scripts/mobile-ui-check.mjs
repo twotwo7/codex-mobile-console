@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=84">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=83">
       </head>
       <body>
         <main class="workspace">
@@ -41,12 +41,6 @@ async function setFixture(page) {
             <button class="top-stop-button" type="button" aria-label="停止当前任务"><span aria-hidden="true"></span></button>
           </header>
           <section class="message-pane">
-            <section class="conversation-turn collapsed">
-              <button class="turn-summary-button" type="button" aria-expanded="false">
-                <span class="turn-toggle-icon" aria-hidden="true">▸</span>
-                <span class="turn-summary-text">第 1 轮 · 已折叠的上一轮客户截图分析 · 回复 2 · 工具 3</span>
-              </button>
-            </section>
             <article class="message user">
               <div class="message-head">
                 <span>USER</span><span>6/7 22:30</span><span class="message-delivery queued">已排队</span>
@@ -131,7 +125,6 @@ async function run() {
 
       await setFixture(page);
       await assertVisibleBox(page, '.prompt-bar', 'prompt bar');
-      await assertVisibleBox(page, '.turn-summary-button', 'turn summary');
       await assertVisibleBox(page, '.message-menu-popover', 'message menu');
       await assertVisibleBox(page, '.image-viewer img', 'image viewer');
       await assertVisibleBox(page, '.image-viewer-close', 'image close button');

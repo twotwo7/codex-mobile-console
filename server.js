@@ -193,12 +193,6 @@ function updateMessageRunState(session, messageId, runState, extra = {}) {
   if (!messageId) return null;
   const message = (session.messages || []).find((item) => item.id === messageId || item.clientMessageId === messageId);
   if (!message) return null;
-  const wasQueued = message.runState === 'queued' || message.delivery === 'queued';
-  if (runState === 'running' && wasQueued) {
-    message.seq = state.nextSeq++;
-    message.at = nowIso();
-    session.lastSeq = message.seq;
-  }
   message.runState = runState;
   message.completedAt = ['completed', 'failed', 'stopped', 'recovered'].includes(runState) ? nowIso() : message.completedAt;
   Object.assign(message, extra);
@@ -1501,10 +1495,6 @@ function displayMessageDedupeKey(message) {
   return `${message.role || ''}\0${text}`;
 }
 
-function isQueuedDisplayUserMessage(message) {
-  return message?.role === 'user' && (message.runState === 'queued' || message.delivery === 'queued');
-}
-
 function mergeDisplayMessage(existing, incoming) {
   const preferExisting = !displayIsCodex(existing) && displayIsCodex(incoming);
   const base = preferExisting ? incoming : existing;
@@ -1528,7 +1518,6 @@ async function indexedDisplayMessages(session) {
   const out = [];
   const byDedupeKey = new Map();
   for (const message of [...codexMessages, ...(session.messages || [])]) {
-    if (isQueuedDisplayUserMessage(message)) continue;
     const next = {
       ...message,
       starred: message.starred === true || state.starredMessages?.[message.id] === true
@@ -1562,11 +1551,6 @@ function normalizeMessageQueryOffset(value) {
   return Number.isFinite(raw) ? Math.max(0, Math.min(50000, Math.floor(raw))) : 0;
 }
 
-function normalizeTurnQueryLimit(value) {
-  const raw = Number(value ?? 0);
-  return Number.isFinite(raw) ? Math.max(0, Math.min(200, Math.floor(raw))) : 0;
-}
-
 async function displayMessagePage(session, options = {}) {
   const limit = normalizeMessageQueryLimit(options.limit, 500);
   const offset = normalizeMessageQueryOffset(options.offset);
@@ -1588,52 +1572,19 @@ async function displayMessagePage(session, options = {}) {
 
 async function displayMessageRange(session, options = {}) {
   const limit = normalizeMessageQueryLimit(options.limit, 120);
-  const turnLimit = normalizeTurnQueryLimit(options.turnLimit);
   const sorted = await indexedDisplayMessages(session);
   const total = sorted.length;
-  const totalTurns = countMessageTurns(sorted);
   const firstSeq = sorted[0]?.orderSeq || 0;
   const latestSeq = sorted.at(-1)?.orderSeq || 0;
   const afterSeq = Number(options.afterSeq || 0);
   const beforeSeq = Number(options.beforeSeq || 0);
-  const turnStartSeq = Number(options.turnStartSeq || 0);
-  const compactTurns = options.compactTurns === true || options.compactTurns === '1' || options.compactTurns === 'true';
-  const latestFull = options.latestFull === true || options.latestFull === '1' || options.latestFull === 'true';
-
-  if (Number.isFinite(turnStartSeq) && turnStartSeq > 0) {
-    const matchIndex = sorted.findIndex((message) => Number(message.orderSeq || 0) >= turnStartSeq);
-    const start = turnBoundaryStart(sorted, matchIndex < 0 ? sorted.length : matchIndex);
-    const end = turnBoundaryEnd(sorted, start);
-    const messages = annotateTurnMessages(sorted.slice(start, end), true);
-    return {
-      messages,
-      limit,
-      turnLimit: 1,
-      total,
-      totalTurns,
-      loadedTurns: messages.length ? 1 : 0,
-      compactTurns: false,
-      latestFull: true,
-      firstSeq,
-      latestSeq,
-      beforeSeq: messages[0]?.orderSeq || 0,
-      afterSeq: messages.at(-1)?.orderSeq || 0,
-      hasMoreBefore: start > 0,
-      hasMoreAfter: end < sorted.length
-    };
-  }
 
   if (Number.isFinite(afterSeq) && afterSeq > 0) {
     const messages = sorted.filter((message) => Number(message.orderSeq || 0) > afterSeq).slice(0, limit);
     return {
       messages,
       limit,
-      turnLimit,
       total,
-      totalTurns,
-      loadedTurns: countMessageTurns(messages),
-      compactTurns: false,
-      latestFull: false,
       firstSeq,
       latestSeq,
       beforeSeq: messages[0]?.orderSeq || 0,
@@ -1647,22 +1598,12 @@ async function displayMessageRange(session, options = {}) {
     ? sorted.findIndex((message) => Number(message.orderSeq || 0) >= beforeSeq)
     : sorted.length;
   const end = endIndex < 0 ? sorted.length : Math.max(0, endIndex);
-  const start = turnLimit > 0
-    ? turnWindowStart(sorted, end, turnLimit)
-    : turnBoundaryStart(sorted, limit > 0 ? Math.max(0, end - limit) : 0);
-  const windowMessages = sorted.slice(start, end);
-  const messages = compactTurns
-    ? compactTurnMessages(windowMessages, { latestFull: latestFull && end >= sorted.length })
-    : windowMessages;
+  const start = limit > 0 ? Math.max(0, end - limit) : 0;
+  const messages = sorted.slice(start, end);
   return {
     messages,
     limit,
-    turnLimit,
     total,
-    totalTurns,
-    loadedTurns: countMessageTurns(messages),
-    compactTurns,
-    latestFull: latestFull && end >= sorted.length,
     firstSeq,
     latestSeq,
     beforeSeq: messages[0]?.orderSeq || 0,
@@ -1670,81 +1611,6 @@ async function displayMessageRange(session, options = {}) {
     hasMoreBefore: start > 0,
     hasMoreAfter: end < sorted.length
   };
-}
-
-function turnBoundaryStart(messages, start) {
-  let index = Math.max(0, Math.min(Number(start || 0), messages.length));
-  while (index > 0 && messages[index]?.role !== 'user') index -= 1;
-  return index;
-}
-
-function turnBoundaryEnd(messages, start) {
-  let index = Math.max(0, Math.min(Number(start || 0), messages.length));
-  if (index < messages.length && messages[index]?.role !== 'user') index = turnBoundaryStart(messages, index);
-  index += 1;
-  while (index < messages.length && messages[index]?.role !== 'user') index += 1;
-  return index;
-}
-
-function turnWindowStart(messages, end, turnLimit) {
-  const targetTurns = Math.max(1, Number(turnLimit || 1));
-  let index = Math.max(0, Math.min(Number(end || 0), messages.length));
-  let turns = 0;
-  while (index > 0) {
-    index -= 1;
-    if (index === 0 || messages[index]?.role === 'user') {
-      turns += 1;
-      if (turns >= targetTurns) return index;
-    }
-  }
-  return 0;
-}
-
-function splitDisplayTurns(messages) {
-  const turns = [];
-  let current = null;
-  for (const message of messages || []) {
-    if (!current || message.role === 'user') {
-      current = [];
-      turns.push(current);
-    }
-    current.push(message);
-  }
-  return turns;
-}
-
-function annotateTurnMessages(turnMessages, full, summaryMessages = turnMessages) {
-  if (!turnMessages?.length) return [];
-  const statsMessages = summaryMessages?.length ? summaryMessages : turnMessages;
-  const startSeq = statsMessages[0]?.orderSeq || turnMessages[0]?.orderSeq || 0;
-  const endSeq = statsMessages.at(-1)?.orderSeq || startSeq;
-  const summary = {
-    startSeq,
-    endSeq,
-    full: full === true,
-    messageCount: statsMessages.length,
-    replyCount: statsMessages.filter((message) => message.role === 'assistant').length,
-    toolCount: statsMessages.filter((message) => message.role === 'tool').length
-  };
-  return turnMessages.map((message, index) => (
-    index === 0 ? { ...message, turnSummary: summary } : { ...message }
-  ));
-}
-
-function compactTurnMessages(messages, options = {}) {
-  const turns = splitDisplayTurns(messages);
-  return turns.flatMap((turnMessages, index) => {
-    const isLatestTurn = index === turns.length - 1;
-    if (options.latestFull === true && isLatestTurn) return annotateTurnMessages(turnMessages, true);
-    return annotateTurnMessages(turnMessages.slice(0, 1), false, turnMessages);
-  });
-}
-
-function countMessageTurns(messages) {
-  if (!messages?.length) return 0;
-  return messages.reduce((count, message, index) => (
-    count + (index === 0 || message.role === 'user' ? 1 : 0)
-  ), 0);
 }
 
 async function listCodexSessions() {
@@ -2290,12 +2156,8 @@ async function handleApi(req, res, url) {
     reconcileSessionRunState(session, 'message-list');
     const range = await displayMessageRange(session, {
       limit: url.searchParams.get('limit'),
-      turnLimit: url.searchParams.get('turnLimit'),
       beforeSeq: url.searchParams.get('beforeSeq'),
-      afterSeq: url.searchParams.get('afterSeq'),
-      turnStartSeq: url.searchParams.get('turnStartSeq'),
-      compactTurns: url.searchParams.get('compactTurns'),
-      latestFull: url.searchParams.get('latestFull')
+      afterSeq: url.searchParams.get('afterSeq')
     });
     return json(res, 200, { session: publicSession(session), ...range });
   }
