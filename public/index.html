@@ -4,9 +4,14 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="theme-color" content="#101215">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-title" content="Codex">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <title>Codex Console</title>
-    <link rel="manifest" href="/manifest.json?v=2">
-    <link rel="stylesheet" href="/styles.css?v=100">
+    <link rel="manifest" href="/manifest.json?v=3">
+    <link rel="apple-touch-icon" href="/icons/icon-192.png">
+    <link rel="stylesheet" href="/styles.css?v=101">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -73,6 +78,13 @@
           <div class="settings-form">
             <section class="settings-page active" data-settings-page="ui">
               <p class="settings-page-note">界面显示。</p>
+              <div class="install-card">
+                <div>
+                  <strong>安装到手机桌面</strong>
+                  <span id="installAppStatus" role="status">检测安装能力中...</span>
+                </div>
+                <button id="installAppSettingsButton" class="ghost-button inline" type="button">安装</button>
+              </div>
               <label>
                 主题
                 <select id="themeSelect" name="theme">
@@ -152,6 +164,7 @@
                 <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
                   <button id="favoritesButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">只看收藏</button>
                   <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
+                  <button id="installAppButton" class="top-menu-item" type="button" role="menuitem">安装到桌面</button>
                 </div>
               </div>
             </div>
@@ -345,6 +358,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=112" type="module"></script>
+    <script src="/app.js?v=113" type="module"></script>
   </body>
 </html>

@@ -63,7 +63,9 @@ const state = {
   localRuntimeSessionId: '',
   skills: [],
   skillsLoadedAt: 0,
-  skillDialogMode: 'quick'
+  skillDialogMode: 'quick',
+  installPromptEvent: null,
+  installStatus: ''
 };
 
 let sessionState;
@@ -80,8 +82,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '112';
-const SW_CACHE_VERSION = 'codex-console-v128';
+const APP_ASSET_VERSION = '113';
+const SW_CACHE_VERSION = 'codex-console-v129';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -159,6 +161,7 @@ const el = {
   topMoreMenu: document.querySelector('#topMoreMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
   runtimeButton: document.querySelector('#runtimeButton'),
+  installAppButton: document.querySelector('#installAppButton'),
   imageButton: document.querySelector('#imageButton'),
   imageInput: document.querySelector('#imageInput'),
   imagePreviewStrip: document.querySelector('#imagePreviewStrip'),
@@ -183,6 +186,8 @@ const el = {
   settingsTabs: [...document.querySelectorAll('[data-settings-tab]')],
   settingsPages: [...document.querySelectorAll('[data-settings-page]')],
   storageStats: document.querySelector('#storageStats'),
+  installAppSettingsButton: document.querySelector('#installAppSettingsButton'),
+  installAppStatus: document.querySelector('#installAppStatus'),
   autoCleanupToggle: document.querySelector('#autoCleanupToggle'),
   runSettingsState: document.querySelector('#runSettingsState'),
   uploadRetentionDaysInput: document.querySelector('#uploadRetentionDaysInput'),
@@ -569,6 +574,66 @@ function setActiveSessionId(id = '') {
 function setAuthView(isAuthed) {
   el.loginView.hidden = isAuthed;
   el.appView.hidden = !isAuthed;
+}
+
+function isStandaloneApp() {
+  return window.matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+}
+
+function installGuidanceText() {
+  const ua = navigator.userAgent || '';
+  if (/iPhone|iPad|iPod/i.test(ua)) {
+    return '当前浏览器不能直接弹出安装框。请用 Safari 打开本站，点底部分享按钮，然后选择“添加到主屏幕”。';
+  }
+  if (/Android/i.test(ua)) {
+    return '当前浏览器暂时没有提供安装框。请点浏览器右上角菜单，然后选择“安装应用”或“添加到主屏幕”。';
+  }
+  return '当前浏览器暂时没有提供安装框。请在浏览器菜单里选择“安装应用”“添加到桌面”或“创建快捷方式”。';
+}
+
+function updateInstallUi() {
+  const standalone = isStandaloneApp();
+  const canPrompt = Boolean(state.installPromptEvent);
+  const status = standalone ? '已从桌面应用模式打开。'
+    : canPrompt ? '可以直接安装为桌面应用。'
+      : state.installStatus || '可通过浏览器菜单添加到桌面。';
+  if (el.installAppStatus) el.installAppStatus.textContent = status;
+  for (const button of [el.installAppButton, el.installAppSettingsButton]) {
+    if (!button) continue;
+    button.disabled = standalone;
+    button.textContent = standalone ? '已安装' : canPrompt ? '安装到桌面' : '查看方法';
+  }
+}
+
+async function installAppToHomeScreen() {
+  closeTopMoreMenu();
+  if (isStandaloneApp()) {
+    state.installStatus = '当前已经是桌面应用模式。';
+    updateInstallUi();
+    return;
+  }
+  if (!state.installPromptEvent) {
+    state.installStatus = installGuidanceText();
+    updateInstallUi();
+    alert(state.installStatus);
+    return;
+  }
+  const promptEvent = state.installPromptEvent;
+  state.installPromptEvent = null;
+  updateInstallUi();
+  try {
+    promptEvent.prompt();
+    const choice = await promptEvent.userChoice;
+    const outcome = choice?.outcome || 'unknown';
+    state.installStatus = outcome === 'accepted' ? '安装请求已确认。' : '安装已取消。';
+    recordFrontendEvent('pwa.install_prompt', outcome);
+  } catch (error) {
+    state.installStatus = installGuidanceText();
+    recordFrontendEvent('pwa.install_failed', error.message || 'failed', 'warn');
+    alert(state.installStatus);
+  } finally {
+    updateInstallUi();
+  }
 }
 
 function isMobileViewport() {
@@ -2387,6 +2452,9 @@ el.favoritesButton.addEventListener('click', () => {
   renderActive();
 });
 
+el.installAppButton?.addEventListener('click', installAppToHomeScreen);
+el.installAppSettingsButton?.addEventListener('click', installAppToHomeScreen);
+
 el.imageButton.addEventListener('click', () => el.imageInput.click());
 
 el.imageInput.addEventListener('change', () => addImageFiles(el.imageInput.files || []));
@@ -2604,6 +2672,21 @@ window.addEventListener('offline', () => {
   renderActive({ messages: false });
 });
 
+window.addEventListener('beforeinstallprompt', (event) => {
+  event.preventDefault();
+  state.installPromptEvent = event;
+  state.installStatus = '可以直接安装为桌面应用。';
+  recordFrontendEvent('pwa.install_ready');
+  updateInstallUi();
+});
+
+window.addEventListener('appinstalled', () => {
+  state.installPromptEvent = null;
+  state.installStatus = '已安装到桌面。';
+  recordFrontendEvent('pwa.installed');
+  updateInstallUi();
+});
+
 document.addEventListener('visibilitychange', () => {
   clearTimeout(state.foregroundRefreshTimer);
   if (document.hidden) {
@@ -2629,6 +2712,7 @@ function registerServiceWorkerLater() {
 }
 
 async function boot() {
+  updateInstallUi();
   setAuthView(false);
   try {
     await api('/api/me');
