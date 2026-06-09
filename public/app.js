@@ -764,6 +764,7 @@ function renderActive(options = {}) {
   else {
     updateQueuePanel();
     updateRunIndicator();
+    if (options.stickToBottom === true && shouldFollowNewMessage(session.id)) settleMessagesToBottom();
     syncStreamingMarkers();
   }
   updateFavoritesButton();
@@ -967,9 +968,9 @@ function renderMessages(sessionId, options = {}) {
     if (index < messages.length) {
       requestAnimationFrame(renderChunk);
     } else {
-      restoreScroll(true);
       updateQueuePanel();
       updateRunIndicator();
+      restoreScroll(true);
       if (renderJobId === state.renderJobId) state.renderingMessages = false;
       messageScheduler.flushRender();
     }
