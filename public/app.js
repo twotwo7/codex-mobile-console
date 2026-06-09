@@ -1,7 +1,7 @@
 import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
-import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=3';
+import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=4';
 import { createMessageView } from './message-view.js?v=3';
 import { createPromptActions } from './prompt-actions.js?v=4';
 import { createQueueView } from './queue-view.js?v=3';
@@ -912,6 +912,7 @@ function renderActive(options = {}) {
   else {
     updateQueuePanel();
     updateRunIndicator();
+    if (isRunning && shouldFollowNewMessage(session.id)) settleMessagesToBottom();
     syncStreamingMarkers();
   }
   updateFavoritesButton();
@@ -1124,9 +1125,9 @@ function renderMessages(sessionId, options = {}) {
     if (index < turns.length) {
       requestAnimationFrame(renderChunk);
     } else {
-      restoreScroll(true);
       updateQueuePanel();
       updateRunIndicator();
+      restoreScroll(true);
       if (renderJobId === state.renderJobId) state.renderingMessages = false;
       messageScheduler.flushRender();
     }
@@ -1369,6 +1370,25 @@ function findDisplayedTurn(sessionId, turnId) {
   return turns.find((turn) => turn.id === turnId) || null;
 }
 
+function findTurnBySeqRange(sessionId, sourceTurn) {
+  const startSeq = Number(sourceTurn?.startSeq || 0);
+  if (!startSeq) return null;
+  const endSeq = Number(sourceTurn?.endSeq || 0);
+  const turns = splitMessagesIntoTurns(loadMessages(sessionId));
+  const index = turns.findIndex((messages) => {
+    const userMessage = messages.find((message) => message.role === 'user') || messages[0] || {};
+    const summary = userMessage.turnSummary || {};
+    const userSeq = Number(summary.startSeq || userMessage.orderSeq || userMessage.seq || 0);
+    return userSeq === startSeq;
+  });
+  if (index < 0) return null;
+  const messages = turns[index].filter((message) => {
+    const seq = Number(message.orderSeq || message.seq || 0);
+    return !endSeq || !seq || seq <= endSeq;
+  });
+  return createConversationTurn(sessionId, messages.length ? messages : turns[index], index, false);
+}
+
 function enforceExpandedTurnDomLimit(sessionId, keepKey) {
   const sessionPrefix = `${sessionId || 'global'}::`;
   const sessionKeys = state.expandedTurnOrder.filter((key) => key.startsWith(sessionPrefix));
@@ -1413,7 +1433,7 @@ async function hydrateTurnIfNeeded(sessionId, section, turn) {
     state.lastSeq.set(sessionId, lastRealSeq(merged));
     saveMessages(sessionId);
     if (state.activeId !== sessionId || section.classList.contains('collapsed')) return;
-    const freshTurn = findDisplayedTurn(sessionId, turn.id);
+    const freshTurn = findTurnBySeqRange(sessionId, turn) || findDisplayedTurn(sessionId, turn.id);
     if (!freshTurn) return;
     const oldBody = section.querySelector(':scope > .turn-body');
     if (oldBody) oldBody.remove();

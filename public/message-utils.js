@@ -98,19 +98,19 @@ export function mergeMessages(existing, incoming) {
 }
 
 export function compareMessages(a, b) {
+  const aOrder = Number(a.orderSeq || 0);
+  const bOrder = Number(b.orderSeq || 0);
+  if (aOrder > 0 && bOrder > 0) return aOrder - bOrder;
+  const aSeq = Number(a.seq || 0);
+  const bSeq = Number(b.seq || 0);
+  if (aSeq > 0 && bSeq > 0) return aSeq - bSeq;
+  if (aOrder || bOrder) return aOrder - bOrder;
+  if (aSeq || bSeq) return aSeq - bSeq;
   const aTime = messageTimeMs(a);
   const bTime = messageTimeMs(b);
   if (aTime && bTime && aTime !== bTime) return aTime - bTime;
   if (aTime && !bTime) return -1;
   if (!aTime && bTime) return 1;
-  const aSeq = Number(a.seq || 0);
-  const bSeq = Number(b.seq || 0);
-  if (aSeq > 0 && bSeq > 0) return aSeq - bSeq;
-  if (aSeq || bSeq) return aSeq - bSeq;
-  const aOrder = Number(a.orderSeq || 0);
-  const bOrder = Number(b.orderSeq || 0);
-  if (aOrder > 0 && bOrder > 0) return aOrder - bOrder;
-  if (aOrder || bOrder) return aOrder - bOrder;
   return messageKey(a).localeCompare(messageKey(b));
 }
 

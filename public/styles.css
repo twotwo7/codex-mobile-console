@@ -1030,12 +1030,12 @@ button:disabled {
   width: 16px;
   height: 16px;
   margin: 0;
-  accent-color: var(--accent);
+  accent-color: #4da3ff;
 }
 
 .bottom-follow-toggle:has(input:checked) {
-  color: #06100e;
-  background: var(--accent);
+  color: #06111f;
+  background: #4da3ff;
   border-color: transparent;
 }
 
