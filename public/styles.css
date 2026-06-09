@@ -1725,6 +1725,30 @@ button:disabled {
   overflow: auto;
 }
 
+.runtime-actions {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 0 0 2px;
+  background: var(--dialog-bg);
+}
+
+.runtime-actions .ghost-button {
+  flex: 1 1 110px;
+  min-height: 36px;
+  margin-top: 0;
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+.runtime-actions .danger {
+  border-color: color-mix(in srgb, var(--danger) 38%, var(--line));
+  color: var(--danger);
+}
+
 .runtime-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1782,6 +1806,50 @@ button:disabled {
 .runtime-process small {
   color: var(--muted);
   font-size: 11px;
+}
+
+.runtime-event-list {
+  display: grid;
+  gap: 5px;
+  max-height: 210px;
+  overflow: auto;
+}
+
+.runtime-event {
+  display: grid;
+  grid-template-columns: 58px minmax(88px, 0.7fr) minmax(0, 1.3fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.runtime-event:last-child {
+  border-bottom: 0;
+}
+
+.runtime-event strong {
+  margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-event small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-event.warn strong {
+  color: var(--danger);
 }
 
 .runtime-meter {

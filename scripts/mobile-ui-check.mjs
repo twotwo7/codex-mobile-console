@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=99">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=100">
       </head>
       <body>
         <main class="workspace">

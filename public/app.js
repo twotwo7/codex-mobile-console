@@ -2,6 +2,7 @@ import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
+import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
 import { createMessageView } from './message-view.js?v=3';
 import { createPromptActions } from './prompt-actions.js?v=4';
@@ -34,6 +35,7 @@ const state = {
   lastSeq: new Map(),
   eventSource: null,
   eventConnectionStatus: 'closed',
+  frontendEvents: [],
   lastEventAt: '',
   lastContextRefreshAt: '',
   lastSessionSnapshotAt: '',
@@ -78,8 +80,18 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '111';
-const SW_CACHE_VERSION = 'codex-console-v127';
+const APP_ASSET_VERSION = '112';
+const SW_CACHE_VERSION = 'codex-console-v128';
+
+const frontendEvents = createFrontendEvents({
+  limit: 50,
+  storage: localStorage,
+  storageKey: 'cmc.frontendEvents',
+  onChange: (events) => {
+    state.frontendEvents = events;
+  }
+});
+state.frontendEvents = frontendEvents.snapshot();
 
 const CODEX_COMMANDS = [
   { name: '/status', detail: '查看会话状态', value: '/status' },
@@ -542,9 +554,15 @@ function mirrorConnectionState(snapshot = connectionState.snapshot()) {
   return snapshot;
 }
 
+function recordFrontendEvent(type, detail = '', level = 'info') {
+  return frontendEvents.record(type, detail, level);
+}
+
 function setActiveSessionId(id = '') {
+  const previous = state.activeId || '';
   state.activeId = id || '';
   storageSet('cmc.activeId', state.activeId);
+  if (previous !== state.activeId) recordFrontendEvent('session.switch', state.activeId || 'none');
   return state.activeId;
 }
 
@@ -1316,6 +1334,8 @@ async function browserRuntimeInfo(sessionId) {
     lastEventAt: connection.lastEventAt,
     lastContextRefreshAt: connection.lastContextRefreshAt,
     lastSessionSnapshotAt: connection.lastSessionSnapshotAt,
+    frontendEventCount: state.frontendEvents.length,
+    frontendEvents: state.frontendEvents.slice(0, 50),
     online: navigator.onLine,
     visibility: document.visibilityState || '',
     platform: navigator.userAgentData?.platform || navigator.platform || '',
@@ -1439,10 +1459,87 @@ function renderFrontendRuntime(local) {
         <span>版本 <strong>${escapeHtml(local.appAssetVersion || '-')}</strong></span>
         <span>渲染 <strong>${local.renderedMessages || 0}</strong></span>
         <span>队列 <strong>${local.activeQueuedCount || 0}</strong></span>
+        <span>事件 <strong>${local.frontendEventCount || 0}</strong></span>
       </div>
       <span>事件 ${escapeHtml(formatTime(local.lastEventAt) || '-')} · 主动刷新 ${escapeHtml(formatTime(local.lastContextRefreshAt) || '-')} · 状态快照 ${escapeHtml(formatTime(local.lastSessionSnapshotAt) || '-')} · SW ${escapeHtml(local.swCacheVersion)}</span>
     </div>
   `;
+}
+
+function renderRuntimeActions() {
+  return `
+    <div class="runtime-actions">
+      <button class="ghost-button inline" type="button" data-runtime-action="refresh">刷新状态</button>
+      <button class="ghost-button inline" type="button" data-runtime-action="reconnect">重连 SSE</button>
+      <button class="ghost-button inline danger" type="button" data-runtime-action="clear-cache">清前端缓存</button>
+    </div>
+  `;
+}
+
+function renderFrontendEvents(local) {
+  const events = local.frontendEvents || [];
+  return `
+    <div class="runtime-section">
+      <strong>前端事件</strong>
+      <div class="runtime-event-list">
+        ${events.length ? events.map((event) => `
+          <div class="runtime-event ${escapeHtml(event.level || 'info')}">
+            <span>${escapeHtml(formatTime(event.at) || '-')}</span>
+            <strong>${escapeHtml(event.type || 'event')}</strong>
+            <small>${escapeHtml(summarizeText(event.detail || '', 120))}</small>
+          </div>
+        `).join('') : '<p class="runtime-empty">暂无前端事件。</p>'}
+      </div>
+    </div>
+  `;
+}
+
+async function clearFrontendCachesAndReload() {
+  recordFrontendEvent('runtime.clear_cache', 'requested');
+  try {
+    const keys = [];
+    for (let index = 0; index < localStorage.length; index += 1) {
+      const key = localStorage.key(index) || '';
+      if (key.startsWith('cmc.')) keys.push(key);
+    }
+    for (const key of keys) localStorage.removeItem(key);
+    if (window.caches?.keys) {
+      const names = await caches.keys().catch(() => []);
+      await Promise.all(names.filter((name) => name.startsWith('codex-console-')).map((name) => caches.delete(name)));
+    }
+  } finally {
+    location.reload();
+  }
+}
+
+function bindRuntimeActions() {
+  el.runtimePanel.querySelector('[data-runtime-action="refresh"]')?.addEventListener('click', async () => {
+    recordFrontendEvent('runtime.refresh', state.activeId || 'none');
+    await refreshSessions({ messages: false }).catch((error) => {
+      recordFrontendEvent('runtime.refresh_failed', error.message || 'failed', 'warn');
+    });
+    await refreshActiveContext().catch((error) => {
+      recordFrontendEvent('context.refresh_failed', error.message || 'failed', 'warn');
+    });
+    await loadRuntimeInfo().catch(renderRuntimeError);
+  });
+
+  el.runtimePanel.querySelector('[data-runtime-action="reconnect"]')?.addEventListener('click', async () => {
+    recordFrontendEvent('runtime.reconnect_sse', state.activeId || 'none');
+    if (state.eventSource) {
+      state.eventSource.close();
+      state.eventSource = null;
+    }
+    mirrorConnectionState(connectionState.setEventStatus('closed'));
+    if (state.activeId) connectEvents(state.activeId);
+    await loadRuntimeInfo().catch(renderRuntimeError);
+  });
+
+  el.runtimePanel.querySelector('[data-runtime-action="clear-cache"]')?.addEventListener('click', () => {
+    if (confirm('清理本应用前端缓存并重新加载？登录态会保留。')) {
+      clearFrontendCachesAndReload();
+    }
+  });
 }
 
 async function renderRuntimePanel(data) {
@@ -1450,6 +1547,7 @@ async function renderRuntimePanel(data) {
   const processes = data.processes || [];
   const local = await browserRuntimeInfo(data.session?.id || state.activeId);
   el.runtimePanel.innerHTML = `
+    ${renderRuntimeActions()}
     <div class="runtime-section">
       <strong>Codex 运行时</strong>
       <div class="runtime-grid compact">
@@ -1465,6 +1563,7 @@ async function renderRuntimePanel(data) {
     ${renderBrowserRuntime(local)}
     ${renderServiceRuntime(data)}
     ${renderTokenUsage(data)}
+    ${renderFrontendEvents(local)}
     <div class="runtime-section">
       <strong>当前输入</strong>
       <p>${escapeHtml(active?.prompt || '无运行中的输入')}</p>
@@ -1486,6 +1585,7 @@ async function renderRuntimePanel(data) {
     </div>
     <small class="runtime-checked">更新 ${escapeHtml(formatTime(data.checkedAt))}</small>
   `;
+  bindRuntimeActions();
 }
 
 function runtimeErrorCopy(error) {
@@ -1801,6 +1901,7 @@ function updateMessage(sessionId, message) {
 }
 
 async function refreshSessions(options = {}) {
+  recordFrontendEvent('sessions.refresh_start', options.messages === false ? 'without_messages' : 'with_messages');
   try {
     const data = await api('/api/sessions');
     state.sessions = data.sessions || [];
@@ -1819,7 +1920,9 @@ async function refreshSessions(options = {}) {
     } else {
       renderActive({ messages: false });
     }
+    recordFrontendEvent('sessions.refresh_ok', `count:${state.sessions.length}`);
   } catch (error) {
+    recordFrontendEvent('sessions.refresh_failed', error.message || 'failed', 'warn');
     if (error.status === 401) throw error;
     loadCachedSessions();
     renderSessions();
@@ -1833,6 +1936,7 @@ window.cmcAfterLogin = async function cmcAfterLogin() {
 };
 
 async function loadSession(id, options = {}) {
+  recordFrontendEvent('session.load_start', `${id} full:${options.full === true}`);
   lockInitialBottom(id);
   if (options.showLoading !== false && state.activeId === id) {
     renderActive({ messages: false });
@@ -1846,6 +1950,7 @@ async function loadSession(id, options = {}) {
       connectEvents(id);
       startContextRefreshLoop();
       scheduleResourceCleanup();
+      recordFrontendEvent('session.load_cache_hit', id);
       return;
     }
     const limit = options.full === true ? maxHistoryLimit() : firstPageLimit();
@@ -1867,7 +1972,9 @@ async function loadSession(id, options = {}) {
     connectEvents(id);
     startContextRefreshLoop();
     scheduleResourceCleanup();
-  } catch {
+    recordFrontendEvent('session.load_ok', `${id} messages:${trimmed.length}`);
+  } catch (error) {
+    recordFrontendEvent('session.load_failed', error.message || 'failed', 'warn');
     loadMessages(id);
     renderActive({ stickToBottom: true });
     connectEvents(id);
@@ -1918,8 +2025,12 @@ async function loadOlderMessages(sessionId) {
 
 async function refreshActiveContext() {
   const session = getActiveSession();
-  if (!session?.id || !state.online || state.contextRefreshInFlight) return;
+  if (!session?.id || !state.online || state.contextRefreshInFlight) {
+    if (state.contextRefreshInFlight) recordFrontendEvent('context.refresh_skip', 'in_flight');
+    return;
+  }
   state.contextRefreshInFlight = true;
+  recordFrontendEvent('context.refresh_start', session.id);
   mirrorConnectionState(connectionState.markContextRefresh());
   try {
     const page = state.messagePages.get(session.id);
@@ -1952,7 +2063,9 @@ async function refreshActiveContext() {
         else renderActive({ messages: false });
       }
     }
-  } catch {
+    recordFrontendEvent('context.refresh_ok', `messages:${nextMessages.length} changed:${changed} session:${sessionChanged}`);
+  } catch (error) {
+    recordFrontendEvent('context.refresh_failed', error.message || 'failed', 'warn');
     // Keep the current cached view; the normal online handler will retry later.
   } finally {
     state.contextRefreshInFlight = false;
@@ -1970,6 +2083,7 @@ function connectEvents(id) {
   if (state.eventSource) state.eventSource.close();
   if (!id || !navigator.onLine) {
     mirrorConnectionState(connectionState.setEventStatus('closed'));
+    recordFrontendEvent('sse.closed', id || 'no-session');
     return;
   }
 
@@ -1977,6 +2091,7 @@ function connectEvents(id) {
   const source = new EventSource(`/api/events?sessionId=${encodeURIComponent(id)}&after=${after}`);
   state.eventSource = source;
   mirrorConnectionState(connectionState.setEventStatus('connecting'));
+  recordFrontendEvent('sse.connect', `${id} after:${after}`);
 
   source.addEventListener('hello', (event) => {
     mirrorConnectionState(connectionState.setOnline(true));
@@ -1984,6 +2099,7 @@ function connectEvents(id) {
     let sessionChanged = false;
     const data = parseEventData(event, {});
     sessionChanged = data?.session ? mergeSessionSnapshot(data.session) : false;
+    recordFrontendEvent('sse.hello', `session:${sessionChanged}`);
     if (sessionChanged) renderSessions();
     renderActive({ messages: false });
   });
@@ -1991,12 +2107,14 @@ function connectEvents(id) {
   source.addEventListener('message', (event) => {
     mirrorConnectionState(connectionState.markEvent('open'));
     const message = parseEventData(event);
+    recordFrontendEvent('sse.message', message?.seq || message?.id || 'unknown');
     if (message) upsertMessage(id, message);
   });
 
   source.addEventListener('message_update', (event) => {
     mirrorConnectionState(connectionState.markEvent('open'));
     const message = parseEventData(event);
+    recordFrontendEvent('sse.message_update', message?.seq || message?.id || 'unknown');
     if (message) updateMessage(id, message);
   });
 
@@ -2005,6 +2123,7 @@ function connectEvents(id) {
     const session = parseEventData(event);
     if (!session) return;
     const changed = mergeSessionSnapshot(session);
+    recordFrontendEvent('sse.session', `${session.id || id} changed:${changed} status:${session.status || '-'}`);
     if (changed) renderSessions();
     if (session.id === state.activeId) renderActive({ messages: false });
   });
@@ -2013,6 +2132,7 @@ function connectEvents(id) {
     source.close();
     if (state.eventSource === source) state.eventSource = null;
     mirrorConnectionState(connectionState.setEventStatus('reconnecting'));
+    recordFrontendEvent('sse.error', id, 'warn');
     setBadge('重连中', 'busy');
     refreshActiveContext().catch(() => {});
     setTimeout(() => {
@@ -2468,6 +2588,7 @@ el.messagePane.addEventListener('scroll', () => {
 }, { passive: true });
 
 window.addEventListener('online', () => {
+  recordFrontendEvent('page.online');
   mirrorConnectionState(connectionState.setOnline(true));
   refreshSessions({ messages: false }).catch(() => {});
   if (state.activeId) connectEvents(state.activeId);
@@ -2475,6 +2596,7 @@ window.addEventListener('online', () => {
 });
 
 window.addEventListener('offline', () => {
+  recordFrontendEvent('page.offline', '', 'warn');
   mirrorConnectionState(connectionState.setOnline(false));
   mirrorConnectionState(connectionState.setEventStatus('closed'));
   if (state.eventSource) state.eventSource.close();
@@ -2485,10 +2607,12 @@ window.addEventListener('offline', () => {
 document.addEventListener('visibilitychange', () => {
   clearTimeout(state.foregroundRefreshTimer);
   if (document.hidden) {
+    recordFrontendEvent('page.hidden');
     messageScheduler.flushSaves();
     return;
   }
   if (!document.hidden) {
+    recordFrontendEvent('page.visible');
     state.foregroundRefreshTimer = setTimeout(() => {
       refreshActiveContext();
     }, 600);

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createConnectionState } from '../public/connection-state.js';
+import { createFrontendEvents } from '../public/frontend-events.js';
 import { createSessionStateController, isSessionRunning, sessionStatusFromMessage } from '../public/session-state.js';
 import { createTopbarView } from '../public/topbar-view.js';
 
@@ -138,6 +139,33 @@ function createHarness() {
   topbar.closeTopMoreMenu();
   assert.equal(el.topMoreMenu.hidden, true);
   assert.equal(el.topMoreButton.attrs['aria-expanded'], 'false');
+}
+
+{
+  const writes = new Map();
+  const storage = {
+    getItem: (key) => writes.get(key) || '',
+    setItem: (key, value) => writes.set(key, value)
+  };
+  let latest = [];
+  const events = createFrontendEvents({
+    limit: 3,
+    persistDelayMs: 0,
+    storage,
+    storageKey: 'events',
+    onChange: (items) => {
+      latest = items;
+    }
+  });
+  events.record('one', { ok: true });
+  events.record('two');
+  events.record('three');
+  events.record('four', 'kept');
+  assert.equal(latest.length, 3);
+  assert.deepEqual(latest.map((item) => item.type), ['four', 'three', 'two']);
+  assert.equal(latest[0].detail, 'kept');
+  events.clear();
+  assert.deepEqual(events.snapshot(), []);
 }
 
 console.log('state controller checks passed');
