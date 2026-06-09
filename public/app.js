@@ -638,8 +638,9 @@ function renderSessions(options = {}) {
       button.type = 'button';
       button.className = 'session-group-toggle';
       button.setAttribute('aria-expanded', String(expanded));
+      button.title = cwd;
       button.innerHTML = `
-        <span>${escapeHtml(cwd)}</span>
+        <span>${escapeHtml(formatSessionCwd(cwd))}</span>
         <strong>${expanded ? '收起' : '展开'} · ${group.length}</strong>
       `;
       button.addEventListener('click', () => {
