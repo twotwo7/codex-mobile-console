@@ -193,6 +193,12 @@ function updateMessageRunState(session, messageId, runState, extra = {}) {
   if (!messageId) return null;
   const message = (session.messages || []).find((item) => item.id === messageId || item.clientMessageId === messageId);
   if (!message) return null;
+  const wasQueued = message.runState === 'queued' || message.delivery === 'queued';
+  if (runState === 'running' && wasQueued) {
+    message.seq = state.nextSeq++;
+    message.at = nowIso();
+    session.lastSeq = message.seq;
+  }
   message.runState = runState;
   message.completedAt = ['completed', 'failed', 'stopped', 'recovered'].includes(runState) ? nowIso() : message.completedAt;
   Object.assign(message, extra);
@@ -1495,6 +1501,10 @@ function displayMessageDedupeKey(message) {
   return `${message.role || ''}\0${text}`;
 }
 
+function isQueuedDisplayUserMessage(message) {
+  return message?.role === 'user' && (message.runState === 'queued' || message.delivery === 'queued');
+}
+
 function mergeDisplayMessage(existing, incoming) {
   const preferExisting = !displayIsCodex(existing) && displayIsCodex(incoming);
   const base = preferExisting ? incoming : existing;
@@ -1518,6 +1528,7 @@ async function indexedDisplayMessages(session) {
   const out = [];
   const byDedupeKey = new Map();
   for (const message of [...codexMessages, ...(session.messages || [])]) {
+    if (isQueuedDisplayUserMessage(message)) continue;
     const next = {
       ...message,
       starred: message.starred === true || state.starredMessages?.[message.id] === true

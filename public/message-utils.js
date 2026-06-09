@@ -36,6 +36,9 @@ export function mergeMessagePair(current, incoming) {
   const base = preferCurrent ? incoming : current;
   const overlay = preferCurrent ? current : incoming;
   const next = { ...base, ...overlay };
+  if (incoming.seq && incoming.seq !== current.seq && !incoming.orderSeq) {
+    delete next.orderSeq;
+  }
   const currentImages = current.images || [];
   const incomingImages = incoming.images || [];
   next.images = mergeImages(currentImages, incomingImages);
@@ -104,13 +107,13 @@ export function compareMessages(a, b) {
   const aSeq = Number(a.seq || 0);
   const bSeq = Number(b.seq || 0);
   if (aSeq > 0 && bSeq > 0) return aSeq - bSeq;
-  if (aOrder || bOrder) return aOrder - bOrder;
-  if (aSeq || bSeq) return aSeq - bSeq;
   const aTime = messageTimeMs(a);
   const bTime = messageTimeMs(b);
   if (aTime && bTime && aTime !== bTime) return aTime - bTime;
   if (aTime && !bTime) return -1;
   if (!aTime && bTime) return 1;
+  if (aOrder || bOrder) return aOrder - bOrder;
+  if (aSeq || bSeq) return aSeq - bSeq;
   return messageKey(a).localeCompare(messageKey(b));
 }
 

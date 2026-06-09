@@ -1,9 +1,9 @@
 import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
-import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=4';
+import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=5';
 import { createMessageView } from './message-view.js?v=3';
-import { createPromptActions } from './prompt-actions.js?v=4';
+import { createPromptActions } from './prompt-actions.js?v=5';
 import { createQueueView } from './queue-view.js?v=3';
 import { createSkillView } from './skill-view.js?v=3';
 
@@ -1167,8 +1167,17 @@ function closeImageViewer() {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
-  const visible = state.showStarredOnly ? filtered : visibleMessagesForSession(sessionId, filtered);
+  const displayable = state.showStarredOnly ? filtered : messagesForConversationTurns(filtered);
+  const visible = state.showStarredOnly ? displayable : visibleMessagesForSession(sessionId, displayable);
   return mergeDisplayMessages(visible);
+}
+
+function isQueuedUserMessage(message) {
+  return message?.role === 'user' && (message.runState === 'queued' || message.delivery === 'queued');
+}
+
+function messagesForConversationTurns(messages) {
+  return (messages || []).filter((message) => !isQueuedUserMessage(message));
 }
 
 function visibleMessagesForSession(sessionId, messages) {
@@ -1268,6 +1277,7 @@ function keepLiveTurnExpanded(sessionId, turns) {
   const session = state.sessions.find((item) => item.id === sessionId);
   const hasLiveMessage = latest.messages.some((message) => (
     ['submitted', 'running', 'stopping'].includes(message.runState)
+    || ['submitted', 'running', 'stopping'].includes(message.delivery)
     || ['running', 'stopping'].includes(message.status)
     || message.streaming === true
   ));
