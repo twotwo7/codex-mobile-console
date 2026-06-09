@@ -1,7 +1,7 @@
 import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
-import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
+import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=3';
 import { createMessageView } from './message-view.js?v=3';
 import { createPromptActions } from './prompt-actions.js?v=4';
 import { createQueueView } from './queue-view.js?v=3';
@@ -67,15 +67,16 @@ const state = {
 const HISTORY_TURN_PAGE_SIZE = 2;
 const REFRESH_MESSAGE_LIMIT = 120;
 const MAX_CACHED_SESSIONS = 2;
-const MAX_LOCAL_MESSAGES = 800;
-const MAX_BROWSER_CACHED_MESSAGES = 360;
+const MAX_LOCAL_MESSAGES = 3000;
+const MAX_BROWSER_CACHED_MESSAGES = 3000;
+const MIN_BROWSER_CACHED_MESSAGES = 360;
 const DEFAULT_RENDERED_TURNS = 3;
 const MAX_EXPANDED_TURNS = 2;
 const MAX_COLLAPSED_TURN_BODIES = 3;
 const MOBILE_MESSAGE_CHUNK = 18;
 const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
-const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
+const MAX_LOCAL_MESSAGE_CACHE_BYTES = 4_500_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
 
 const CODEX_COMMANDS = [
@@ -352,10 +353,7 @@ function loadCachedSessions() {
 
 function saveMessages(id) {
   const messages = trimMessagesForStorage(mergeMessages([], state.messages.get(id) || []));
-  const cached = messages.slice(-MAX_BROWSER_CACHED_MESSAGES).map(cacheSafeMessage);
-  if (!storageJsonSet(cacheKey(id), cached)) {
-    scheduleLocalCacheCleanup(500);
-  }
+  if (!saveMessageCacheWithFallback(cacheKey(id), messages)) scheduleLocalCacheCleanup(500);
 }
 
 function trimMessagesForStorage(messages) {
@@ -366,9 +364,34 @@ function trimMessagesForStorage(messages) {
 function cacheSafeMessage(message) {
   return {
     ...message,
-    images: (message.images || []).map(({ data, dataUrl, ...image }) => image),
+    images: (message.images || []).map(cacheSafeImage),
     retryImages: (message.retryImages || []).map(({ data, dataUrl, ...image }) => image)
   };
+}
+
+function cacheSafeImage(image) {
+  const { data, dataUrl, ...safe } = image || {};
+  if (!safe.url && safe.fileName) safe.url = `/api/uploads/${encodeURIComponent(safe.fileName)}`;
+  if (!safe.url && !safe.fileName && dataUrl) safe.dataUrl = dataUrl;
+  return safe;
+}
+
+function safeMessageCache(messages, limit) {
+  return messages.slice(-limit).map(cacheSafeMessage);
+}
+
+function saveMessageCacheWithFallback(key, messages) {
+  const attempts = [];
+  let limit = Math.min(MAX_BROWSER_CACHED_MESSAGES, messages.length || 0);
+  while (limit > MIN_BROWSER_CACHED_MESSAGES) {
+    attempts.push(limit);
+    limit = Math.max(MIN_BROWSER_CACHED_MESSAGES, Math.floor(limit / 2));
+  }
+  attempts.push(Math.min(MIN_BROWSER_CACHED_MESSAGES, messages.length || MIN_BROWSER_CACHED_MESSAGES));
+  for (const attempt of [...new Set(attempts.filter((item) => item > 0))]) {
+    if (storageJsonSet(key, safeMessageCache(messages, attempt))) return true;
+  }
+  return storageJsonSet(key, []);
 }
 
 function messageListSignature(messages) {
@@ -563,7 +586,7 @@ function cleanupLocalMessageCaches(deadline) {
         cleaned += 1;
         continue;
       }
-      localStorage.setItem(key, JSON.stringify(parsed.slice(-MAX_BROWSER_CACHED_MESSAGES).map(cacheSafeMessage)));
+      saveMessageCacheWithFallback(key, parsed);
       cleaned += 1;
     }
   } catch {

@@ -38,13 +38,41 @@ export function mergeMessagePair(current, incoming) {
   const next = { ...base, ...overlay };
   const currentImages = current.images || [];
   const incomingImages = incoming.images || [];
-  next.images = currentImages.length >= incomingImages.length ? currentImages : incomingImages;
+  next.images = mergeImages(currentImages, incomingImages);
   next.starred = current.starred === true || incoming.starred === true;
   if (incoming.id || incoming.seq || incoming.orderSeq) {
     next.pending = false;
     next.failed = false;
   }
   return next;
+}
+
+function imagePersistenceScore(image) {
+  return (image?.url ? 8 : 0)
+    + (image?.fileName ? 4 : 0)
+    + (image?.path ? 2 : 0)
+    + (image?.dataUrl || image?.data ? 1 : 0);
+}
+
+function mergeImages(currentImages, incomingImages) {
+  const max = Math.max(currentImages.length, incomingImages.length);
+  const out = [];
+  for (let index = 0; index < max; index += 1) {
+    const current = currentImages[index];
+    const incoming = incomingImages[index];
+    if (!current) {
+      if (incoming) out.push(incoming);
+      continue;
+    }
+    if (!incoming) {
+      out.push(current);
+      continue;
+    }
+    out.push(imagePersistenceScore(incoming) >= imagePersistenceScore(current)
+      ? { ...current, ...incoming }
+      : { ...incoming, ...current });
+  }
+  return out;
 }
 
 export function findMessageIndex(messages, message) {
