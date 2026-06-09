@@ -73,8 +73,6 @@ const MIN_BROWSER_CACHED_MESSAGES = 360;
 const DEFAULT_RENDERED_TURNS = 3;
 const MAX_EXPANDED_TURNS = 2;
 const MAX_COLLAPSED_TURN_BODIES = 3;
-const MOBILE_MESSAGE_CHUNK = 18;
-const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 4_500_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
@@ -100,6 +98,8 @@ const IMAGE_PROMPTS = [
 const messageScheduler = createMessageScheduler({
   getActiveId: () => state.activeId,
   isRendering: () => state.renderingMessages,
+  renderDebounceMs: 220,
+  renderBusyDelayMs: 320,
   render: ({ sessionId, stickToBottom, restoreAnchor }) => {
     renderMessages(sessionId, { stickToBottom, restoreAnchor });
   },
@@ -912,7 +912,7 @@ function renderActive(options = {}) {
   else {
     updateQueuePanel();
     updateRunIndicator();
-    if (isRunning && shouldFollowNewMessage(session.id)) settleMessagesToBottom();
+    if (options.stickToBottom === true && isRunning && shouldFollowNewMessage(session.id)) settleMessagesToBottom();
     syncStreamingMarkers();
   }
   updateFavoritesButton();
@@ -1077,12 +1077,14 @@ function renderMessages(sessionId, options = {}) {
   const previousBottomDistance = messageBottomDistance();
   const previousAnchor = stickToBottom ? null : options.restoreAnchor || firstVisibleMessageAnchor();
   const renderScrollToken = beginProgrammaticMessageScroll();
-  el.messagePane.innerHTML = '';
-  clearTurnDomState(sessionId);
+  const existingTurns = new Map([...el.messagePane.querySelectorAll(
+    `.conversation-turn[data-session-id="${CSS.escape(sessionId || '')}"]`
+  )].map((node) => [node.dataset.turnId, node]));
+  const nodes = [];
   const olderControl = renderOlderMessagesControl(sessionId);
-  if (olderControl) el.messagePane.append(olderControl);
+  if (olderControl) nodes.push(olderControl);
   if (state.showStarredOnly && !messages.length) {
-    el.messagePane.append(renderFavoriteEmpty());
+    nodes.push(renderFavoriteEmpty());
   }
 
   const restoreScroll = (finalChunk = false) => {
@@ -1108,31 +1110,29 @@ function renderMessages(sessionId, options = {}) {
   };
 
   const turns = groupMessagesIntoTurns(sessionId, messages);
-  const baseChunkSize = isMobileViewport() ? MOBILE_MESSAGE_CHUNK : DESKTOP_MESSAGE_CHUNK;
-  const chunkSize = Math.max(1, Math.min(turns.length || 1, Math.max(1, Math.floor(baseChunkSize / 3))));
-  let index = 0;
-  const renderChunk = () => {
-    if (renderJobId !== state.renderJobId || state.activeId !== sessionId) {
-      releaseProgrammaticMessageScroll(renderScrollToken);
-      return;
+  for (const turn of turns) {
+    const signature = conversationTurnSignature(turn);
+    const existing = existingTurns.get(turn.id);
+    if (existing?.dataset.turnSignature === signature) {
+      nodes.push(existing);
+      continue;
     }
-    const fragment = document.createDocumentFragment();
-    const end = Math.min(index + chunkSize, turns.length);
-    for (; index < end; index += 1) {
-      fragment.append(renderConversationTurn(sessionId, turns[index]));
-    }
-    el.messagePane.append(fragment);
-    if (index < turns.length) {
-      requestAnimationFrame(renderChunk);
-    } else {
-      updateQueuePanel();
-      updateRunIndicator();
-      restoreScroll(true);
-      if (renderJobId === state.renderJobId) state.renderingMessages = false;
-      messageScheduler.flushRender();
-    }
-  };
-  renderChunk();
+    const node = renderConversationTurn(sessionId, turn);
+    node.dataset.turnSignature = signature;
+    nodes.push(node);
+  }
+  if (renderJobId !== state.renderJobId || state.activeId !== sessionId) {
+    if (renderJobId === state.renderJobId) state.renderingMessages = false;
+    releaseProgrammaticMessageScroll(renderScrollToken);
+    return;
+  }
+  el.messagePane.replaceChildren(...nodes);
+  pruneTurnDomTracking(sessionId);
+  updateQueuePanel();
+  updateRunIndicator();
+  restoreScroll(true);
+  if (renderJobId === state.renderJobId) state.renderingMessages = false;
+  messageScheduler.flushRender();
 }
 
 function renderOlderMessagesControl(sessionId) {
@@ -1180,6 +1180,10 @@ function messagesForConversationTurns(messages) {
   return (messages || []).filter((message) => !isQueuedUserMessage(message));
 }
 
+function isConversationMessage(message) {
+  return Boolean(message && !isQueuedUserMessage(message));
+}
+
 function visibleMessagesForSession(sessionId, messages) {
   if (!Array.isArray(messages) || !messages.length) return [];
   const limit = sessionRenderedTurnLimit(sessionId);
@@ -1202,10 +1206,12 @@ function removeKey(list, key) {
   if (index >= 0) list.splice(index, 1);
 }
 
-function clearTurnDomState(sessionId) {
-  const sessionPrefix = `${sessionId || 'global'}::`;
-  state.expandedTurnOrder = state.expandedTurnOrder.filter((key) => !key.startsWith(sessionPrefix));
-  state.collapsedTurnBodyOrder = state.collapsedTurnBodyOrder.filter((key) => !key.startsWith(sessionPrefix));
+function pruneTurnDomTracking(sessionId) {
+  const liveKeys = new Set([...el.messagePane.querySelectorAll(
+    `.conversation-turn[data-session-id="${CSS.escape(sessionId || '')}"]`
+  )].map((node) => turnDomKey(sessionId, node.dataset.turnId)));
+  state.expandedTurnOrder = state.expandedTurnOrder.filter((key) => !key.startsWith(`${sessionId || 'global'}::`) || liveKeys.has(key));
+  state.collapsedTurnBodyOrder = state.collapsedTurnBodyOrder.filter((key) => !key.startsWith(`${sessionId || 'global'}::`) || liveKeys.has(key));
 }
 
 function groupMessagesIntoTurns(sessionId, messages) {
@@ -1294,6 +1300,26 @@ function conversationTurnId(messages, index) {
     || userMessage.at
     || index;
   return `turn:${key}`;
+}
+
+function conversationTurnSignature(turn) {
+  const statePart = turn.collapsed ? 'c' : 'e';
+  const messagePart = turn.messages.map((message) => [
+    message.clientMessageId || message.id || message.seq || message.orderSeq || message.at || '',
+    message.role || '',
+    message.runState || '',
+    message.delivery || '',
+    message.status || '',
+    message.streaming ? '1' : '',
+    message.starred ? '1' : '',
+    message.pending ? '1' : '',
+    message.failed ? '1' : '',
+    String(message.text || '').length,
+    String(message.text || '').slice(0, 80),
+    String(message.text || '').slice(-80),
+    message.images?.length || 0
+  ].join(':')).join('|');
+  return `${statePart}:${turn.index}:${turn.startSeq}:${turn.endSeq}:${turn.messageCount}:${turn.replyCount}:${turn.toolCount}:${messagePart}`;
 }
 
 function renderConversationTurn(sessionId, turn) {
@@ -2169,9 +2195,9 @@ async function openSkillDialog() {
 }
 
 function upsertMessage(sessionId, message) {
-  const previousTailKey = sessionId === state.activeId ? lastDisplayBubbleKey(sessionId) : '';
   const messages = loadMessages(sessionId);
   const replacedIndex = findMessageIndex(messages, message);
+  const wasConversationMessage = replacedIndex >= 0 && isConversationMessage(messages[replacedIndex]);
   const incoming = (message.id || message.seq) ? { ...message, pending: false, failed: false } : message;
   let renderedMessage = incoming;
   if (replacedIndex >= 0) {
@@ -2198,20 +2224,14 @@ function upsertMessage(sessionId, message) {
   }
 
   if (sessionId === state.activeId) {
-    const hasNewBubble = previousTailKey !== lastDisplayBubbleKey(sessionId);
-    const stickToBottom = hasNewBubble ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
-    messageScheduler.scheduleRender(sessionId, { stickToBottom });
-    renderActive({ messages: false });
+    const isVisibleConversationMessage = isConversationMessage(renderedMessage);
+    if (wasConversationMessage || isVisibleConversationMessage) {
+      messageScheduler.scheduleRender(sessionId, {
+        stickToBottom: replacedIndex < 0 ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId)
+      });
+    }
+    renderActive({ messages: false, stickToBottom: false });
   }
-}
-
-function lastDisplayBubbleKey(sessionId) {
-  const messages = displayMessages(sessionId);
-  const message = messages.at(-1);
-  if (!message) return '';
-  const firstId = message.clientMessageId || (message.ids || []).find(Boolean) || message.id || '';
-  const stable = firstId || (message.seq ? `seq:${message.seq}` : `${message.at || ''}:${String(message.text || '').slice(0, 48)}`);
-  return `${message.role || 'system'}:${stable}`;
 }
 
 function updateMessage(sessionId, message) {
@@ -2221,14 +2241,17 @@ function updateMessage(sessionId, message) {
     upsertMessage(sessionId, message);
     return;
   }
+  const wasConversationMessage = isConversationMessage(messages[index]);
   const updatedMessage = mergeMessagePair(messages[index], message);
   messages[index] = updatedMessage;
   messages.sort(compareMessages);
   state.lastSeq.set(sessionId, lastRealSeq(messages));
   messageScheduler.scheduleSave(sessionId);
   if (sessionId === state.activeId) {
-    messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
-    renderActive({ messages: false });
+    if (wasConversationMessage || isConversationMessage(updatedMessage)) {
+      messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
+    }
+    renderActive({ messages: false, stickToBottom: false });
   }
 }
 
