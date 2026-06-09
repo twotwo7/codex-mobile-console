@@ -105,10 +105,13 @@ const el = {
   drawerScrim: document.querySelector('#drawerScrim'),
   openDrawer: document.querySelector('#openDrawer'),
   closeDrawer: document.querySelector('#closeDrawer'),
+  drawerBackButton: document.querySelector('#drawerBackButton'),
   drawerTitle: document.querySelector('#drawerTitle'),
+  drawerModeRow: document.querySelector('#drawerModeRow'),
   drawerSessionsButton: document.querySelector('#drawerSessionsButton'),
   drawerSessionsPanel: document.querySelector('#drawerSessionsPanel'),
   drawerSkillsPanel: document.querySelector('#drawerSkillsPanel'),
+  drawerSettingsPanel: document.querySelector('#drawerSettingsPanel'),
   sessionList: document.querySelector('#sessionList'),
   sessionViewButtons: [...document.querySelectorAll('[data-session-view]')],
   sessionActionSheet: document.querySelector('#sessionActionSheet'),
@@ -151,8 +154,6 @@ const el = {
   directoryList: document.querySelector('#directoryList'),
   directoryUpButton: document.querySelector('#directoryUpButton'),
   chooseDirectoryButton: document.querySelector('#chooseDirectoryButton'),
-  settingsDialog: document.querySelector('#settingsDialog'),
-  closeSettingsDialog: document.querySelector('#closeSettingsDialog'),
   settingsTabs: [...document.querySelectorAll('[data-settings-tab]')],
   settingsPages: [...document.querySelectorAll('[data-settings-page]')],
   storageStats: document.querySelector('#storageStats'),
@@ -551,20 +552,29 @@ function setSessionViewMode(mode) {
 }
 
 function setDrawerPanel(panel) {
-  state.drawerPanel = panel === 'skills' ? 'skills' : 'sessions';
+  state.drawerPanel = ['skills', 'settings'].includes(panel) ? panel : 'sessions';
   const skillsActive = state.drawerPanel === 'skills';
-  if (el.drawerTitle) el.drawerTitle.textContent = skillsActive ? 'Skills' : '会话';
-  if (el.newSessionButton) el.newSessionButton.hidden = skillsActive;
-  el.drawerSessionsButton.classList.toggle('active', !skillsActive);
+  const settingsActive = state.drawerPanel === 'settings';
+  if (el.drawerTitle) el.drawerTitle.textContent = settingsActive ? '设置' : skillsActive ? 'Skills' : '会话';
+  if (el.drawerTitle) el.drawerTitle.hidden = settingsActive;
+  if (el.drawerBackButton) el.drawerBackButton.hidden = !settingsActive;
+  if (el.drawerModeRow) el.drawerModeRow.hidden = settingsActive;
+  if (el.newSessionButton) el.newSessionButton.hidden = skillsActive || settingsActive;
+  if (el.settingsButton) el.settingsButton.hidden = settingsActive;
+  el.drawerSessionsButton.classList.toggle('active', !skillsActive && !settingsActive);
   el.skillManagerButton.classList.toggle('active', skillsActive);
-  el.drawerSessionsButton.setAttribute('aria-selected', String(!skillsActive));
+  el.drawerSessionsButton.setAttribute('aria-selected', String(!skillsActive && !settingsActive));
   el.skillManagerButton.setAttribute('aria-selected', String(skillsActive));
-  el.drawerSessionsPanel.classList.toggle('active', !skillsActive);
+  el.drawerSessionsPanel.classList.toggle('active', !skillsActive && !settingsActive);
   el.drawerSkillsPanel.classList.toggle('active', skillsActive);
+  el.drawerSettingsPanel.classList.toggle('active', settingsActive);
+  el.logoutButton.hidden = !settingsActive;
   if (skillsActive) {
     loadSkills().catch((error) => {
       el.drawerSkillList.textContent = error.message || '加载失败';
     });
+  } else if (settingsActive) {
+    selectSettingsPage('ui');
   } else {
     renderSessions({ force: true });
   }
@@ -2279,6 +2289,7 @@ el.sessionActionSheet?.addEventListener('click', (event) => {
 });
 el.closeSessionActionSheet?.addEventListener('click', closeSessionActionSheet);
 el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
+el.drawerBackButton?.addEventListener('click', () => setDrawerPanel('sessions'));
 el.newSessionButton.addEventListener('click', () => openModal(el.dialog));
 el.skillManagerButton.addEventListener('click', () => setDrawerPanel('skills'));
 el.commandButton.addEventListener('click', () => {
@@ -2320,10 +2331,9 @@ function selectSettingsPage(page) {
 }
 
 el.settingsButton.addEventListener('click', () => {
-  openModal(el.settingsDialog);
-  selectSettingsPage('ui');
+  setDrawer(true);
+  setDrawerPanel('settings');
 });
-el.closeSettingsDialog.addEventListener('click', () => closeModal(el.settingsDialog));
 for (const tab of el.settingsTabs) {
   tab.addEventListener('click', () => selectSettingsPage(tab.dataset.settingsTab));
 }

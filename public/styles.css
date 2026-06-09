@@ -274,9 +274,23 @@ button:disabled {
   align-items: center;
 }
 
-.drawer-head > strong {
+.drawer-title-slot {
+  min-width: 0;
+}
+
+.drawer-title-slot > strong {
   font-size: 15px;
   white-space: nowrap;
+}
+
+.drawer-back-button {
+  min-height: 34px;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  border: 0;
+  font-size: 15px;
+  text-align: left;
 }
 
 .drawer-head h2 {
@@ -393,6 +407,10 @@ button:disabled {
 
 .drawer-skills-panel.active {
   grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.drawer-settings-panel.active {
+  grid-template-rows: auto minmax(0, 1fr);
 }
 
 .drawer-action-row .new-session-button,
@@ -1781,14 +1799,15 @@ button:disabled {
 .settings-form {
   display: grid;
   gap: 14px;
-  margin-top: 14px;
+  align-content: start;
+  min-height: 0;
+  overflow: auto;
 }
 
 .settings-tabs {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 6px;
-  margin-top: 14px;
 }
 
 .settings-tabs button {
@@ -1864,7 +1883,7 @@ button:disabled {
 
 .storage-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: 1fr;
   gap: 8px;
 }
 
