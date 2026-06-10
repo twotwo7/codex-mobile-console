@@ -205,12 +205,25 @@ function mergeQueuedItems(session) {
   session.queue ||= [];
   if (session.queue.length < 2) return null;
   const items = session.queue;
+  let imageCursor = 1;
   const mergedPrompt = [
     '以下是合并后的多条排队输入，请按顺序一起处理：',
+    '每条输入的“对应图片”指合并后附件的图片顺序，请不要混用不同输入的图片。',
     ...items.map((item, index) => {
       const prompt = String(item.displayPrompt || item.prompt || '').trim() || '(空输入)';
-      const imageText = item.images?.length ? `\n图片：${item.images.length} 张` : '';
-      return `\n## ${index + 1}\n${prompt}${imageText}`;
+      const images = item.images || [];
+      let imageText = '对应图片：无';
+      if (images.length) {
+        const start = imageCursor;
+        const end = imageCursor + images.length - 1;
+        imageCursor = end + 1;
+        const range = start === end ? `第 ${start} 张` : `第 ${start}-${end} 张`;
+        const names = images
+          .map((image, imageIndex) => `${start + imageIndex}. ${image.name || '未命名图片'}`)
+          .join('\n');
+        imageText = `对应图片：${range}\n图片清单：\n${names}`;
+      }
+      return `\n## ${index + 1}\n${imageText}\n内容：\n${prompt}`;
     })
   ].join('\n');
   const mergedImages = items.flatMap((item) => item.images || []);
