@@ -1139,7 +1139,8 @@ button:disabled {
 }
 
 .message-delivery.recovered,
-.message-delivery.stopped {
+.message-delivery.stopped,
+.message-delivery.merged {
   color: var(--muted);
 }
 
@@ -1552,6 +1553,31 @@ button:disabled {
 
 .queue-head strong {
   color: var(--text);
+}
+
+.queue-head-actions {
+  display: flex;
+  align-items: center;
+  justify-content: end;
+  gap: 6px;
+  min-width: 0;
+}
+
+.queue-head-actions span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-merge-button {
+  min-width: 42px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 12px;
 }
 
 .queue-item {

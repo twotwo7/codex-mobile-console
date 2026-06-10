@@ -5,7 +5,17 @@ export function createQueueView(actions) {
     const panel = document.createElement('div');
     panel.className = 'queue-panel';
     panel.dataset.queuePanel = '1';
-    panel.innerHTML = `<div class="queue-head"><strong>待执行 ${session.queue.length} 条</strong><span>等待当前任务结束后执行</span></div>`;
+    const canMerge = (session.queue || []).length > 1;
+    panel.innerHTML = `
+      <div class="queue-head">
+        <strong>待执行 ${session.queue.length} 条</strong>
+        <div class="queue-head-actions">
+          <span>等待当前任务结束后执行</span>
+          ${canMerge ? '<button class="queue-merge-button" type="button" aria-label="合并所有剩余排队输入" title="合并队列">合并</button>' : ''}
+        </div>
+      </div>
+    `;
+    panel.querySelector('.queue-merge-button')?.addEventListener('click', () => actions.mergeQueuedPrompts());
     for (const item of session.queue || []) {
       panel.append(renderQueueItem(item));
     }

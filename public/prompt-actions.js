@@ -188,9 +188,29 @@ export function createPromptActions(options) {
     patchQueuedPrompt(item.id, { prompt }, '编辑排队失败');
   }
 
+  async function mergeQueuedPrompts() {
+    const session = getActiveSession();
+    if (!session || (session.queue || []).length < 2) return;
+    try {
+      const data = await api(`/api/sessions/${session.id}/queue/merge`, { method: 'POST' });
+      if (data.message) updateMessage(session.id, data.message);
+      if (data.session) {
+        if (mergeSessionSnapshot(data.session)) renderSessions();
+        renderActive({ messages: false });
+      }
+    } catch (error) {
+      upsertMessage(session.id, {
+        at: new Date().toISOString(),
+        role: 'system',
+        text: error.message || '合并队列失败'
+      });
+    }
+  }
+
   return {
     cancelQueuedPrompt,
     editQueuedPrompt,
+    mergeQueuedPrompts,
     retryMessage,
     sendPrompt,
     setSendState,

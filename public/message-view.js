@@ -176,6 +176,7 @@ function deliveryLabel(message) {
   if (stateLabel === 'failed') return '失败';
   if (stateLabel === 'stopped') return '已停止';
   if (stateLabel === 'recovered') return '已恢复';
+  if (stateLabel === 'merged') return '已合并';
   if (stateLabel === 'supplement') return '已补充';
   if (stateLabel === 'sent') return '已发送';
   return '';

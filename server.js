@@ -194,11 +194,50 @@ function updateMessageRunState(session, messageId, runState, extra = {}) {
   const message = (session.messages || []).find((item) => item.id === messageId || item.clientMessageId === messageId);
   if (!message) return null;
   message.runState = runState;
-  message.completedAt = ['completed', 'failed', 'stopped', 'recovered'].includes(runState) ? nowIso() : message.completedAt;
+  message.completedAt = ['completed', 'failed', 'stopped', 'recovered', 'merged'].includes(runState) ? nowIso() : message.completedAt;
   Object.assign(message, extra);
   scheduleSave();
   broadcastEvent(session.id, 'message_update', message);
   return message;
+}
+
+function mergeQueuedItems(session) {
+  session.queue ||= [];
+  if (session.queue.length < 2) return null;
+  const items = session.queue;
+  const mergedPrompt = [
+    '以下是合并后的多条排队输入，请按顺序一起处理：',
+    ...items.map((item, index) => {
+      const prompt = String(item.displayPrompt || item.prompt || '').trim() || '(空输入)';
+      const imageText = item.images?.length ? `\n图片：${item.images.length} 张` : '';
+      return `\n## ${index + 1}\n${prompt}${imageText}`;
+    })
+  ].join('\n');
+  const mergedImages = items.flatMap((item) => item.images || []);
+  const primary = items[0];
+  primary.prompt = mergedPrompt;
+  primary.displayPrompt = mergedPrompt;
+  primary.elevated = items.some((item) => item.elevated === true);
+  primary.images = mergedImages;
+  session.queue = [primary];
+
+  const primaryMessage = (session.messages || []).find((entry) => entry.id === primary.messageId || entry.clientMessageId === primary.clientMessageId);
+  if (primaryMessage) {
+    primaryMessage.text = mergedPrompt;
+    primaryMessage.images = mergedImages;
+    primaryMessage.elevated = primary.elevated;
+    primaryMessage.updatedAt = nowIso();
+    broadcastEvent(session.id, 'message_update', primaryMessage);
+  }
+
+  for (const item of items.slice(1)) {
+    updateMessageRunState(session, item.messageId || item.clientMessageId, 'merged', { delivery: 'merged' });
+  }
+
+  session.updatedAt = nowIso();
+  scheduleSave();
+  broadcastSession(session);
+  return { primary, primaryMessage, mergedCount: items.length };
 }
 
 function incompleteRunMessages(session) {
@@ -2437,6 +2476,20 @@ async function handleApi(req, res, url) {
       addMessage(session, { role: 'system', text: String(error.message || error), status: 'error' });
     }
     return json(res, 202, { session: publicSession(session) });
+  }
+
+  const queueMergeMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/queue\/merge$/);
+  if (queueMergeMatch && req.method === 'POST') {
+    const session = state.sessions[decodeURIComponent(queueMergeMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    const merged = mergeQueuedItems(session);
+    if (!merged) return json(res, 400, { error: 'queue_merge_needs_multiple_items', session: publicSession(session) });
+    return json(res, 200, {
+      ok: true,
+      mergedCount: merged.mergedCount,
+      session: publicSession(session),
+      message: merged.primaryMessage
+    });
   }
 
   const queueMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/queue\/([^/]+)$/);

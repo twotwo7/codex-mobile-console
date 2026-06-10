@@ -4,9 +4,9 @@ import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
-import { createMessageView } from './message-view.js?v=3';
-import { createPromptActions } from './prompt-actions.js?v=4';
-import { createQueueView } from './queue-view.js?v=3';
+import { createMessageView } from './message-view.js?v=4';
+import { createPromptActions } from './prompt-actions.js?v=5';
+import { createQueueView } from './queue-view.js?v=4';
 import { createSessionStateController } from './session-state.js?v=1';
 import { createSkillView } from './skill-view.js?v=3';
 import { createTopbarView } from './topbar-view.js?v=1';
@@ -82,8 +82,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '113';
-const SW_CACHE_VERSION = 'codex-console-v129';
+const APP_ASSET_VERSION = '114';
+const SW_CACHE_VERSION = 'codex-console-v130';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -275,6 +275,7 @@ const messageView = createMessageView({
 const queueView = createQueueView({
   cancelQueuedPrompt: promptActions.cancelQueuedPrompt,
   editQueuedPrompt: promptActions.editQueuedPrompt,
+  mergeQueuedPrompts: promptActions.mergeQueuedPrompts,
   openImageViewer,
   topQueuedPrompt: promptActions.topQueuedPrompt
 });
