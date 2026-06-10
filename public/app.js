@@ -85,8 +85,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '117';
-const SW_CACHE_VERSION = 'codex-console-v133';
+const APP_ASSET_VERSION = '118';
+const SW_CACHE_VERSION = 'codex-console-v134';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -1792,6 +1792,23 @@ function closeTopMoreMenu() {
 function setAttachmentMenu(open) {
   el.attachmentMenu.hidden = !open;
   el.attachmentButton.setAttribute('aria-expanded', String(open));
+  if (!open) {
+    el.attachmentMenu.style.left = '';
+    el.attachmentMenu.style.top = '';
+    el.attachmentMenu.style.bottom = '';
+    return;
+  }
+  const buttonRect = el.attachmentButton.getBoundingClientRect();
+  const menuRect = el.attachmentMenu.getBoundingClientRect();
+  const gap = 6;
+  const width = menuRect.width || 112;
+  const height = menuRect.height || 76;
+  const left = Math.min(Math.max(8, buttonRect.left), Math.max(8, window.innerWidth - width - 8));
+  const topAbove = buttonRect.top - height - gap;
+  const top = topAbove >= 8 ? topAbove : Math.min(window.innerHeight - height - 8, buttonRect.bottom + gap);
+  el.attachmentMenu.style.left = `${Math.round(left)}px`;
+  el.attachmentMenu.style.top = `${Math.round(Math.max(8, top))}px`;
+  el.attachmentMenu.style.bottom = 'auto';
 }
 
 function closeAttachmentMenu() {
