@@ -208,10 +208,11 @@ function mergeQueuedItems(session) {
   let imageCursor = 1;
   const mergedPrompt = [
     '以下是合并后的多条排队输入，请按顺序一起处理：',
-    '每条输入的“对应图片”指合并后附件的图片顺序，请不要混用不同输入的图片。',
+    '每条输入的“对应图片”和“对应文件”指合并后附件顺序，请不要混用不同输入的附件。',
     ...items.map((item, index) => {
       const prompt = String(item.displayPrompt || item.prompt || '').trim() || '(空输入)';
       const images = item.images || [];
+      const files = item.files || [];
       let imageText = '对应图片：无';
       if (images.length) {
         const start = imageCursor;
@@ -223,21 +224,27 @@ function mergeQueuedItems(session) {
           .join('\n');
         imageText = `对应图片：${range}\n图片清单：\n${names}`;
       }
-      return `\n## ${index + 1}\n${imageText}\n内容：\n${prompt}`;
+      const fileText = files.length
+        ? `对应文件：\n${files.map((file, fileIndex) => `${fileIndex + 1}. ${file.name || file.fileName || '未命名文件'}\n   路径: ${file.path}\n   类型: ${file.type || '未知'}\n   大小: ${uploadSizeText(file.size)}`).join('\n')}`
+        : '对应文件：无';
+      return `\n## ${index + 1}\n${imageText}\n${fileText}\n内容：\n${prompt}`;
     })
   ].join('\n');
   const mergedImages = items.flatMap((item) => item.images || []);
+  const mergedFiles = items.flatMap((item) => item.files || []);
   const primary = items[0];
   primary.prompt = mergedPrompt;
   primary.displayPrompt = mergedPrompt;
   primary.elevated = items.some((item) => item.elevated === true);
   primary.images = mergedImages;
+  primary.files = mergedFiles;
   session.queue = [primary];
 
   const primaryMessage = (session.messages || []).find((entry) => entry.id === primary.messageId || entry.clientMessageId === primary.clientMessageId);
   if (primaryMessage) {
     primaryMessage.text = mergedPrompt;
     primaryMessage.images = mergedImages;
+    primaryMessage.files = mergedFiles;
     primaryMessage.elevated = primary.elevated;
     primaryMessage.updatedAt = nowIso();
     broadcastEvent(session.id, 'message_update', primaryMessage);
@@ -442,6 +449,13 @@ function publicSession(session) {
         name: image.name,
         type: image.type,
         url: image.url
+      })),
+      fileCount: item.files?.length || 0,
+      files: (item.files || []).map((file) => ({
+        name: file.name,
+        type: file.type,
+        size: file.size,
+        url: file.url
       })),
       createdAt: item.createdAt
     })),
@@ -665,6 +679,7 @@ async function runtimeInfo(session) {
       ...session.activeRun,
       prompt: summarizeRunPrompt(session.activeRun),
       imageCount: session.activeRun.imagePaths?.length || 0,
+      fileCount: session.activeRun.files?.length || 0,
       imagePaths: undefined
     } : null,
     queue: session.queue || [],
@@ -728,9 +743,31 @@ const imageTypes = new Map([
   ['image/jpeg', '.jpg'],
   ['image/webp', '.webp']
 ]);
+const safeUploadTypes = new Set([
+  '.txt', '.md', '.json', '.jsonl', '.csv', '.tsv', '.log',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+  '.xml', '.yaml', '.yml', '.html', '.css', '.js', '.jsx', '.ts', '.tsx',
+  '.py', '.go', '.rs', '.java', '.c', '.cc', '.cpp', '.h', '.hpp',
+  '.sh', '.sql', '.zip', '.gz', '.tgz'
+]);
 
 function uploadUrl(fileName) {
   return `/api/uploads/${encodeURIComponent(fileName)}`;
+}
+
+function uploadSizeText(bytes) {
+  const value = Number(bytes || 0);
+  if (value >= 1024 * 1024) return `${(value / 1024 / 1024).toFixed(1)}MB`;
+  if (value >= 1024) return `${Math.round(value / 1024)}KB`;
+  return `${value}B`;
+}
+
+function safeUploadExtension(file) {
+  const type = String(file.type || '').toLowerCase();
+  if (imageTypes.has(type)) return imageTypes.get(type);
+  const ext = path.extname(String(file.name || '')).toLowerCase();
+  if (safeUploadTypes.has(ext)) return ext;
+  return '.bin';
 }
 
 async function savePromptImages(images) {
@@ -756,6 +793,52 @@ async function savePromptImages(images) {
     });
   }
   return saved;
+}
+
+async function savePromptFiles(files) {
+  if (!Array.isArray(files) || !files.length) return [];
+  const saved = [];
+  let totalBytes = 0;
+  for (const file of files.slice(0, 6)) {
+    const value = String(file.data || '');
+    const base64 = value.includes(',') ? value.split(',').pop() : value;
+    const buffer = Buffer.from(base64, 'base64');
+    totalBytes += buffer.length;
+    if (!buffer.length || buffer.length > 10 * 1024 * 1024 || totalBytes > 24 * 1024 * 1024) {
+      throw new Error('invalid_file_size');
+    }
+    const ext = safeUploadExtension(file);
+    const fileName = `${randomUUID()}${ext}`;
+    const filePath = path.join(UPLOAD_DIR, fileName);
+    await writeFile(filePath, buffer, { mode: 0o600 });
+    saved.push({
+      name: String(file.name || fileName).slice(0, 160),
+      type: String(file.type || 'application/octet-stream').slice(0, 120),
+      size: buffer.length,
+      fileName,
+      path: filePath,
+      url: uploadUrl(fileName)
+    });
+  }
+  return saved;
+}
+
+function promptWithAttachments(prompt, images = [], files = []) {
+  const base = String(prompt || '').trim()
+    || (images.length ? '请分析这些图片。' : '请分析这些文件。');
+  if (!files.length) return base;
+  const fileText = files.map((file, index) => [
+    `${index + 1}. ${file.name || file.fileName || '未命名文件'}`,
+    `   路径: ${file.path}`,
+    `   类型: ${file.type || '未知'}`,
+    `   大小: ${uploadSizeText(file.size)}`
+  ].join('\n')).join('\n');
+  return [
+    base,
+    '',
+    '附加文件已保存到本机，按需读取这些路径，不要猜测文件内容：',
+    fileText
+  ].join('\n');
 }
 
 async function collectFiles(root, out = []) {
@@ -787,15 +870,21 @@ async function directoryBytes(root) {
 
 function referencedUploadNames() {
   const refs = new Set();
-  const addImage = (image) => {
-    if (!image) return;
-    if (image.fileName) refs.add(image.fileName);
-    if (image.path) refs.add(path.basename(image.path));
-    if (image.url) refs.add(path.basename(decodeURIComponent(String(image.url).split('/').pop() || '')));
+  const addUpload = (upload) => {
+    if (!upload) return;
+    if (upload.fileName) refs.add(upload.fileName);
+    if (upload.path) refs.add(path.basename(upload.path));
+    if (upload.url) refs.add(path.basename(decodeURIComponent(String(upload.url).split('/').pop() || '')));
   };
   for (const session of Object.values(state.sessions || {})) {
-    for (const message of session.messages || []) for (const image of message.images || []) addImage(image);
-    for (const item of session.queue || []) for (const image of item.images || []) addImage(image);
+    for (const message of session.messages || []) {
+      for (const image of message.images || []) addUpload(image);
+      for (const file of message.files || []) addUpload(file);
+    }
+    for (const item of session.queue || []) {
+      for (const image of item.images || []) addUpload(image);
+      for (const file of item.files || []) addUpload(file);
+    }
   }
   return refs;
 }
@@ -1554,7 +1643,10 @@ function mergeDisplayMessage(existing, incoming) {
   const next = { ...base, ...overlay };
   const existingImages = existing.images || [];
   const incomingImages = incoming.images || [];
+  const existingFiles = existing.files || [];
+  const incomingFiles = incoming.files || [];
   next.images = existingImages.length >= incomingImages.length ? existingImages : incomingImages;
+  next.files = existingFiles.length >= incomingFiles.length ? existingFiles : incomingFiles;
   next.starred = existing.starred === true || incoming.starred === true;
   return next;
 }
@@ -1927,6 +2019,7 @@ function runCodex(session, prompt, options = {}) {
     prompt,
     elevated: options.elevated === true,
     imagePaths: options.imagePaths || [],
+    files: options.files || [],
     messageId: options.messageId || '',
     clientMessageId: options.clientMessageId || '',
     startedAt: nowIso()
@@ -2014,6 +2107,7 @@ function runCodex(session, prompt, options = {}) {
       runCodex(session, next.prompt, {
         elevated: next.elevated,
         imagePaths: (next.images || []).map((image) => image.path),
+        files: next.files || [],
         messageId: next.messageId,
         clientMessageId: next.clientMessageId
       });
@@ -2199,15 +2293,22 @@ async function handleApi(req, res, url) {
   const uploadMatch = url.pathname.match(/^\/api\/uploads\/([^/]+)$/);
   if (uploadMatch && req.method === 'GET') {
     const fileName = decodeURIComponent(uploadMatch[1]);
-    if (!/^[a-f0-9-]+\.(png|jpg|webp)$/.test(fileName)) return json(res, 400, { error: 'invalid_upload_name' });
+    if (!/^[a-f0-9-]+\.[a-z0-9]{1,12}$/.test(fileName)) return json(res, 400, { error: 'invalid_upload_name' });
     const filePath = path.join(UPLOAD_DIR, fileName);
     const resolved = path.resolve(filePath);
     if (!resolved.startsWith(`${path.resolve(UPLOAD_DIR)}${path.sep}`)) return json(res, 403, { error: 'forbidden' });
     try {
       await stat(resolved);
       const ext = path.extname(resolved);
-      const type = ext === '.png' ? 'image/png' : ext === '.webp' ? 'image/webp' : 'image/jpeg';
-      res.writeHead(200, { 'content-type': type, 'cache-control': 'private, max-age=3600' });
+      const type = ext === '.png' ? 'image/png'
+        : ext === '.webp' ? 'image/webp'
+          : ext === '.jpg' ? 'image/jpeg'
+            : contentTypes[ext] || 'application/octet-stream';
+      res.writeHead(200, {
+        'content-type': type,
+        'cache-control': 'private, max-age=3600',
+        'x-content-type-options': 'nosniff'
+      });
       createReadStream(resolved).pipe(res);
     } catch {
       json(res, 404, { error: 'upload_not_found' });
@@ -2452,26 +2553,29 @@ async function handleApi(req, res, url) {
   if (sendMatch && req.method === 'POST') {
     const session = state.sessions[decodeURIComponent(sendMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
-    const body = await readJson(req, 32 * 1024 * 1024);
+    const body = await readJson(req, 80 * 1024 * 1024);
     const prompt = String(body.prompt || '').trim();
     const elevated = body.elevated === true;
     const clientMessageId = String(body.clientMessageId || '').trim().slice(0, 120);
     const queueId = clientMessageId || randomUUID();
     const images = await savePromptImages(body.images || []);
-    if (!prompt && !images.length) return json(res, 400, { error: 'empty_prompt' });
-    const effectivePrompt = prompt || '请分析这张图片。';
+    const files = await savePromptFiles(body.files || []);
+    if (!prompt && !images.length && !files.length) return json(res, 400, { error: 'empty_prompt' });
+    const displayPrompt = prompt || (images.length ? '请分析这些图片。' : '请分析这些文件。');
+    const effectivePrompt = promptWithAttachments(displayPrompt, images, files);
     const userMessage = addMessage(session, {
       role: 'user',
-      text: effectivePrompt,
+      text: displayPrompt,
       elevated,
       clientMessageId,
       images,
+      files,
       runState: running.has(session.id) ? 'queued' : 'submitted',
       delivery: running.has(session.id) ? 'queued' : 'submitted'
     });
     if (running.has(session.id)) {
       session.queue ||= [];
-      session.queue.push({ id: queueId, prompt: effectivePrompt, displayPrompt: effectivePrompt, elevated, images, createdAt: nowIso(), clientMessageId, messageId: userMessage.id });
+      session.queue.push({ id: queueId, prompt: effectivePrompt, displayPrompt, elevated, images, files, createdAt: nowIso(), clientMessageId, messageId: userMessage.id });
       session.updatedAt = nowIso();
       scheduleSave();
       return json(res, 202, { session: publicSession(session), queued: true });
@@ -2480,6 +2584,7 @@ async function handleApi(req, res, url) {
       runCodex(session, effectivePrompt, {
         elevated,
         imagePaths: images.map((image) => image.path),
+        files,
         messageId: userMessage.id,
         clientMessageId
       });
@@ -2524,7 +2629,7 @@ async function handleApi(req, res, url) {
     if (typeof body.prompt === 'string') {
       const prompt = body.prompt.trim();
       if (!prompt) return json(res, 400, { error: 'empty_prompt' });
-      item.prompt = prompt;
+      item.prompt = promptWithAttachments(prompt, item.images || [], item.files || []);
       item.displayPrompt = prompt;
       message = (session.messages || []).find((entry) => entry.id === item.messageId || entry.clientMessageId === item.clientMessageId);
       if (message) {

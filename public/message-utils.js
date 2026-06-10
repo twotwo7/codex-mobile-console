@@ -37,7 +37,10 @@ export function mergeMessagePair(current, incoming) {
   const next = { ...base, ...overlay };
   const currentImages = current.images || [];
   const incomingImages = incoming.images || [];
+  const currentFiles = current.files || [];
+  const incomingFiles = incoming.files || [];
   next.images = currentImages.length >= incomingImages.length ? currentImages : incomingImages;
+  next.files = currentFiles.length >= incomingFiles.length ? currentFiles : incomingFiles;
   next.starred = current.starred === true || incoming.starred === true;
   if (incoming.id || incoming.seq) {
     next.pending = false;

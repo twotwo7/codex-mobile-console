@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=102">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=103">
       </head>
       <body>
         <main class="workspace">
@@ -73,13 +73,13 @@ async function setFixture(page) {
             </article>
             <div class="queue-panel">
               <div class="queue-head"><strong>待执行 1 条</strong><span>等待当前任务结束后执行</span></div>
-              <div class="queue-item"><span>分析客户截图 · 图片 1</span><div class="queue-images"><button class="queue-image-button"><img alt="queued" src="${sampleImage()}"></button></div><button class="queue-action-button">↑</button><button class="queue-action-button">✎</button><button class="queue-cancel-button">×</button></div>
+              <div class="queue-item"><span>分析客户截图 · 图片 1 · 文件 1</span><div class="queue-images"><button class="queue-image-button"><img alt="queued" src="${sampleImage()}"></button></div><div class="queue-files"><a class="queue-file-link" href="#">📎</a></div><button class="queue-action-button">↑</button><button class="queue-action-button">✎</button><button class="queue-cancel-button">×</button></div>
             </div>
           </section>
           <form class="prompt-bar">
             <div class="prompt-tools">
               <button class="command-button" type="button">命令</button>
-              <button class="command-button" type="button">图片</button>
+              <button class="command-button" type="button">附件</button>
             </div>
             <div class="image-preview-strip">
               <div class="image-preview-item"><img alt="preview" src="${sampleImage()}"><span>180KB</span><button>×</button></div>

@@ -1,4 +1,4 @@
-import { escapeHtml, formatTime, summarizeText } from './format-utils.js?v=1';
+import { escapeHtml, formatBytes, formatTime, summarizeText } from './format-utils.js?v=1';
 
 export function createMessageView(actions) {
   function renderMessage(message, options = {}) {
@@ -61,6 +61,7 @@ export function createMessageView(actions) {
     }
 
     if (message.images?.length) article.append(renderMessageImages(message.images));
+    if (message.files?.length) article.append(renderMessageFiles(message.files));
     return article;
   }
 
@@ -76,6 +77,30 @@ export function createMessageView(actions) {
       img.alt = image.name || 'uploaded image';
       link.append(img);
       link.addEventListener('click', () => actions.openImageViewer(img.src, img.alt));
+      wrap.append(link);
+    }
+    return wrap;
+  }
+
+  function renderMessageFiles(files) {
+    const wrap = document.createElement('div');
+    wrap.className = 'message-files';
+    for (const file of files) {
+      const link = document.createElement('a');
+      link.className = 'message-file';
+      if (file.url) {
+        link.href = file.url;
+        link.target = '_blank';
+        link.rel = 'noopener';
+        link.download = file.name || '';
+      } else {
+        link.classList.add('pending');
+        link.setAttribute('aria-disabled', 'true');
+      }
+      link.innerHTML = `
+        <strong>${escapeHtml(summarizeText(file.name || '文件', 42))}</strong>
+        <span>${escapeHtml(formatBytes(file.size || 0))}</span>
+      `;
       wrap.append(link);
     }
     return wrap;

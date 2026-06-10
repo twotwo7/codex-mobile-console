@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=102">
+    <link rel="stylesheet" href="/styles.css?v=103">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -104,7 +104,7 @@
               <div id="runSettingsState" class="settings-state-row">提权默认关闭</div>
             </section>
             <section class="settings-page storage-panel" data-settings-page="storage">
-              <p class="settings-page-note">上传图片、运行缓存和磁盘状态。</p>
+              <p class="settings-page-note">上传附件、运行缓存和磁盘状态。</p>
               <div class="storage-head">
                 <strong>存储</strong>
                 <button id="refreshStorageButton" class="ghost-button inline" type="button">刷新</button>
@@ -116,11 +116,11 @@
               </label>
               <div class="field-grid">
                 <label>
-                  图片保留天数
+                  附件保留天数
                   <input id="uploadRetentionDaysInput" type="number" min="0" max="3650" step="1" inputmode="numeric">
                 </label>
                 <label>
-                  图片上限 MB
+                  附件上限 MB
                   <input id="maxUploadMbInput" type="number" min="0" max="102400" step="100" inputmode="numeric">
                 </label>
               </div>
@@ -130,7 +130,7 @@
               </label>
               <div class="storage-actions">
                 <button id="saveStorageButton" type="button">保存</button>
-                <button id="cleanupUploadsButton" class="ghost-button inline" type="button">清理孤儿图片</button>
+                <button id="cleanupUploadsButton" class="ghost-button inline" type="button">清理孤儿附件</button>
                 <button id="cleanupRuntimeButton" class="ghost-button inline" type="button">清理运行缓存</button>
               </div>
             </section>
@@ -190,8 +190,8 @@
           <div class="prompt-tools">
             <button id="commandButton" class="command-button" type="button">命令</button>
             <button id="skillButton" class="command-button" type="button">技能</button>
-            <button id="imageButton" class="command-button" type="button">图片</button>
-            <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+            <button id="imageButton" class="command-button" type="button">附件</button>
+            <input id="imageInput" class="visually-hidden" type="file" multiple>
             <label class="bottom-follow-toggle" title="自动跟随底部">
               <input id="autoFollowBottom" type="checkbox">
               <span>跟随</span>
@@ -358,6 +358,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=115" type="module"></script>
+    <script src="/app.js?v=116" type="module"></script>
   </body>
 </html>

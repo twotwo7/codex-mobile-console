@@ -3,11 +3,11 @@ import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, s
 import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
-import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
-import { createMessageView } from './message-view.js?v=4';
+import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
+import { createMessageView } from './message-view.js?v=5';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
-import { createPromptActions } from './prompt-actions.js?v=5';
-import { createQueueView } from './queue-view.js?v=4';
+import { createPromptActions } from './prompt-actions.js?v=6';
+import { createQueueView } from './queue-view.js?v=5';
 import { createSessionStateController } from './session-state.js?v=1';
 import { createSkillView } from './skill-view.js?v=3';
 import { createTopbarView } from './topbar-view.js?v=1';
@@ -26,6 +26,7 @@ const state = {
   elevated: storageGet('cmc.elevated') === '1',
   showStarredOnly: storageGet('cmc.showStarredOnly') === '1',
   pendingImages: [],
+  pendingFiles: [],
   sending: false,
   directoryPath: '/root/Projects',
   expandedCwds: new Set(storedExpandedCwds),
@@ -84,8 +85,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '115';
-const SW_CACHE_VERSION = 'codex-console-v131';
+const APP_ASSET_VERSION = '116';
+const SW_CACHE_VERSION = 'codex-console-v132';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -382,7 +383,9 @@ function cacheSafeMessage(message) {
   return {
     ...message,
     images: (message.images || []).map(({ data, dataUrl, ...image }) => image),
-    retryImages: (message.retryImages || []).map(({ data, dataUrl, ...image }) => image)
+    retryImages: (message.retryImages || []).map(({ data, dataUrl, ...image }) => image),
+    files: (message.files || []).map(({ data, dataUrl, ...file }) => file),
+    retryFiles: []
   };
 }
 
@@ -1269,7 +1272,7 @@ function scrollMessagesToBottom() {
 
 function renderPendingImages() {
   el.imagePreviewStrip.innerHTML = '';
-  el.imagePreviewStrip.hidden = !state.pendingImages.length;
+  el.imagePreviewStrip.hidden = !state.pendingImages.length && !state.pendingFiles.length;
   for (const image of state.pendingImages) {
     const item = document.createElement('div');
     item.className = 'image-preview-item';
@@ -1284,7 +1287,21 @@ function renderPendingImages() {
     });
     el.imagePreviewStrip.append(item);
   }
-  if (state.pendingImages.length) {
+  for (const file of state.pendingFiles) {
+    const item = document.createElement('div');
+    item.className = 'file-preview-item';
+    item.innerHTML = `
+      <strong title="${escapeHtml(file.name)}">${escapeHtml(summarizeText(file.name || '文件', 18))}</strong>
+      <span>${escapeHtml(formatBytes(file.size || file.originalSize || 0))}</span>
+      <button type="button" aria-label="移除文件">×</button>
+    `;
+    item.querySelector('button').addEventListener('click', () => {
+      state.pendingFiles = state.pendingFiles.filter((candidate) => candidate.id !== file.id);
+      renderPendingImages();
+    });
+    el.imagePreviewStrip.append(item);
+  }
+  if (state.pendingImages.length && !state.pendingFiles.length) {
     const actions = document.createElement('div');
     actions.className = 'image-quick-actions';
     for (const item of IMAGE_PROMPTS) {
@@ -1318,8 +1335,8 @@ function renderStorageStats(data) {
     : '未知';
   el.storageStats.innerHTML = `
     <span>data ${escapeHtml(formatBytes(data.dataBytes))}</span>
-    <span>图片 ${escapeHtml(formatBytes(data.uploadBytes))} · ${data.uploadCount || 0} 张</span>
-    <span>孤儿 ${escapeHtml(formatBytes(data.orphanUploadBytes))} · ${data.orphanUploadCount || 0} 张</span>
+    <span>附件 ${escapeHtml(formatBytes(data.uploadBytes))} · ${data.uploadCount || 0} 个</span>
+    <span>孤儿 ${escapeHtml(formatBytes(data.orphanUploadBytes))} · ${data.orphanUploadCount || 0} 个</span>
     <span>运行缓存 ${escapeHtml(formatBytes(data.runtimeBytes))}</span>
     <span>state ${escapeHtml(formatBytes(data.stateBytes))}</span>
     <span>磁盘 ${escapeHtml(diskText)}</span>
@@ -1430,6 +1447,7 @@ async function browserRuntimeInfo(sessionId) {
     pageTotal: page?.total || 0,
     pageHasMore: page?.hasMore === true,
     pendingImages: state.pendingImages.length,
+    pendingFiles: state.pendingFiles.length,
     renderingMessages: state.renderingMessages,
     renderedMessages: el.messagePane.querySelectorAll('.message').length,
     updatedAt: new Date().toISOString()
@@ -1665,7 +1683,7 @@ async function renderRuntimePanel(data) {
     <div class="runtime-section">
       <strong>当前输入</strong>
       <p>${escapeHtml(active?.prompt || '无运行中的输入')}</p>
-      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0}` : '')}</span>
+      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0} · 文件 ${active.fileCount || 0}` : '')}</span>
     </div>
     <div class="runtime-section">
       <strong>队列</strong>
@@ -1827,21 +1845,56 @@ function readImageFile(file) {
   });
 }
 
+function readGenericFile(file) {
+  return new Promise((resolve, reject) => {
+    if (file.size > 10 * 1024 * 1024) {
+      reject(new Error('单个文件不能超过 10MB。'));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      resolve({
+        id: globalThis.crypto?.randomUUID ? crypto.randomUUID() : `file-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        name: file.name || 'file',
+        type: file.type || 'application/octet-stream',
+        data: String(reader.result || ''),
+        originalSize: file.size,
+        size: file.size
+      });
+    };
+    reader.onerror = () => reject(new Error('读取文件失败。'));
+    reader.readAsDataURL(file);
+  });
+}
+
 async function addImageFiles(fileList) {
-  const files = [...fileList].slice(0, Math.max(0, 4 - state.pendingImages.length));
-  if (!files.length) return;
+  const incoming = [...fileList];
+  const imageFiles = incoming.filter((file) => ['image/png', 'image/jpeg', 'image/webp'].includes(file.type));
+  const genericFiles = incoming.filter((file) => !['image/png', 'image/jpeg', 'image/webp'].includes(file.type));
+  const images = imageFiles.slice(0, Math.max(0, 4 - state.pendingImages.length));
+  const files = genericFiles.slice(0, Math.max(0, 6 - state.pendingFiles.length));
+  if (!images.length && !files.length) return;
+  const totalFileBytes = state.pendingFiles.reduce((sum, file) => sum + (file.size || 0), 0) + files.reduce((sum, file) => sum + file.size, 0);
+  if (totalFileBytes > 24 * 1024 * 1024) {
+    alert('待发送文件总大小不能超过 24MB。');
+    return;
+  }
   el.imageButton.disabled = true;
   el.imageButton.textContent = '处理中';
   try {
-    const images = await Promise.all(files.map(readImageFile));
-    state.pendingImages = [...state.pendingImages, ...images].slice(0, 4);
+    const [nextImages, nextFiles] = await Promise.all([
+      Promise.all(images.map(readImageFile)),
+      Promise.all(files.map(readGenericFile))
+    ]);
+    state.pendingImages = [...state.pendingImages, ...nextImages].slice(0, 4);
+    state.pendingFiles = [...state.pendingFiles, ...nextFiles].slice(0, 6);
     renderPendingImages();
   } catch (error) {
-    alert(error.message || '添加图片失败');
+    alert(error.message || '添加附件失败');
   } finally {
     el.imageInput.value = '';
     el.imageButton.disabled = false;
-    el.imageButton.textContent = '图片';
+    el.imageButton.textContent = '附件';
   }
 }
 
@@ -2499,7 +2552,7 @@ el.imageButton.addEventListener('click', () => el.imageInput.click());
 el.imageInput.addEventListener('change', () => addImageFiles(el.imageInput.files || []));
 
 el.promptInput.addEventListener('paste', (event) => {
-  const files = [...(event.clipboardData?.files || [])].filter((file) => file.type.startsWith('image/'));
+  const files = [...(event.clipboardData?.files || [])];
   if (!files.length) return;
   event.preventDefault();
   addImageFiles(files);

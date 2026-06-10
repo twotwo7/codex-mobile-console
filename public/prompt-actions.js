@@ -32,32 +32,37 @@ export function createPromptActions(options) {
   function clearComposer(opts) {
     const previousInput = el.promptInput.value;
     const previousImages = [...state.pendingImages];
+    const previousFiles = [...state.pendingFiles];
     if (!opts.keepInput) el.promptInput.value = '';
     if (!opts.keepImages) {
       state.pendingImages = [];
-      renderPendingImages();
     }
+    if (!opts.keepFiles) state.pendingFiles = [];
+    renderPendingImages();
     autoSizePrompt();
-    return { previousInput, previousImages };
+    return { previousInput, previousImages, previousFiles };
   }
 
   function restoreComposer(sessionId, snapshot) {
-    if (state.activeId !== sessionId || el.promptInput.value || state.pendingImages.length) return;
+    if (state.activeId !== sessionId || el.promptInput.value || state.pendingImages.length || state.pendingFiles.length) return;
     el.promptInput.value = snapshot.previousInput;
     state.pendingImages = snapshot.previousImages;
+    state.pendingFiles = snapshot.previousFiles;
     autoSizePrompt();
     renderPendingImages();
   }
 
-  function optimisticMessage({ clientMessageId, elevated, images, prompt }) {
+  function optimisticMessage({ clientMessageId, elevated, files, images, prompt }) {
     return {
       at: new Date().toISOString(),
       role: 'user',
-      text: prompt || '请分析这张图片。',
+      text: prompt || (images.length ? '请分析这些图片。' : '请分析这些文件。'),
       elevated,
       clientMessageId,
       images: images.map((image) => ({ name: image.name, type: image.type, dataUrl: image.data })),
+      files: files.map(({ data, ...file }) => file),
       retryImages: images,
+      retryFiles: [],
       delivery: 'sending',
       pending: true
     };
@@ -84,7 +89,8 @@ export function createPromptActions(options) {
   async function sendPrompt(rawPrompt, opts = {}) {
     const prompt = String(rawPrompt || '').trim();
     const images = opts.images ? [...opts.images] : [...state.pendingImages];
-    if ((!prompt && !images.length) || !state.activeId) return;
+    const files = opts.files ? [...opts.files] : [...state.pendingFiles];
+    if ((!prompt && !images.length && !files.length) || !state.activeId) return;
 
     const sessionId = state.activeId;
     if (state.showStarredOnly) {
@@ -97,12 +103,12 @@ export function createPromptActions(options) {
     const elevated = Boolean(el.elevatedRun.checked);
     const clientMessageId = createClientMessageId();
     setSendState('sending');
-    upsertMessage(sessionId, optimisticMessage({ clientMessageId, elevated, images, prompt }));
+    upsertMessage(sessionId, optimisticMessage({ clientMessageId, elevated, files, images, prompt }));
 
     try {
       const data = await api(`/api/sessions/${sessionId}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ prompt, elevated, clientMessageId, images })
+        body: JSON.stringify({ prompt, elevated, clientMessageId, images, files })
       });
       markLocalClientMessage(sessionId, clientMessageId, {
         pending: false,
@@ -131,7 +137,8 @@ export function createPromptActions(options) {
         data: image.data || image.dataUrl
       })).filter((image) => image.data),
       keepInput: true,
-      keepImages: true
+      keepImages: true,
+      keepFiles: true
     });
   }
 

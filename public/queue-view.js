@@ -1,4 +1,4 @@
-import { escapeHtml, summarizeText } from './format-utils.js?v=1';
+import { escapeHtml, formatBytes, summarizeText } from './format-utils.js?v=1';
 
 export function createQueueView(actions) {
   function renderQueuePanel(session) {
@@ -25,9 +25,12 @@ export function createQueueView(actions) {
   function renderQueueItem(item) {
     const row = document.createElement('div');
     row.className = 'queue-item';
+    const imageText = item.imageCount ? ` · 图片 ${item.imageCount}` : '';
+    const fileText = item.fileCount ? ` · 文件 ${item.fileCount}` : '';
     row.innerHTML = `
-      <span>${escapeHtml(`${summarizeText(item.displayPrompt || item.prompt || '', 64)}${item.imageCount ? ` · 图片 ${item.imageCount}` : ''}`)}</span>
+      <span>${escapeHtml(`${summarizeText(item.displayPrompt || item.prompt || '', 64)}${imageText}${fileText}`)}</span>
       <div class="queue-images"></div>
+      <div class="queue-files"></div>
       <button class="queue-action-button" type="button" aria-label="置顶这条排队输入" title="置顶">↑</button>
       <button class="queue-action-button" type="button" aria-label="编辑这条排队输入" title="编辑">✎</button>
       <button class="queue-cancel-button" type="button" aria-label="取消这条排队输入">×</button>
@@ -36,6 +39,10 @@ export function createQueueView(actions) {
     const imageWrap = row.querySelector('.queue-images');
     for (const image of item.images || []) {
       imageWrap.append(renderQueueImage(image));
+    }
+    const fileWrap = row.querySelector('.queue-files');
+    for (const file of item.files || []) {
+      fileWrap.append(renderQueueFile(file));
     }
     const [topButton, editButton] = row.querySelectorAll('.queue-action-button');
     topButton.addEventListener('click', () => actions.topQueuedPrompt(item.id));
@@ -52,6 +59,17 @@ export function createQueueView(actions) {
     button.innerHTML = `<img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || 'queued image')}">`;
     button.addEventListener('click', () => actions.openImageViewer(image.url, image.name || '排队图片'));
     return button;
+  }
+
+  function renderQueueFile(file) {
+    const link = document.createElement('a');
+    link.className = 'queue-file-link';
+    link.href = file.url || '#';
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.title = `${file.name || '文件'} · ${formatBytes(file.size || 0)}`;
+    link.textContent = '📎';
+    return link;
   }
 
   return {
