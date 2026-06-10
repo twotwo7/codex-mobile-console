@@ -5,6 +5,7 @@ import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summ
 import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=1';
 import { createMessageView } from './message-view.js?v=4';
+import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=5';
 import { createQueueView } from './queue-view.js?v=4';
 import { createSessionStateController } from './session-state.js?v=1';
@@ -42,6 +43,7 @@ const state = {
   contextRefreshTimer: null,
   contextRefreshInFlight: false,
   foregroundRefreshTimer: null,
+  promptAutoSizeFrame: 0,
   runtimeTimer: null,
   renderJobId: 0,
   renderingMessages: false,
@@ -82,8 +84,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '114';
-const SW_CACHE_VERSION = 'codex-console-v130';
+const APP_ASSET_VERSION = '115';
+const SW_CACHE_VERSION = 'codex-console-v131';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -94,6 +96,7 @@ const frontendEvents = createFrontendEvents({
   }
 });
 state.frontendEvents = frontendEvents.snapshot();
+const performanceMetrics = createPerformanceMetrics();
 
 const CODEX_COMMANDS = [
   { name: '/status', detail: '查看会话状态', value: '/status' },
@@ -1052,6 +1055,7 @@ function renderMessages(sessionId, options = {}) {
   messageScheduler.clearRender(sessionId);
   const stickToBottom = options.stickToBottom ?? shouldStickToBottom(sessionId);
   const messages = displayMessages(sessionId);
+  const renderStartedAt = performance.now();
   const renderJobId = ++state.renderJobId;
   state.renderingMessages = true;
   state.userScrolledDuringRender = false;
@@ -1102,6 +1106,7 @@ function renderMessages(sessionId, options = {}) {
       updateQueuePanel();
       updateRunIndicator();
       restoreScroll(true);
+      performanceMetrics.record('messages_render', performance.now() - renderStartedAt, { count: messages.length });
       if (renderJobId === state.renderJobId) state.renderingMessages = false;
       messageScheduler.flushRender();
     }
@@ -1387,6 +1392,7 @@ async function browserRuntimeInfo(sessionId) {
   const page = sessionId ? loadMessagePage(sessionId) : null;
   const active = getActiveSession();
   const connection = connectionState.snapshot();
+  const performanceSnapshot = performanceMetrics.snapshot();
   const snapshot = {
     activeId: state.activeId,
     activeStatus: active?.status || '',
@@ -1402,6 +1408,7 @@ async function browserRuntimeInfo(sessionId) {
     lastSessionSnapshotAt: connection.lastSessionSnapshotAt,
     frontendEventCount: state.frontendEvents.length,
     frontendEvents: state.frontendEvents.slice(0, 50),
+    frontendPerformance: performanceSnapshot,
     online: navigator.onLine,
     visibility: document.visibilityState || '',
     platform: navigator.userAgentData?.platform || navigator.platform || '',
@@ -1532,6 +1539,30 @@ function renderFrontendRuntime(local) {
   `;
 }
 
+function perfText(metric) {
+  if (!metric?.count) return '-';
+  return `${Math.round(metric.lastMs || 0)} / ${Math.round(metric.maxMs || 0)}ms`;
+}
+
+function renderFrontendPerformance(local) {
+  const metrics = local.frontendPerformance?.metrics || {};
+  const renderDetail = metrics.messages_render?.detail;
+  return `
+    <div class="runtime-section">
+      <strong>前端性能</strong>
+      <div class="runtime-grid compact">
+        <span>输入延迟 <strong>${escapeHtml(perfText(metrics.prompt_input_frame))}</strong></span>
+        <span>输入自适应 <strong>${escapeHtml(perfText(metrics.prompt_autosize))}</strong></span>
+        <span>消息渲染 <strong>${escapeHtml(perfText(metrics.messages_render))}</strong></span>
+        <span>上下文刷新 <strong>${escapeHtml(perfText(metrics.context_refresh))}</strong></span>
+        <span>长任务 <strong>${metrics.longtask?.count || 0}</strong></span>
+        <span>最长长任务 <strong>${Math.round(metrics.longtask?.maxMs || 0)}ms</strong></span>
+      </div>
+      <span>数值为最近/最大耗时；最近渲染 ${escapeHtml(renderDetail?.count ? `${renderDetail.count} 条` : '-')}</span>
+    </div>
+  `;
+}
+
 function renderRuntimeActions() {
   return `
     <div class="runtime-actions">
@@ -1626,6 +1657,7 @@ async function renderRuntimePanel(data) {
       </div>
     </div>
     ${renderFrontendRuntime(local)}
+    ${renderFrontendPerformance(local)}
     ${renderBrowserRuntime(local)}
     ${renderServiceRuntime(data)}
     ${renderTokenUsage(data)}
@@ -2095,6 +2127,7 @@ async function refreshActiveContext() {
     if (state.contextRefreshInFlight) recordFrontendEvent('context.refresh_skip', 'in_flight');
     return;
   }
+  const refreshStartedAt = performance.now();
   state.contextRefreshInFlight = true;
   recordFrontendEvent('context.refresh_start', session.id);
   mirrorConnectionState(connectionState.markContextRefresh());
@@ -2134,6 +2167,7 @@ async function refreshActiveContext() {
     recordFrontendEvent('context.refresh_failed', error.message || 'failed', 'warn');
     // Keep the current cached view; the normal online handler will retry later.
   } finally {
+    performanceMetrics.record('context_refresh', performance.now() - refreshStartedAt);
     state.contextRefreshInFlight = false;
   }
 }
@@ -2419,6 +2453,10 @@ el.promptForm.addEventListener('submit', async (event) => {
 });
 
 el.promptInput.addEventListener('keydown', (event) => {
+  const startedAt = performance.now();
+  requestAnimationFrame(() => {
+    performanceMetrics.record('prompt_input_frame', performance.now() - startedAt);
+  });
   if (event.isComposing || event.key !== 'Enter') return;
   autoSizePrompt();
 });
@@ -2643,9 +2681,18 @@ async function loadDirectories(dir) {
 }
 
 function autoSizePrompt() {
-  el.promptInput.style.height = 'auto';
-  const maxHeight = Math.min(Math.round(window.innerHeight * 0.28), 180);
-  el.promptInput.style.height = `${Math.min(el.promptInput.scrollHeight, maxHeight)}px`;
+  if (state.promptAutoSizeFrame) return;
+  const requestedAt = performance.now();
+  state.promptAutoSizeFrame = requestAnimationFrame(() => {
+    const startedAt = performance.now();
+    state.promptAutoSizeFrame = 0;
+    el.promptInput.style.height = 'auto';
+    const maxHeight = Math.min(Math.round(window.innerHeight * 0.28), 180);
+    el.promptInput.style.height = `${Math.min(el.promptInput.scrollHeight, maxHeight)}px`;
+    performanceMetrics.record('prompt_autosize', performance.now() - startedAt, {
+      queuedMs: startedAt - requestedAt
+    });
+  });
 }
 
 el.promptInput.addEventListener('input', autoSizePrompt);
@@ -2705,6 +2752,20 @@ document.addEventListener('visibilitychange', () => {
 
 window.addEventListener('pagehide', () => messageScheduler.flushSaves());
 
+function startPerformanceObservers() {
+  if (!('PerformanceObserver' in window)) return;
+  try {
+    const observer = new PerformanceObserver((list) => {
+      for (const entry of list.getEntries()) {
+        performanceMetrics.record('longtask', entry.duration, { name: entry.name || 'longtask' });
+      }
+    });
+    observer.observe({ entryTypes: ['longtask'] });
+  } catch {
+    // Browser support differs; runtime panel still shows the metrics we can collect.
+  }
+}
+
 function registerServiceWorkerLater() {
   if (!('serviceWorker' in navigator)) return;
   scheduleIdle(() => {
@@ -2734,4 +2795,5 @@ async function boot() {
   }
 }
 
+startPerformanceObservers();
 boot();
