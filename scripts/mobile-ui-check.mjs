@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=103">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=104">
       </head>
       <body>
         <main class="workspace">
@@ -79,7 +79,7 @@ async function setFixture(page) {
           <form class="prompt-bar">
             <div class="prompt-tools">
               <button class="command-button" type="button">命令</button>
-              <button class="command-button" type="button">附件</button>
+              <div class="attachment-tool"><button class="command-button" type="button">附件</button><div class="attachment-menu"><button type="button">图片</button><button type="button">文件</button></div></div>
             </div>
             <div class="image-preview-strip">
               <div class="image-preview-item"><img alt="preview" src="${sampleImage()}"><span>180KB</span><button>×</button></div>

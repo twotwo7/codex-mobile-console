@@ -1328,6 +1328,46 @@ button:disabled {
   border: 1px solid var(--line);
 }
 
+.attachment-tool {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.attachment-menu {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 6px);
+  z-index: 35;
+  display: grid;
+  gap: 4px;
+  min-width: 104px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.attachment-menu button {
+  justify-content: flex-start;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.attachment-menu button:first-child {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+.attachment-menu button:active {
+  background: var(--surface-2);
+}
+
 .image-preview-strip {
   display: flex;
   gap: 8px;

@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=103">
+    <link rel="stylesheet" href="/styles.css?v=104">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -190,8 +190,15 @@
           <div class="prompt-tools">
             <button id="commandButton" class="command-button" type="button">命令</button>
             <button id="skillButton" class="command-button" type="button">技能</button>
-            <button id="imageButton" class="command-button" type="button">附件</button>
-            <input id="imageInput" class="visually-hidden" type="file" multiple>
+            <div class="attachment-tool">
+              <button id="attachmentButton" class="command-button" type="button" aria-haspopup="menu" aria-expanded="false">附件</button>
+              <div id="attachmentMenu" class="attachment-menu" role="menu" hidden>
+                <button id="imageButton" type="button" role="menuitem">图片</button>
+                <button id="fileButton" type="button" role="menuitem">文件</button>
+              </div>
+            </div>
+            <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
+            <input id="fileInput" class="visually-hidden" type="file" multiple>
             <label class="bottom-follow-toggle" title="自动跟随底部">
               <input id="autoFollowBottom" type="checkbox">
               <span>跟随</span>
@@ -358,6 +365,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=116" type="module"></script>
+    <script src="/app.js?v=117" type="module"></script>
   </body>
 </html>

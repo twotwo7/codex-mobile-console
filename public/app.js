@@ -85,8 +85,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '116';
-const SW_CACHE_VERSION = 'codex-console-v132';
+const APP_ASSET_VERSION = '117';
+const SW_CACHE_VERSION = 'codex-console-v133';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -166,8 +166,12 @@ const el = {
   favoritesButton: document.querySelector('#favoritesButton'),
   runtimeButton: document.querySelector('#runtimeButton'),
   installAppButton: document.querySelector('#installAppButton'),
+  attachmentButton: document.querySelector('#attachmentButton'),
+  attachmentMenu: document.querySelector('#attachmentMenu'),
   imageButton: document.querySelector('#imageButton'),
   imageInput: document.querySelector('#imageInput'),
+  fileButton: document.querySelector('#fileButton'),
+  fileInput: document.querySelector('#fileInput'),
   imagePreviewStrip: document.querySelector('#imagePreviewStrip'),
   elevatedRun: document.querySelector('#elevatedRun'),
   stopButton: document.querySelector('#stopButton'),
@@ -1785,6 +1789,15 @@ function closeTopMoreMenu() {
   topbarView.closeTopMoreMenu();
 }
 
+function setAttachmentMenu(open) {
+  el.attachmentMenu.hidden = !open;
+  el.attachmentButton.setAttribute('aria-expanded', String(open));
+}
+
+function closeAttachmentMenu() {
+  setAttachmentMenu(false);
+}
+
 function loadImage(dataUrl) {
   return new Promise((resolve, reject) => {
     const image = new Image();
@@ -1879,8 +1892,8 @@ async function addImageFiles(fileList) {
     alert('待发送文件总大小不能超过 24MB。');
     return;
   }
-  el.imageButton.disabled = true;
-  el.imageButton.textContent = '处理中';
+  el.attachmentButton.disabled = true;
+  el.attachmentButton.textContent = '处理中';
   try {
     const [nextImages, nextFiles] = await Promise.all([
       Promise.all(images.map(readImageFile)),
@@ -1893,8 +1906,9 @@ async function addImageFiles(fileList) {
     alert(error.message || '添加附件失败');
   } finally {
     el.imageInput.value = '';
-    el.imageButton.disabled = false;
-    el.imageButton.textContent = '附件';
+    el.fileInput.value = '';
+    el.attachmentButton.disabled = false;
+    el.attachmentButton.textContent = '附件';
   }
 }
 
@@ -2517,11 +2531,13 @@ el.promptInput.addEventListener('keydown', (event) => {
 document.addEventListener('click', () => {
   messageView.closeMessageMenus();
   closeTopMoreMenu();
+  closeAttachmentMenu();
 });
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') messageView.closeMessageMenus();
   if (event.key === 'Escape') closeTopMoreMenu();
+  if (event.key === 'Escape') closeAttachmentMenu();
   if (event.key === 'Escape' && !el.sessionActionSheet?.hidden) closeSessionActionSheet();
   if (event.key === 'Escape' && !el.imageViewer.hidden) closeImageViewer();
 });
@@ -2547,9 +2563,28 @@ el.favoritesButton.addEventListener('click', () => {
 el.installAppButton?.addEventListener('click', installAppToHomeScreen);
 el.installAppSettingsButton?.addEventListener('click', installAppToHomeScreen);
 
-el.imageButton.addEventListener('click', () => el.imageInput.click());
+el.attachmentButton.addEventListener('click', (event) => {
+  event.stopPropagation();
+  closeTopMoreMenu();
+  setAttachmentMenu(el.attachmentMenu.hidden);
+});
+
+el.attachmentMenu.addEventListener('click', (event) => {
+  event.stopPropagation();
+});
+
+el.imageButton.addEventListener('click', () => {
+  closeAttachmentMenu();
+  el.imageInput.click();
+});
+
+el.fileButton.addEventListener('click', () => {
+  closeAttachmentMenu();
+  el.fileInput.click();
+});
 
 el.imageInput.addEventListener('change', () => addImageFiles(el.imageInput.files || []));
+el.fileInput.addEventListener('change', () => addImageFiles(el.fileInput.files || []));
 
 el.promptInput.addEventListener('paste', (event) => {
   const files = [...(event.clipboardData?.files || [])];
