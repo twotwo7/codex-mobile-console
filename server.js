@@ -201,10 +201,20 @@ function updateMessageRunState(session, messageId, runState, extra = {}) {
   return message;
 }
 
-function mergeQueuedItems(session) {
+function queueItemMatchesId(item, id) {
+  return item?.id === id || item?.clientMessageId === id || item?.messageId === id;
+}
+
+function mergeQueuedItems(session, selectedIds = []) {
   session.queue ||= [];
-  if (session.queue.length < 2) return null;
-  const items = session.queue;
+  const ids = Array.isArray(selectedIds) ? selectedIds.map((id) => String(id || '').trim()).filter(Boolean) : [];
+  const selected = ids.length
+    ? session.queue.filter((item) => ids.some((id) => queueItemMatchesId(item, id)))
+    : session.queue;
+  if (selected.length < 2) return null;
+  const selectedSet = new Set(selected.map((item) => item.id || item.clientMessageId || item.messageId));
+  const isSelected = (item) => selectedSet.has(item.id || item.clientMessageId || item.messageId);
+  const items = selected;
   let imageCursor = 1;
   const mergedPrompt = [
     '以下是合并后的多条排队输入，请按顺序一起处理：',
@@ -238,7 +248,13 @@ function mergeQueuedItems(session) {
   primary.elevated = items.some((item) => item.elevated === true);
   primary.images = mergedImages;
   primary.files = mergedFiles;
-  session.queue = [primary];
+  let inserted = false;
+  session.queue = session.queue.flatMap((item) => {
+    if (!isSelected(item)) return [item];
+    if (inserted) return [];
+    inserted = true;
+    return [primary];
+  });
 
   const primaryMessage = (session.messages || []).find((entry) => entry.id === primary.messageId || entry.clientMessageId === primary.clientMessageId);
   if (primaryMessage) {
@@ -2598,7 +2614,8 @@ async function handleApi(req, res, url) {
   if (queueMergeMatch && req.method === 'POST') {
     const session = state.sessions[decodeURIComponent(queueMergeMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
-    const merged = mergeQueuedItems(session);
+    const body = await readJson(req).catch(() => ({}));
+    const merged = mergeQueuedItems(session, body.queueIds || body.ids || []);
     if (!merged) return json(res, 400, { error: 'queue_merge_needs_multiple_items', session: publicSession(session) });
     return json(res, 200, {
       ok: true,

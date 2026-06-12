@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=106">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=107">
       </head>
       <body>
         <main class="workspace">
@@ -72,8 +72,9 @@ async function setFixture(page) {
               <pre class="message-text">$ npm test\\n[completed]</pre>
             </article>
             <div class="queue-panel">
-              <div class="queue-head"><strong>待执行 1 条</strong><span>等待当前任务结束后执行</span></div>
-              <div class="queue-item"><span>分析客户截图 · 图片 1 · 文件 1</span><div class="queue-images"><button class="queue-image-button"><img alt="queued" src="${sampleImage()}"></button></div><div class="queue-files"><a class="queue-file-link" href="#">📎</a></div><button class="queue-action-button">↑</button><button class="queue-action-button">✎</button><button class="queue-cancel-button">×</button></div>
+              <div class="queue-head"><strong>待执行 2 条</strong><div class="queue-head-actions"><span>已选 2 条，至少 2 条可合并</span><button class="queue-merge-button" type="button">合并选中</button></div></div>
+              <div class="queue-item"><label class="queue-select"><input type="checkbox" aria-label="选择这条排队输入用于合并" checked></label><span>分析客户截图 · 图片 1 · 文件 1</span><div class="queue-images"><button class="queue-image-button"><img alt="queued" src="${sampleImage()}"></button></div><div class="queue-files"><a class="queue-file-link" href="#">📎</a></div><button class="queue-action-button">↑</button><button class="queue-action-button">✎</button><button class="queue-cancel-button">×</button></div>
+              <div class="queue-item"><label class="queue-select"><input type="checkbox" aria-label="选择这条排队输入用于合并" checked></label><span>补充客户背景信息</span><div class="queue-images"></div><div class="queue-files"></div><button class="queue-action-button">↑</button><button class="queue-action-button">✎</button><button class="queue-cancel-button">×</button></div>
             </div>
           </section>
           <form class="prompt-bar">
@@ -212,6 +213,8 @@ async function run() {
 
       await setFixture(page);
       await assertVisibleBox(page, '.prompt-bar', 'prompt bar');
+      await assertVisibleBox(page, '.queue-select input', 'queue merge checkbox');
+      await assertVisibleBox(page, '.queue-merge-button', 'queue merge button');
       await assertVisibleBox(page, '.message-menu-popover', 'message menu');
       await assertVisibleBox(page, '.image-viewer img', 'image viewer');
       await assertVisibleBox(page, '.image-viewer-close', 'image close button');

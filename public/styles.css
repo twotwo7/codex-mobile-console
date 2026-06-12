@@ -1709,11 +1709,30 @@ button:disabled {
 }
 
 .queue-item {
-  grid-template-columns: minmax(0, 1fr) auto auto 24px 24px 24px;
+  grid-template-columns: 22px minmax(0, 1fr) auto auto 24px 24px 24px;
   min-height: 30px;
   padding: 5px 6px;
   border-radius: 6px;
   background: var(--surface);
+}
+
+.queue-item.no-select {
+  grid-template-columns: minmax(0, 1fr) auto auto 24px 24px 24px;
+}
+
+.queue-select {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  min-width: 22px;
+  min-height: 24px;
+}
+
+.queue-select input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .queue-item span {

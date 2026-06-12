@@ -198,11 +198,14 @@ export function createPromptActions(options) {
     patchQueuedPrompt(item.id, { prompt }, '编辑排队失败');
   }
 
-  async function mergeQueuedPrompts() {
+  async function mergeQueuedPrompts(queueIds = []) {
     const session = getActiveSession();
     if (!session || (session.queue || []).length < 2) return;
     try {
-      const data = await api(`/api/sessions/${session.id}/queue/merge`, { method: 'POST' });
+      const data = await api(`/api/sessions/${session.id}/queue/merge`, {
+        method: 'POST',
+        body: JSON.stringify({ queueIds })
+      });
       if (data.message) updateMessage(session.id, data.message);
       if (data.session) {
         if (mergeSessionSnapshot(data.session)) renderSessions();
