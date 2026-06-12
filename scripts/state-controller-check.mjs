@@ -102,6 +102,7 @@ function createHarness() {
   assert.equal(state.sessions[0].status, 'running');
 
   assert.equal(sessionStatusFromMessage(messages[1]), 'idle');
+  assert.equal(sessionStatusFromMessage({ role: 'system', text: 'Codex run stopped. Starting next queued prompt.' }), 'running');
   assert.equal(controller.applySessionStatusFromMessage('s1', messages[1], messages), true);
   assert.equal(state.sessions[0].status, 'idle');
 

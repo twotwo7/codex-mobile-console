@@ -2086,7 +2086,7 @@ function runCodex(session, prompt, options = {}) {
     if (stdoutBuffer.trim()) handleCodexLine(session, stdoutBuffer);
     running.delete(session.id);
     const wasStopping = session.status === 'stopping';
-    const next = !wasStopping ? session.queue?.shift() : null;
+    const next = session.queue?.shift() || null;
     const nextStatus = next?.prompt ? 'running' : code === 0 || wasStopping ? 'idle' : 'error';
     const finalRunState = wasStopping ? 'stopped' : code === 0 ? 'completed' : 'failed';
     updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, finalRunState, {
@@ -2096,7 +2096,9 @@ function runCodex(session, prompt, options = {}) {
     session.updatedAt = nowIso();
     addMessage(session, {
       role: 'system',
-      text: next?.prompt ? 'Codex run finished. Starting next queued prompt.' : wasStopping ? 'Codex run stopped.' : code === 0 ? 'Codex run finished.' : `Codex exited with code ${code}.`,
+      text: next?.prompt
+        ? wasStopping ? 'Codex run stopped. Starting next queued prompt.' : 'Codex run finished. Starting next queued prompt.'
+        : wasStopping ? 'Codex run stopped.' : code === 0 ? 'Codex run finished.' : `Codex exited with code ${code}.`,
       status: nextStatus,
       queuedCount: session.queue?.length || 0
     });
@@ -2127,16 +2129,12 @@ function stopRunningSession(session) {
   session.status = 'stopping';
   session.updatedAt = nowIso();
   const queuedCount = session.queue?.length || 0;
-  if (queuedCount) session.queue = [];
   updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, 'stopping', { delivery: 'stopping' });
-  for (const message of incompleteRunMessages(session)) {
-    if (message.runState === 'queued') updateMessageRunState(session, message.id, 'stopped', { delivery: 'stopped' });
-  }
   addMessage(session, {
     role: 'system',
-    text: queuedCount ? `Stop requested. Cleared ${queuedCount} queued prompt${queuedCount === 1 ? '' : 's'}.` : 'Stop requested.',
+    text: queuedCount ? `Stop requested. ${queuedCount} queued prompt${queuedCount === 1 ? '' : 's'} will continue.` : 'Stop requested.',
     status: 'stopping',
-    queuedCount: 0
+    queuedCount
   });
   broadcastSession(session);
 

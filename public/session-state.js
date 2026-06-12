@@ -30,6 +30,7 @@ export function sessionStatusFromMessage(message) {
   if (message.role !== 'system') return '';
   const text = String(message.text || '');
   if (text.includes('Codex run finished. Starting next queued prompt.')) return 'running';
+  if (text.includes('Codex run stopped. Starting next queued prompt.')) return 'running';
   if (text.includes('Codex is working')) return 'running';
   if (text.includes('Stop requested.')) return 'stopping';
   if (text.includes('Codex run finished.') || text.includes('Codex run stopped.') || text.includes('Recovered stale run state')) return 'idle';
