@@ -25,8 +25,9 @@ export function createMessageView(actions) {
         <span>${escapeHtml(formatTime(message.at))}</span>
       </div>
       <div class="message-summary">${escapeHtml(summarizeMessage(message))}</div>
-      <pre class="message-text"${deferredText ? '' : ' data-loaded="1"'}>${deferredText ? '' : escapeHtml(message.text || '')}</pre>
+      <pre class="message-text"${deferredText ? '' : ' data-loaded="1"'}></pre>
     `;
+    if (!deferredText) renderLinkedText(article.querySelector('.message-text'), message.text || '');
 
     const delivery = deliveryLabel(message);
     if (delivery) {
@@ -50,7 +51,7 @@ export function createMessageView(actions) {
         const collapsed = article.classList.toggle('collapsed');
         const textNode = article.querySelector('.message-text');
         if (!collapsed && textNode && !textNode.dataset.loaded) {
-          textNode.textContent = message.text || '';
+          renderLinkedText(textNode, message.text || '');
           textNode.dataset.loaded = '1';
         }
         button.textContent = collapsed ? '▸' : '▾';
@@ -230,4 +231,41 @@ async function copyMessageText(text) {
     document.execCommand('copy');
     area.remove();
   }
+}
+
+function renderLinkedText(container, text) {
+  if (!container) return;
+  container.textContent = '';
+  const value = String(text || '');
+  const pattern = /(https?:\/\/[^\s<>"'`]+|\/api\/uploads\/[A-Za-z0-9%_.~!$&()*+,;=:@/-]+)/gi;
+  let lastIndex = 0;
+  for (const match of value.matchAll(pattern)) {
+    const raw = match[0];
+    const start = match.index || 0;
+    if (start > lastIndex) container.append(document.createTextNode(value.slice(lastIndex, start)));
+    const { href, label, suffix } = normalizeLink(raw);
+    const link = document.createElement('a');
+    link.href = href;
+    link.textContent = label;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    container.append(link);
+    if (suffix) container.append(document.createTextNode(suffix));
+    lastIndex = start + raw.length;
+  }
+  if (lastIndex < value.length) container.append(document.createTextNode(value.slice(lastIndex)));
+}
+
+function normalizeLink(raw) {
+  let label = String(raw || '');
+  let suffix = '';
+  while (label && /[.,;:!?，。；：！？）\])]/.test(label.at(-1))) {
+    suffix = label.at(-1) + suffix;
+    label = label.slice(0, -1);
+  }
+  return {
+    href: label.startsWith('/api/uploads/') ? label : label,
+    label,
+    suffix
+  };
 }

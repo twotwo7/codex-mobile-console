@@ -1185,6 +1185,22 @@ button:disabled {
   word-break: break-word;
 }
 
+.message-text a {
+  color: #4da3ff;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.message-text a:visited {
+  color: color-mix(in srgb, #4da3ff 72%, var(--muted));
+}
+
+.message-text a:focus-visible {
+  outline: 2px solid #4da3ff;
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
 .message.streaming .message-text::after {
   content: "";
   display: inline-block;
