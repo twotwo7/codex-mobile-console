@@ -12,6 +12,7 @@ export function createPromptActions(options) {
     saveMessages,
     state,
     storageSet,
+    editQueuedPromptText,
     updateFavoritesButton,
     updateMessage,
     upsertMessage
@@ -186,9 +187,11 @@ export function createPromptActions(options) {
     return patchQueuedPrompt(queueId, { action: 'top' }, '置顶排队失败');
   }
 
-  function editQueuedPrompt(item) {
+  async function editQueuedPrompt(item) {
     const current = item.displayPrompt || item.prompt || '';
-    const nextPrompt = window.prompt('编辑排队输入', current);
+    const nextPrompt = editQueuedPromptText
+      ? await editQueuedPromptText(item)
+      : window.prompt('编辑排队输入', current);
     if (nextPrompt === null) return;
     const prompt = String(nextPrompt || '').trim();
     if (!prompt || prompt === current) return;

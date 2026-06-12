@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=105">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=106">
       </head>
       <body>
         <main class="workspace">
@@ -216,6 +216,24 @@ async function run() {
       await assertVisibleBox(page, '.image-viewer img', 'image viewer');
       await assertVisibleBox(page, '.image-viewer-close', 'image close button');
       await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-fixture.png`), fullPage: true });
+      await page.evaluate(() => {
+        document.querySelector('.image-viewer')?.setAttribute('hidden', '');
+        document.querySelector('.top-more-menu')?.setAttribute('hidden', '');
+        document.querySelector('.attachment-menu')?.setAttribute('hidden', '');
+        document.body.insertAdjacentHTML('beforeend', `
+          <dialog class="session-dialog queue-edit-dialog" open>
+            <form>
+              <div class="dialog-head"><h2>编辑排队输入</h2><button class="icon-button" type="button">×</button></div>
+              <label>内容<textarea rows="8">请继续分析客户截图，并把结论整理成三条。</textarea></label>
+              <div class="queue-edit-meta">22 字 · 图片 1 · 文件 1</div>
+              <div class="queue-edit-actions"><button class="ghost-button inline" type="button">取消</button><button type="submit">保存</button></div>
+            </form>
+          </dialog>
+        `);
+      });
+      await assertVisibleBox(page, '.queue-edit-dialog', 'queue edit dialog');
+      await assertVisibleBox(page, '.queue-edit-dialog textarea', 'queue edit textarea');
+      await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-queue-edit.png`), fullPage: false });
       await context.close();
     }
   } finally {

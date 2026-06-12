@@ -1874,6 +1874,36 @@ button:disabled {
   width: min(760px, calc(100% - 22px));
 }
 
+.queue-edit-dialog {
+  width: min(620px, calc(100% - 22px));
+}
+
+.queue-edit-dialog form {
+  gap: 10px;
+}
+
+.queue-edit-dialog textarea {
+  min-height: min(42svh, 360px);
+  max-height: min(58svh, 520px);
+  resize: vertical;
+}
+
+.queue-edit-meta {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.queue-edit-error {
+  margin: 0;
+}
+
+.queue-edit-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .skill-dialog,
 .skill-detail-dialog {
   width: min(680px, calc(100% - 22px));

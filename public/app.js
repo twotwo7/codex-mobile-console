@@ -6,7 +6,7 @@ import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
 import { createMessageView } from './message-view.js?v=5';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
-import { createPromptActions } from './prompt-actions.js?v=6';
+import { createPromptActions } from './prompt-actions.js?v=7';
 import { createQueueView } from './queue-view.js?v=5';
 import { createSessionStateController } from './session-state.js?v=2';
 import { createSkillView } from './skill-view.js?v=3';
@@ -85,8 +85,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '119';
-const SW_CACHE_VERSION = 'codex-console-v135';
+const APP_ASSET_VERSION = '120';
+const SW_CACHE_VERSION = 'codex-console-v137';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -226,6 +226,14 @@ const el = {
   runtimeDialog: document.querySelector('#runtimeDialog'),
   closeRuntimeDialog: document.querySelector('#closeRuntimeDialog'),
   runtimePanel: document.querySelector('#runtimePanel'),
+  queueEditDialog: document.querySelector('#queueEditDialog'),
+  queueEditForm: document.querySelector('#queueEditForm'),
+  queueEditInput: document.querySelector('#queueEditInput'),
+  queueEditMeta: document.querySelector('#queueEditMeta'),
+  queueEditError: document.querySelector('#queueEditError'),
+  cancelQueueEdit: document.querySelector('#cancelQueueEdit'),
+  discardQueueEdit: document.querySelector('#discardQueueEdit'),
+  saveQueueEdit: document.querySelector('#saveQueueEdit'),
   imageViewer: document.querySelector('#imageViewer'),
   closeImageViewer: document.querySelector('#closeImageViewer'),
   imageViewerImg: document.querySelector('#imageViewerImg')
@@ -267,6 +275,7 @@ const promptActions = createPromptActions({
   saveMessages,
   state,
   storageSet,
+  editQueuedPromptText: openQueueEditDialog,
   updateFavoritesButton,
   updateMessage,
   upsertMessage
@@ -1746,6 +1755,66 @@ function renderRuntimeError(error) {
     el.runtimePanel.textContent = '刷新中...';
     await refreshSessions();
     await loadRuntimeInfo().catch(renderRuntimeError);
+  });
+}
+
+function openQueueEditDialog(item) {
+  messageView.closeMessageMenus();
+  closeTopMoreMenu();
+  closeAttachmentMenu();
+  const current = item.displayPrompt || item.prompt || '';
+  el.queueEditInput.value = current;
+  el.queueEditInput.setAttribute('aria-invalid', 'false');
+  el.queueEditError.textContent = '';
+  const imageCount = item.imageCount || item.images?.length || 0;
+  const fileCount = item.fileCount || item.files?.length || 0;
+  const updateMeta = () => {
+    el.queueEditMeta.textContent = `${el.queueEditInput.value.length} 字 · 图片 ${imageCount} · 文件 ${fileCount}`;
+  };
+  updateMeta();
+
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      el.queueEditForm.removeEventListener('submit', onSubmit);
+      el.queueEditDialog.removeEventListener('close', onClose);
+      el.cancelQueueEdit.removeEventListener('click', onCancel);
+      el.discardQueueEdit.removeEventListener('click', onCancel);
+      el.queueEditInput.removeEventListener('input', onInput);
+      if (el.queueEditDialog.open) closeModal(el.queueEditDialog);
+      resolve(value);
+    };
+    const onCancel = () => finish(null);
+    const onClose = () => finish(null);
+    const onInput = () => {
+      el.queueEditInput.setAttribute('aria-invalid', 'false');
+      el.queueEditError.textContent = '';
+      updateMeta();
+    };
+    const onSubmit = (event) => {
+      event.preventDefault();
+      const next = el.queueEditInput.value.trim();
+      if (!next) {
+        el.queueEditInput.setAttribute('aria-invalid', 'true');
+        el.queueEditError.textContent = '内容不能为空。';
+        el.queueEditInput.focus();
+        return;
+      }
+      finish(next === current ? null : next);
+    };
+
+    el.queueEditForm.addEventListener('submit', onSubmit);
+    el.queueEditDialog.addEventListener('close', onClose);
+    el.cancelQueueEdit.addEventListener('click', onCancel);
+    el.discardQueueEdit.addEventListener('click', onCancel);
+    el.queueEditInput.addEventListener('input', onInput);
+    openModal(el.queueEditDialog);
+    requestAnimationFrame(() => {
+      el.queueEditInput.focus();
+      el.queueEditInput.setSelectionRange(el.queueEditInput.value.length, el.queueEditInput.value.length);
+    });
   });
 }
 

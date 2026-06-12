@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=105">
+    <link rel="stylesheet" href="/styles.css?v=106">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -306,6 +306,25 @@
       <div id="runtimePanel" class="runtime-panel">未选择会话</div>
     </dialog>
 
+    <dialog id="queueEditDialog" class="session-dialog queue-edit-dialog" aria-labelledby="queueEditTitle">
+      <form id="queueEditForm" method="dialog">
+        <div class="dialog-head">
+          <h2 id="queueEditTitle">编辑排队输入</h2>
+          <button class="icon-button" type="button" id="cancelQueueEdit" aria-label="关闭编辑框">×</button>
+        </div>
+        <label for="queueEditInput">
+          内容
+          <textarea id="queueEditInput" rows="8" required aria-describedby="queueEditMeta queueEditError"></textarea>
+        </label>
+        <div id="queueEditMeta" class="queue-edit-meta"></div>
+        <div id="queueEditError" class="error-text queue-edit-error" role="status"></div>
+        <div class="queue-edit-actions">
+          <button class="ghost-button inline" type="button" id="discardQueueEdit">取消</button>
+          <button type="submit" id="saveQueueEdit">保存</button>
+        </div>
+      </form>
+    </dialog>
+
     <div id="imageViewer" class="image-viewer" hidden>
       <button id="closeImageViewer" class="image-viewer-close" type="button" aria-label="关闭图片">×</button>
       <img id="imageViewerImg" alt="图片预览">
@@ -365,6 +384,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=119" type="module"></script>
+    <script src="/app.js?v=120" type="module"></script>
   </body>
 </html>
