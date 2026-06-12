@@ -1,6 +1,6 @@
 {
   "name": "codex-mobile-console",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "type": "module",
   "description": "Mobile-first Codex control console with persistent sessions",
   "license": "MIT",

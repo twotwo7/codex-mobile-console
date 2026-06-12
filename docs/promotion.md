@@ -47,6 +47,10 @@ Chinese:
   - show running state
   - open runtime panel
   - stop or queue a task
+- Publish `v1.4.0` as the first public release.
+- Make the repository public before posting.
+
+Ready-to-use launch copy lives in [launch-posts.md](launch-posts.md).
 
 ## Suggested Posts
 
