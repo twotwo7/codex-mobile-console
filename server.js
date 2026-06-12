@@ -2,7 +2,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { appendFile, copyFile, mkdir, readFile, writeFile, stat, rename, readdir, unlink, statfs, readlink } from 'node:fs/promises';
-import { createReadStream } from 'node:fs';
+import { chmodSync, copyFileSync, createReadStream, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -41,6 +41,11 @@ const contentTypes = {
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml; charset=utf-8',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
   '.ico': 'image/x-icon'
 };
 
@@ -757,8 +762,10 @@ function compactText(text, limit = 8000) {
 const imageTypes = new Map([
   ['image/png', '.png'],
   ['image/jpeg', '.jpg'],
+  ['image/gif', '.gif'],
   ['image/webp', '.webp']
 ]);
+const replyImageExtensions = new Set(['.png', '.jpg', '.jpeg', '.webp', '.gif']);
 const safeUploadTypes = new Set([
   '.txt', '.md', '.json', '.jsonl', '.csv', '.tsv', '.log',
   '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
@@ -769,6 +776,10 @@ const safeUploadTypes = new Set([
 
 function uploadUrl(fileName) {
   return `/api/uploads/${encodeURIComponent(fileName)}`;
+}
+
+function imageContentType(ext) {
+  return contentTypes[ext] || 'application/octet-stream';
 }
 
 function uploadSizeText(bytes) {
@@ -784,6 +795,84 @@ function safeUploadExtension(file) {
   const ext = path.extname(String(file.name || '')).toLowerCase();
   if (safeUploadTypes.has(ext)) return ext;
   return '.bin';
+}
+
+function candidateImagePaths(text) {
+  const value = String(text || '');
+  if (!value) return [];
+  const matches = new Set();
+  const patterns = [
+    /!\[[^\]]*]\(([^)\s]+?\.(?:png|jpe?g|webp|gif))\)/gi,
+    /[`"']([^`"']+?\.(?:png|jpe?g|webp|gif))[`"']/gi,
+    /((?:file:\/\/|\/|\.{1,2}\/|[A-Za-z0-9_.-]+\/)[^\s'"`)<]+?\.(?:png|jpe?g|webp|gif))/gi,
+    /(?:^|\s)([A-Za-z0-9_.-]+?\.(?:png|jpe?g|webp|gif))(?:\s|$)/gi
+  ];
+  for (const pattern of patterns) {
+    for (const match of value.matchAll(pattern)) {
+      const raw = match[1];
+      if (raw) matches.add(raw.replace(/^<|>$/g, '').trim());
+      if (matches.size >= 12) return [...matches];
+    }
+  }
+  return [...matches];
+}
+
+function resolveReplyImagePath(session, rawPath) {
+  let value = String(rawPath || '').trim();
+  if (!value || /^https?:\/\//i.test(value) || /^data:/i.test(value)) return '';
+  if (value.startsWith('file://')) value = value.slice('file://'.length);
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    // Keep the original value when it is not URI encoded.
+  }
+  const cwd = path.resolve(session.cwd || '');
+  if (!cwd || cwd === path.resolve('.')) return '';
+  const resolved = path.resolve(path.isAbsolute(value) ? value : path.join(cwd, value));
+  const uploadRoot = path.resolve(UPLOAD_DIR);
+  if (!resolved.startsWith(`${cwd}${path.sep}`) && resolved !== cwd && !resolved.startsWith(`${uploadRoot}${path.sep}`)) return '';
+  return resolved;
+}
+
+function attachReplyImages(session, entry) {
+  if (!['assistant', 'tool'].includes(entry.role || '') || !entry.text) return entry;
+  const seen = new Set((entry.images || []).map((image) => image.path || image.url || image.fileName).filter(Boolean));
+  const images = [...(entry.images || [])];
+  for (const rawPath of candidateImagePaths(entry.text)) {
+    if (images.length >= 8) break;
+    const resolved = resolveReplyImagePath(session, rawPath);
+    if (!resolved || seen.has(resolved)) continue;
+    const ext = path.extname(resolved).toLowerCase();
+    if (!replyImageExtensions.has(ext)) continue;
+    let info = null;
+    try {
+      info = statSync(resolved);
+    } catch {
+      continue;
+    }
+    if (!info.isFile() || info.size <= 0 || info.size > 12 * 1024 * 1024) continue;
+    const uploadExt = ext === '.jpeg' ? '.jpg' : ext;
+    const fileName = `${randomUUID()}${uploadExt}`;
+    const filePath = path.join(UPLOAD_DIR, fileName);
+    try {
+      copyFileSync(resolved, filePath);
+      chmodSync(filePath, 0o600);
+    } catch {
+      continue;
+    }
+    seen.add(resolved);
+    images.push({
+      name: path.basename(resolved).slice(0, 160),
+      type: imageContentType(uploadExt),
+      size: info.size,
+      fileName,
+      path: filePath,
+      url: uploadUrl(fileName),
+      source: 'codex-output'
+    });
+  }
+  if (images.length) entry.images = images;
+  return entry;
 }
 
 async function savePromptImages(images) {
@@ -1859,6 +1948,7 @@ function addMessage(session, message) {
     at: nowIso(),
     ...message
   };
+  attachReplyImages(session, entry);
   session.messages.push(entry);
   session.lastSeq = entry.seq;
   session.updatedAt = entry.at;
@@ -2314,10 +2404,7 @@ async function handleApi(req, res, url) {
     try {
       await stat(resolved);
       const ext = path.extname(resolved);
-      const type = ext === '.png' ? 'image/png'
-        : ext === '.webp' ? 'image/webp'
-          : ext === '.jpg' ? 'image/jpeg'
-            : contentTypes[ext] || 'application/octet-stream';
+      const type = imageContentType(ext);
       res.writeHead(200, {
         'content-type': type,
         'cache-control': 'private, max-age=3600',
