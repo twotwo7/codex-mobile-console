@@ -26,9 +26,9 @@ export function createMessageView(actions) {
         <span>${escapeHtml(formatTime(message.at))}</span>
       </div>
       <div class="message-summary">${escapeHtml(summarizeMessage(message))}</div>
-      <pre class="message-text"${deferredText ? '' : ' data-loaded="1"'}></pre>
+      <div class="message-text"${deferredText ? '' : ' data-loaded="1"'}></div>
     `;
-    if (!deferredText) renderLinkedText(article.querySelector('.message-text'), message.text || '');
+    if (!deferredText) renderMarkdownText(article.querySelector('.message-text'), message.text || '');
 
     const delivery = deliveryLabel(message);
     if (delivery) {
@@ -52,7 +52,7 @@ export function createMessageView(actions) {
         const collapsed = article.classList.toggle('collapsed');
         const textNode = article.querySelector('.message-text');
         if (!collapsed && textNode && !textNode.dataset.loaded) {
-          renderLinkedText(textNode, message.text || '');
+          renderMarkdownText(textNode, message.text || '');
           textNode.dataset.loaded = '1';
         }
         button.textContent = collapsed ? '▸' : '▾';
@@ -234,27 +234,193 @@ async function copyMessageText(text) {
   }
 }
 
-function renderLinkedText(container, text) {
+function renderMarkdownText(container, text) {
   if (!container) return;
   container.textContent = '';
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    if (!line.trim()) {
+      index += 1;
+      continue;
+    }
+
+    const fence = line.match(/^\s*```([\w-]*)\s*$/);
+    if (fence) {
+      const codeLines = [];
+      index += 1;
+      while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) {
+        codeLines.push(lines[index]);
+        index += 1;
+      }
+      if (index < lines.length) index += 1;
+      container.append(renderCodeBlock(codeLines.join('\n'), fence[1] || ''));
+      continue;
+    }
+
+    if (isTableStart(lines, index)) {
+      const tableLines = [lines[index], lines[index + 1]];
+      index += 2;
+      while (index < lines.length && isTableRow(lines[index])) {
+        tableLines.push(lines[index]);
+        index += 1;
+      }
+      container.append(renderTable(tableLines));
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      const level = Math.min(4, heading[1].length);
+      const node = document.createElement(`h${level + 2}`);
+      appendInlineMarkdown(node, heading[2].trim());
+      container.append(node);
+      index += 1;
+      continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      const quote = document.createElement('blockquote');
+      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+        appendInlineMarkdown(quote, lines[index].replace(/^\s*>\s?/, ''));
+        quote.append(document.createElement('br'));
+        index += 1;
+      }
+      quote.lastChild?.remove();
+      container.append(quote);
+      continue;
+    }
+
+    const listMatch = line.match(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/);
+    if (listMatch) {
+      const ordered = /^\s*\d+[.)]\s+/.test(line);
+      const list = document.createElement(ordered ? 'ol' : 'ul');
+      while (index < lines.length && /^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(lines[index]) === true && (/^\s*\d+[.)]\s+/.test(lines[index]) === ordered)) {
+        const item = document.createElement('li');
+        appendInlineMarkdown(item, lines[index].replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, ''));
+        list.append(item);
+        index += 1;
+      }
+      container.append(list);
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (index < lines.length
+      && lines[index].trim()
+      && !/^\s*```/.test(lines[index])
+      && !isTableStart(lines, index)
+      && !/^(#{1,4})\s+/.test(lines[index])
+      && !/^\s*>\s?/.test(lines[index])
+      && !/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(lines[index])) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
+    const paragraph = document.createElement('p');
+    paragraphLines.forEach((part, partIndex) => {
+      if (partIndex) paragraph.append(document.createElement('br'));
+      appendInlineMarkdown(paragraph, part);
+    });
+    container.append(paragraph);
+  }
+}
+
+function appendInlineMarkdown(container, text) {
   const value = String(text || '');
-  const pattern = /(https?:\/\/[^\s<>"'`]+|\/api\/uploads\/[A-Za-z0-9%_.~!$&()*+,;=:@/-]+)/gi;
+  const pattern = /(\*\*[^*\n][\s\S]*?\*\*|`[^`\n]+`|\[[^\]\n]+]\((https?:\/\/[^\s)]+|\/api\/uploads\/[^)\s]+)\)|https?:\/\/[^\s<>"'`]+|\/api\/uploads\/[A-Za-z0-9%_.~!$&()*+,;=:@/-]+)/gi;
   let lastIndex = 0;
   for (const match of value.matchAll(pattern)) {
-    const raw = match[0];
+    const token = match[0];
     const start = match.index || 0;
     if (start > lastIndex) container.append(document.createTextNode(value.slice(lastIndex, start)));
-    const { href, label, suffix } = normalizeLink(raw);
-    const link = document.createElement('a');
-    link.href = href;
-    link.textContent = label;
-    link.target = '_blank';
-    link.rel = 'noopener';
-    container.append(link);
-    if (suffix) container.append(document.createTextNode(suffix));
-    lastIndex = start + raw.length;
+
+    const linkMatch = token.match(/^\[([^\]\n]+)]\((.+)\)$/);
+    if (linkMatch) {
+      container.append(createLink(linkMatch[2], linkMatch[1]));
+    } else if (token.startsWith('**') && token.endsWith('**')) {
+      const strong = document.createElement('strong');
+      strong.textContent = token.slice(2, -2);
+      container.append(strong);
+    } else if (token.startsWith('`') && token.endsWith('`')) {
+      const code = document.createElement('code');
+      code.textContent = token.slice(1, -1);
+      container.append(code);
+    } else {
+      const { href, label, suffix } = normalizeLink(token);
+      container.append(createLink(href, label));
+      if (suffix) container.append(document.createTextNode(suffix));
+    }
+    lastIndex = start + token.length;
   }
   if (lastIndex < value.length) container.append(document.createTextNode(value.slice(lastIndex)));
+}
+
+function createLink(href, label) {
+  const safeHref = String(href || '');
+  const link = document.createElement('a');
+  link.href = safeHref;
+  link.textContent = label || safeHref;
+  link.target = '_blank';
+  link.rel = 'noopener';
+  return link;
+}
+
+function renderCodeBlock(code, language) {
+  const pre = document.createElement('pre');
+  const node = document.createElement('code');
+  if (language) node.dataset.lang = language;
+  node.textContent = code;
+  pre.append(node);
+  return pre;
+}
+
+function renderTable(lines) {
+  const wrap = document.createElement('div');
+  wrap.className = 'message-table-wrap';
+  const table = document.createElement('table');
+  const thead = document.createElement('thead');
+  const tbody = document.createElement('tbody');
+  const header = document.createElement('tr');
+  for (const cell of splitTableRow(lines[0])) {
+    const th = document.createElement('th');
+    appendInlineMarkdown(th, cell);
+    header.append(th);
+  }
+  thead.append(header);
+  for (const rowLine of lines.slice(2)) {
+    const row = document.createElement('tr');
+    for (const cell of splitTableRow(rowLine)) {
+      const td = document.createElement('td');
+      appendInlineMarkdown(td, cell);
+      row.append(td);
+    }
+    tbody.append(row);
+  }
+  table.append(thead, tbody);
+  wrap.append(table);
+  return wrap;
+}
+
+function splitTableRow(line) {
+  return String(line || '')
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function isTableStart(lines, index) {
+  return isTableRow(lines[index]) && isTableSeparator(lines[index + 1]);
+}
+
+function isTableRow(line) {
+  return String(line || '').includes('|');
+}
+
+function isTableSeparator(line) {
+  const cells = splitTableRow(line);
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
 }
 
 function normalizeLink(raw) {

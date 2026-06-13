@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=109">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=110">
       </head>
       <body>
         <main class="workspace">
@@ -62,8 +62,13 @@ async function setFixture(page) {
                 <div class="message-menu"><button class="message-menu-button" type="button">⋯</button></div>
                 <button class="message-toggle" type="button">▾</button>
               </div>
-              <pre class="message-text">描述这张客户截图。</pre>
+              <div class="message-text"><p>描述这张客户截图。</p></div>
               <div class="message-images"><button type="button"><img alt="sample" src="${sampleImage()}"></button></div>
+            </article>
+            <article class="message assistant">
+              <div class="message-head"><span>ASSISTANT</span><span>6/7 22:31</span></div>
+              <div class="message-summary">输出 · Markdown 示例</div>
+              <div class="message-text"><h3>结论</h3><p><strong>建议</strong>优先处理布局。</p><div class="message-table-wrap"><table><thead><tr><th>方案</th><th>建议</th></tr></thead><tbody><tr><td>Playwright</td><td>立刻加</td></tr></tbody></table></div></div>
             </article>
             <article class="message tool collapsed">
               <div class="message-head">
@@ -72,7 +77,7 @@ async function setFixture(page) {
                 <button class="message-toggle" type="button">▸</button>
               </div>
               <div class="message-summary">工具组 3 · $ npm test</div>
-              <pre class="message-text">$ npm test\\n[completed]</pre>
+              <div class="message-text"><pre><code>$ npm test\\n[completed]</code></pre></div>
             </article>
             <div class="queue-panel">
               <div class="queue-head"><strong>待执行 2 条</strong><div class="queue-head-actions"><span>已选 2 条，至少 2 条可合并</span><button class="queue-merge-button" type="button">合并选中</button></div></div>
