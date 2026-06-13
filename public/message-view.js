@@ -74,11 +74,29 @@ export function createMessageView(actions) {
       const link = document.createElement('button');
       link.type = 'button';
       link.setAttribute('aria-label', '查看图片');
+      const src = imageSource(image);
       const img = document.createElement('img');
-      img.src = image.url || image.dataUrl;
+      const fallback = document.createElement('span');
+      fallback.className = 'message-image-fallback';
+      fallback.textContent = src ? '图片加载失败' : '图片已失效';
+      fallback.hidden = true;
+      if (src) img.src = src;
       img.alt = image.name || 'uploaded image';
-      link.append(img);
-      link.addEventListener('click', () => actions.openImageViewer(img.src, img.alt));
+      img.addEventListener('error', () => {
+        img.hidden = true;
+        fallback.hidden = false;
+        link.classList.add('failed');
+      }, { once: true });
+      if (!src) {
+        img.hidden = true;
+        fallback.hidden = false;
+        link.classList.add('failed');
+      }
+      link.append(img, fallback);
+      link.addEventListener('click', () => {
+        if (!src || link.classList.contains('failed')) return;
+        actions.openImageViewer(src, img.alt);
+      });
       wrap.append(link);
     }
     return wrap;
@@ -435,4 +453,13 @@ function normalizeLink(raw) {
     label,
     suffix
   };
+}
+
+function imageSource(image) {
+  if (!image) return '';
+  const direct = image.url || image.dataUrl || image.data;
+  if (direct) return direct;
+  const fileName = image.fileName || String(image.path || '').split('/').pop();
+  if (!/^[a-f0-9-]+\.[a-z0-9]{1,12}$/i.test(fileName || '')) return '';
+  return `/api/uploads/${encodeURIComponent(fileName)}`;
 }
