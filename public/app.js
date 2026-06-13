@@ -4,7 +4,7 @@ import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
-import { createMessageView } from './message-view.js?v=7';
+import { createMessageView } from './message-view.js?v=8';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=8';
 import { createQueueView } from './queue-view.js?v=6';
@@ -86,8 +86,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '123';
-const SW_CACHE_VERSION = 'codex-console-v140';
+const APP_ASSET_VERSION = '124';
+const SW_CACHE_VERSION = 'codex-console-v141';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -166,6 +166,8 @@ const el = {
   topMoreMenu: document.querySelector('#topMoreMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
   messageDisplayButton: document.querySelector('#messageDisplayButton'),
+  collapseMessagesButton: document.querySelector('#collapseMessagesButton'),
+  expandMessagesButton: document.querySelector('#expandMessagesButton'),
   runtimeButton: document.querySelector('#runtimeButton'),
   installAppButton: document.querySelector('#installAppButton'),
   attachmentButton: document.querySelector('#attachmentButton'),
@@ -318,6 +320,7 @@ el.autoFollowBottom.checked = state.autoFollowBottom;
 el.elevatedRun.checked = state.elevated;
 syncSessionViewControls();
 updateMessageDisplayButton();
+updateCollapseActionButtons();
 updateRunSettingsState();
 
 function cacheKey(id) {
@@ -358,6 +361,32 @@ function setMessageCollapsed(message, collapsed) {
   };
   state.messageCollapseStates.set(sessionId, next);
   storageJsonSet(collapseStateKey(sessionId), next);
+}
+
+function setAllConversationMessagesCollapsed(collapsed) {
+  const sessionId = state.activeId;
+  if (!sessionId) return;
+  const states = {
+    ...(loadMessageCollapseStates(sessionId) || {})
+  };
+  for (const message of loadMessages(sessionId)) {
+    const key = messageCollapseId(message);
+    if (!key) continue;
+    if (message.role === 'tool') {
+      states[key] = true;
+      continue;
+    }
+    if (['user', 'assistant'].includes(message.role || '')) {
+      states[key] = collapsed === true;
+    }
+  }
+  state.messageCollapseStates.set(sessionId, states);
+  storageJsonSet(collapseStateKey(sessionId), states);
+  closeTopMoreMenu();
+  renderActive({
+    stickToBottom: false,
+    restoreAnchor: firstVisibleMessageAnchor()
+  });
 }
 
 function loadMessageCollapseStates(sessionId = state.activeId || 'global') {
@@ -928,6 +957,7 @@ function renderSessionButton(session) {
 function renderActiveStatus(session = getActiveSession()) {
   topbarView.renderActiveStatus(session);
   updateMessageDisplayButton();
+  updateCollapseActionButtons();
 }
 
 function renderActive(options = {}) {
@@ -2713,6 +2743,12 @@ function updateMessageDisplayButton() {
   el.messageDisplayButton.textContent = brief ? '结论视图开启' : '结论视图';
 }
 
+function updateCollapseActionButtons() {
+  const disabled = !state.activeId;
+  el.collapseMessagesButton.disabled = disabled;
+  el.expandMessagesButton.disabled = disabled;
+}
+
 el.promptForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   await promptActions.sendPrompt(el.promptInput.value);
@@ -2765,6 +2801,14 @@ el.messageDisplayButton.addEventListener('click', () => {
   closeTopMoreMenu();
   updateMessageDisplayButton();
   renderActive({ stickToBottom: shouldFollowNewMessage(state.activeId) });
+});
+
+el.collapseMessagesButton.addEventListener('click', () => {
+  setAllConversationMessagesCollapsed(true);
+});
+
+el.expandMessagesButton.addEventListener('click', () => {
+  setAllConversationMessagesCollapsed(false);
 });
 
 el.installAppButton?.addEventListener('click', installAppToHomeScreen);

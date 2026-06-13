@@ -17,7 +17,7 @@ export function createMessageView(actions) {
 
     const role = message.role || 'system';
     const collapsible = isCollapsibleMessage(message);
-    const savedCollapsed = actions.getMessageCollapsed?.(message);
+    const savedCollapsed = message.role === 'tool' ? true : actions.getMessageCollapsed?.(message);
     const defaultCollapsed = typeof savedCollapsed === 'boolean' ? savedCollapsed : isDefaultCollapsedMessage(message);
     const deferredText = collapsible && defaultCollapsed;
     article.innerHTML = `

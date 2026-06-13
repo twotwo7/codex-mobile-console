@@ -42,6 +42,8 @@ async function setFixture(page) {
                   <div class="top-more-menu" role="menu">
                     <button class="top-menu-item active" type="button">已筛选收藏</button>
                     <button class="top-menu-item active" type="button" role="menuitemcheckbox" aria-checked="true">结论视图开启</button>
+                    <button class="top-menu-item" type="button">折叠对话</button>
+                    <button class="top-menu-item" type="button">展开对话</button>
                     <button class="top-menu-item" type="button">运行时信息</button>
                   </div>
                 </div>
