@@ -4,6 +4,7 @@ export function createMessageView(actions) {
   function renderMessage(message, options = {}) {
     const article = document.createElement('article');
     article.className = `message ${message.role || 'system'}`;
+    if (message.variant) article.classList.add(message.variant);
     if (options.animate === false) article.classList.add('no-animate');
     if (message.streaming) article.classList.add('streaming');
     if (message.starred) article.classList.add('starred');

@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=108">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=109">
       </head>
       <body>
         <main class="workspace">
@@ -41,6 +41,7 @@ async function setFixture(page) {
                   <button class="top-more-button" type="button" aria-label="更多会话操作" aria-expanded="true">▾</button>
                   <div class="top-more-menu" role="menu">
                     <button class="top-menu-item active" type="button">已筛选收藏</button>
+                    <button class="top-menu-item active" type="button" role="menuitemcheckbox" aria-checked="true">结论视图开启</button>
                     <button class="top-menu-item" type="button">运行时信息</button>
                   </div>
                 </div>

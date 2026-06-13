@@ -4,7 +4,7 @@ import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
-import { createMessageView } from './message-view.js?v=6';
+import { createMessageView } from './message-view.js?v=7';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=8';
 import { createQueueView } from './queue-view.js?v=6';
@@ -25,6 +25,7 @@ const state = {
   autoFollowBottom: storageGet('cmc.autoFollowBottom', '1') === '1',
   elevated: storageGet('cmc.elevated') === '1',
   showStarredOnly: storageGet('cmc.showStarredOnly') === '1',
+  messageDisplayMode: storageGet('cmc.messageDisplayMode', 'full') === 'brief' ? 'brief' : 'full',
   pendingImages: [],
   pendingFiles: [],
   sending: false,
@@ -85,8 +86,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '121';
-const SW_CACHE_VERSION = 'codex-console-v138';
+const APP_ASSET_VERSION = '123';
+const SW_CACHE_VERSION = 'codex-console-v140';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -164,6 +165,7 @@ const el = {
   topMoreButton: document.querySelector('#topMoreButton'),
   topMoreMenu: document.querySelector('#topMoreMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
+  messageDisplayButton: document.querySelector('#messageDisplayButton'),
   runtimeButton: document.querySelector('#runtimeButton'),
   installAppButton: document.querySelector('#installAppButton'),
   attachmentButton: document.querySelector('#attachmentButton'),
@@ -315,6 +317,7 @@ el.themeSelect.value = state.theme;
 el.autoFollowBottom.checked = state.autoFollowBottom;
 el.elevatedRun.checked = state.elevated;
 syncSessionViewControls();
+updateMessageDisplayButton();
 updateRunSettingsState();
 
 function cacheKey(id) {
@@ -924,6 +927,7 @@ function renderSessionButton(session) {
 
 function renderActiveStatus(session = getActiveSession()) {
   topbarView.renderActiveStatus(session);
+  updateMessageDisplayButton();
 }
 
 function renderActive(options = {}) {
@@ -1162,7 +1166,97 @@ function displayMessages(sessionId) {
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
   const maxRendered = sessionRenderedMessageLimit(sessionId);
   const visible = state.showStarredOnly ? filtered : filtered.slice(-maxRendered);
+  if (!state.showStarredOnly && state.messageDisplayMode === 'brief') {
+    return buildBriefDisplayMessages(visible, sessionId);
+  }
   return mergeDisplayMessages(visible);
+}
+
+function buildBriefDisplayMessages(messages, sessionId) {
+  const rounds = [];
+  let current = null;
+
+  const pushCurrent = () => {
+    if (current?.user || current?.conclusion || current?.outputCount) rounds.push(current);
+  };
+
+  for (const message of messages) {
+    if (message.role === 'user') {
+      pushCurrent();
+      current = {
+        user: message,
+        conclusion: null,
+        outputCount: 0,
+        firstSeq: message.orderSeq || message.seq || 0,
+        lastSeq: message.orderSeq || message.seq || 0
+      };
+      continue;
+    }
+
+    if (!current) {
+      current = {
+        user: null,
+        conclusion: null,
+        outputCount: 0,
+        firstSeq: message.orderSeq || message.seq || 0,
+        lastSeq: message.orderSeq || message.seq || 0
+      };
+    }
+
+    current.lastSeq = message.orderSeq || message.seq || current.lastSeq;
+    if (isCodexOutputMessage(message)) current.outputCount += 1;
+    if (isConclusionMessage(message)) current.conclusion = message;
+  }
+  pushCurrent();
+
+  const runningRoundIndex = isSessionRunning(getActiveSession()) && state.activeId === sessionId ? rounds.length - 1 : -1;
+  const out = [];
+  for (let index = 0; index < rounds.length; index += 1) {
+    const round = rounds[index];
+    if (round.user) out.push(round.user);
+    if (round.conclusion) out.push(round.conclusion);
+    if (index === runningRoundIndex) out.push(briefProgressMessage(round, sessionId, index));
+  }
+  return mergeDisplayMessages(out);
+}
+
+function isCodexOutputMessage(message) {
+  if (!['assistant', 'tool'].includes(message?.role || '')) return false;
+  return String(message.text || '').trim().length > 0;
+}
+
+function isConclusionMessage(message) {
+  if (message?.role !== 'assistant') return false;
+  const text = String(message.text || '').trim();
+  if (!text) return false;
+  return !isStatusOnlyMessage(text);
+}
+
+function isStatusOnlyMessage(text) {
+  return [
+    'Codex run finished.',
+    'Codex run stopped.',
+    'Starting next queued prompt.',
+    'Stop requested.',
+    'Recovered stale run state',
+    'Failed to start Codex',
+    'Codex exited with code'
+  ].some((needle) => text.includes(needle));
+}
+
+function briefProgressMessage(round, sessionId, index) {
+  const count = round?.outputCount || 0;
+  const text = count
+    ? `处理中... 已收到 Codex 输出 ${count} 条`
+    : '处理中... 等待 Codex 输出';
+  return {
+    id: `brief-progress-${sessionId}-${round?.firstSeq || index}`,
+    seq: Number(round?.lastSeq || round?.firstSeq || index) + 0.1,
+    role: 'system',
+    variant: 'brief-progress',
+    at: round?.conclusion?.at || round?.user?.at || '',
+    text
+  };
 }
 
 function mergeDisplayMessages(messages) {
@@ -2091,6 +2185,11 @@ function upsertMessage(sessionId, message) {
 
   if (sessionId === state.activeId) {
     const stickToBottom = isNewMessage ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
+    if (state.messageDisplayMode === 'brief') {
+      messageScheduler.scheduleRender(sessionId, { stickToBottom });
+      if (sessionChanged) renderActive({ messages: false });
+      return;
+    }
     if (state.renderingMessages || replacedIndex >= 0 || renderedMessage.role === 'assistant' || renderedMessage.role === 'tool') {
       messageScheduler.scheduleRender(sessionId, { stickToBottom });
       return;
@@ -2132,6 +2231,11 @@ function updateMessage(sessionId, message) {
   const sessionChanged = applySessionStatusFromMessage(sessionId, updatedMessage, messages);
   if (sessionChanged) renderSessions();
   if (sessionId === state.activeId) {
+    if (state.messageDisplayMode === 'brief') {
+      messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
+      if (sessionChanged) renderActive({ messages: false });
+      return;
+    }
     if (sessionChanged) renderActive({ messages: false });
     if (state.renderingMessages) {
       messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
@@ -2600,6 +2704,15 @@ function updateFavoritesButton() {
   el.favoritesButton.textContent = state.showStarredOnly ? '已筛选收藏' : '只看收藏';
 }
 
+function updateMessageDisplayButton() {
+  const brief = state.messageDisplayMode === 'brief';
+  el.messageDisplayButton.classList.toggle('active', brief);
+  el.messageDisplayButton.setAttribute('aria-checked', String(brief));
+  el.messageDisplayButton.setAttribute('aria-label', brief ? '当前为结论视图，点击切回完整视图' : '当前为完整视图，点击切到结论视图');
+  el.messageDisplayButton.title = brief ? '当前显示用户输入和 Codex 结论' : '隐藏过程，只看输入和结论';
+  el.messageDisplayButton.textContent = brief ? '结论视图开启' : '结论视图';
+}
+
 el.promptForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   await promptActions.sendPrompt(el.promptInput.value);
@@ -2644,6 +2757,14 @@ el.favoritesButton.addEventListener('click', () => {
   storageSet('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
   closeTopMoreMenu();
   renderActive();
+});
+
+el.messageDisplayButton.addEventListener('click', () => {
+  state.messageDisplayMode = state.messageDisplayMode === 'brief' ? 'full' : 'brief';
+  storageSet('cmc.messageDisplayMode', state.messageDisplayMode);
+  closeTopMoreMenu();
+  updateMessageDisplayButton();
+  renderActive({ stickToBottom: shouldFollowNewMessage(state.activeId) });
 });
 
 el.installAppButton?.addEventListener('click', installAppToHomeScreen);

@@ -1000,6 +1000,24 @@ button:disabled {
   white-space: nowrap;
 }
 
+.top-menu-item[role="menuitemcheckbox"] {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.top-menu-item[role="menuitemcheckbox"]::before {
+  content: "";
+  width: 14px;
+  color: var(--accent-2);
+  font-weight: 800;
+}
+
+.top-menu-item[role="menuitemcheckbox"][aria-checked="true"]::before {
+  content: "✓";
+}
+
 .top-menu-item.active {
   color: var(--accent-2);
 }
@@ -1267,6 +1285,26 @@ button:disabled {
 .message.user .message-text {
   font-family: inherit;
   font-size: 15px;
+}
+
+.message.brief-progress {
+  align-self: flex-start;
+  max-width: min(92%, 460px);
+  border-style: dashed;
+  background: var(--tool-bg);
+}
+
+.message.brief-progress .message-head,
+.message.brief-progress .message-summary {
+  display: none;
+}
+
+.message.brief-progress .message-text {
+  padding: 6px 10px;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .prompt-bar {
