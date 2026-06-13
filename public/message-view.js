@@ -345,42 +345,135 @@ function renderMarkdownText(container, text) {
 
 function appendInlineMarkdown(container, text) {
   const value = String(text || '');
-  const pattern = /(\*\*[^*\n][\s\S]*?\*\*|`[^`\n]+`|\[[^\]\n]+]\((https?:\/\/[^\s)]+|\/api\/uploads\/[^)\s]+)\)|https?:\/\/[^\s<>"'`]+|\/api\/uploads\/[A-Za-z0-9%_.~!$&()*+,;=:@/-]+)/gi;
-  let lastIndex = 0;
-  for (const match of value.matchAll(pattern)) {
-    const token = match[0];
-    const start = match.index || 0;
-    if (start > lastIndex) container.append(document.createTextNode(value.slice(lastIndex, start)));
+  let index = 0;
+  let pendingText = '';
 
-    const linkMatch = token.match(/^\[([^\]\n]+)]\((.+)\)$/);
-    if (linkMatch) {
-      container.append(createLink(linkMatch[2], linkMatch[1]));
-    } else if (token.startsWith('**') && token.endsWith('**')) {
+  const flushText = () => {
+    if (!pendingText) return;
+    container.append(document.createTextNode(pendingText));
+    pendingText = '';
+  };
+
+  while (index < value.length) {
+    const strongEnd = value.startsWith('**', index) ? value.indexOf('**', index + 2) : -1;
+    if (strongEnd > index + 2 && !value.slice(index + 2, strongEnd).includes('\n')) {
+      flushText();
       const strong = document.createElement('strong');
-      strong.textContent = token.slice(2, -2);
+      strong.textContent = value.slice(index + 2, strongEnd);
       container.append(strong);
-    } else if (token.startsWith('`') && token.endsWith('`')) {
-      const code = document.createElement('code');
-      code.textContent = token.slice(1, -1);
-      container.append(code);
-    } else {
-      const { href, label, suffix } = normalizeLink(token);
-      container.append(createLink(href, label));
-      if (suffix) container.append(document.createTextNode(suffix));
+      index = strongEnd + 2;
+      continue;
     }
-    lastIndex = start + token.length;
+
+    const codeEnd = value[index] === '`' ? value.indexOf('`', index + 1) : -1;
+    if (codeEnd > index + 1 && !value.slice(index + 1, codeEnd).includes('\n')) {
+      flushText();
+      const code = document.createElement('code');
+      code.textContent = value.slice(index + 1, codeEnd);
+      container.append(code);
+      index = codeEnd + 1;
+      continue;
+    }
+
+    const markdownLink = parseMarkdownLink(value, index);
+    if (markdownLink) {
+      flushText();
+      container.append(createLink(markdownLink.href, markdownLink.label));
+      index = markdownLink.end;
+      continue;
+    }
+
+    const autoLink = parseAngleAutolink(value, index);
+    if (autoLink) {
+      flushText();
+      container.append(createLink(autoLink.href, autoLink.href));
+      index = autoLink.end;
+      continue;
+    }
+
+    const bareLink = parseBareLink(value, index);
+    if (bareLink) {
+      flushText();
+      container.append(createLink(bareLink.href, bareLink.label));
+      if (bareLink.suffix) container.append(document.createTextNode(bareLink.suffix));
+      index = bareLink.end;
+      continue;
+    }
+
+    pendingText += value[index];
+    index += 1;
   }
-  if (lastIndex < value.length) container.append(document.createTextNode(value.slice(lastIndex)));
+  flushText();
 }
 
 function createLink(href, label) {
-  const safeHref = String(href || '');
+  const safeHref = normalizeLinkHref(href);
   const link = document.createElement('a');
   link.href = safeHref;
   link.textContent = label || safeHref;
   link.target = '_blank';
   link.rel = 'noopener';
   return link;
+}
+
+function parseMarkdownLink(value, start) {
+  if (value[start] !== '[') return null;
+  const labelEnd = value.indexOf(']', start + 1);
+  if (labelEnd <= start + 1 || value[labelEnd + 1] !== '(') return null;
+  const label = value.slice(start + 1, labelEnd);
+  let cursor = labelEnd + 2;
+  let href = '';
+  let end = -1;
+
+  if (value[cursor] === '<') {
+    const hrefEnd = value.indexOf('>', cursor + 1);
+    if (hrefEnd < 0 || value[hrefEnd + 1] !== ')') return null;
+    href = value.slice(cursor + 1, hrefEnd).trim();
+    end = hrefEnd + 2;
+  } else {
+    const hrefStart = cursor;
+    let depth = 0;
+    for (; cursor < value.length; cursor += 1) {
+      const char = value[cursor];
+      if (char === '\n') return null;
+      if (char === '(') {
+        depth += 1;
+        continue;
+      }
+      if (char === ')') {
+        if (depth > 0) {
+          depth -= 1;
+          continue;
+        }
+        href = value.slice(hrefStart, cursor).trim();
+        end = cursor + 1;
+        break;
+      }
+    }
+  }
+
+  href = normalizeLinkHref(href);
+  if (end < 0 || !isAllowedLink(href)) return null;
+  return { end, href, label };
+}
+
+function parseAngleAutolink(value, start) {
+  if (value[start] !== '<') return null;
+  const end = value.indexOf('>', start + 1);
+  if (end < 0) return null;
+  const href = normalizeLinkHref(value.slice(start + 1, end).trim());
+  if (!isAllowedLink(href)) return null;
+  return { end: end + 1, href };
+}
+
+function parseBareLink(value, start) {
+  const rest = value.slice(start);
+  if (!/^https?:\/\//i.test(rest) && !rest.startsWith('/api/uploads/')) return null;
+  let end = start;
+  while (end < value.length && !/[\s<>"'`]/.test(value[end])) end += 1;
+  const { href, label, suffix } = normalizeBareLink(value.slice(start, end));
+  if (!isAllowedLink(href)) return null;
+  return { end, href, label, suffix };
 }
 
 function renderCodeBlock(code, language) {
@@ -441,10 +534,10 @@ function isTableSeparator(line) {
   return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell.trim()));
 }
 
-function normalizeLink(raw) {
-  let label = String(raw || '');
+function normalizeBareLink(raw) {
+  let label = normalizeLinkHref(raw);
   let suffix = '';
-  while (label && /[.,;:!?，。；：！？）\])]/.test(label.at(-1))) {
+  while (label && shouldTrimLinkTail(label)) {
     suffix = label.at(-1) + suffix;
     label = label.slice(0, -1);
   }
@@ -453,6 +546,29 @@ function normalizeLink(raw) {
     label,
     suffix
   };
+}
+
+function normalizeLinkHref(value) {
+  let href = String(value || '').trim();
+  if (href.startsWith('<') && href.endsWith('>')) href = href.slice(1, -1).trim();
+  return href;
+}
+
+function isAllowedLink(href) {
+  return /^https?:\/\//i.test(href || '') || String(href || '').startsWith('/api/uploads/');
+}
+
+function shouldTrimLinkTail(value) {
+  const char = value.at(-1);
+  if (!char) return false;
+  if (/[.,;:!?，。；：！？>]/.test(char)) return true;
+  if (char === ')') return countChar(value, ')') > countChar(value, '(');
+  if (char === ']') return countChar(value, ']') > countChar(value, '[');
+  return false;
+}
+
+function countChar(value, char) {
+  return [...String(value || '')].filter((item) => item === char).length;
 }
 
 function imageSource(image) {
