@@ -86,8 +86,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '125';
-const SW_CACHE_VERSION = 'codex-console-v142';
+const APP_ASSET_VERSION = '126';
+const SW_CACHE_VERSION = 'codex-console-v143';
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -3003,8 +3003,8 @@ async function loadDirectories(dir) {
     for (const entry of data.entries || []) {
       const button = document.createElement('button');
       button.type = 'button';
-      button.className = 'directory-item';
-      button.textContent = entry.name;
+      button.className = `directory-item${entry.symlink ? ' symlink' : ''}`;
+      button.textContent = entry.symlink ? `↪ ${entry.name}` : entry.name;
       button.addEventListener('click', () => loadDirectories(entry.path));
       el.directoryList.append(button);
     }

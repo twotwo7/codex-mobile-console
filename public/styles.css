@@ -2306,6 +2306,10 @@ button:disabled {
   font-weight: 700;
 }
 
+.directory-item.symlink {
+  color: var(--accent-2);
+}
+
 .directory-empty {
   margin: 8px 0;
   color: var(--muted);

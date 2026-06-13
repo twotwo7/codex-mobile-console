@@ -1927,10 +1927,20 @@ async function listDirectories(dir) {
   const entries = [];
   const items = await readdir(current, { withFileTypes: true });
   for (const item of items) {
-    if (!item.isDirectory()) continue;
     if (item.name === 'node_modules' || item.name === '.git') continue;
     const full = path.join(current, item.name);
-    entries.push({ name: item.name, path: full });
+    let isDirectory = item.isDirectory();
+    let isSymlink = false;
+    if (!isDirectory && item.isSymbolicLink()) {
+      isSymlink = true;
+      try {
+        isDirectory = (await stat(full)).isDirectory();
+      } catch {
+        isDirectory = false;
+      }
+    }
+    if (!isDirectory) continue;
+    entries.push({ name: item.name, path: full, symlink: isSymlink });
   }
   entries.sort((a, b) => a.name.localeCompare(b.name));
   return {
