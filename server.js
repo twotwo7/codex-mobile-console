@@ -127,6 +127,49 @@ function normalizeStorageSettings(value = {}) {
   };
 }
 
+function cleanShortString(value, limit = 120) {
+  return String(value || '').trim().replace(/\s+/g, ' ').slice(0, limit);
+}
+
+function cleanLineList(value, limit = 12) {
+  const source = Array.isArray(value) ? value : String(value || '').split(/\r?\n/);
+  return source
+    .map((item) => String(item || '').trim())
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+function cleanConfigOverrides(value) {
+  return cleanLineList(value, 20)
+    .filter((item) => /^[A-Za-z0-9_.-]+\s*=/.test(item))
+    .map((item) => item.replace(/\s*=\s*/, '='));
+}
+
+function normalizeSessionConfig(value = {}, current = {}) {
+  const sandbox = ['read-only', 'workspace-write', 'danger-full-access'].includes(value.sandbox)
+    ? value.sandbox
+    : current.sandbox || 'workspace-write';
+  const approval = ['untrusted', 'on-request', 'on-failure', 'never'].includes(value.approval)
+    ? value.approval
+    : current.approval || 'on-request';
+  const reasoningEffort = ['', 'minimal', 'low', 'medium', 'high'].includes(value.reasoningEffort)
+    ? value.reasoningEffort
+    : current.reasoningEffort || '';
+
+  return {
+    model: cleanShortString(value.model ?? current.model ?? '', 100),
+    profile: cleanShortString(value.profile ?? current.profile ?? '', 80),
+    reasoningEffort,
+    sandbox,
+    approval,
+    addDirs: cleanLineList(value.addDirs ?? current.addDirs ?? [], 10),
+    configOverrides: cleanConfigOverrides(value.configOverrides ?? current.configOverrides ?? []),
+    strictConfig: value.strictConfig === undefined ? current.strictConfig === true : value.strictConfig === true,
+    ignoreUserConfig: value.ignoreUserConfig === undefined ? current.ignoreUserConfig === true : value.ignoreUserConfig === true,
+    ignoreRules: value.ignoreRules === undefined ? current.ignoreRules === true : value.ignoreRules === true
+  };
+}
+
 function clampInteger(value, min, max, fallback) {
   const next = Number(value);
   if (!Number.isFinite(next)) return fallback;
@@ -448,8 +491,15 @@ function publicSession(session) {
     title: session.title,
     cwd: session.cwd,
     model: session.model || '',
+    profile: session.profile || '',
+    reasoningEffort: session.reasoningEffort || '',
     sandbox: session.sandbox,
     approval: session.approval,
+    addDirs: Array.isArray(session.addDirs) ? session.addDirs : [],
+    configOverrides: Array.isArray(session.configOverrides) ? session.configOverrides : [],
+    strictConfig: session.strictConfig === true,
+    ignoreUserConfig: session.ignoreUserConfig === true,
+    ignoreRules: session.ignoreRules === true,
     codexSessionId: session.codexSessionId || '',
     status: effectiveStatus,
     storedStatus: session.status,
@@ -722,8 +772,15 @@ function publicExternalSession(session) {
     title: state.codexSessionTitles?.[session.codexSessionId] || session.title,
     cwd: session.cwd,
     model: '',
+    profile: '',
+    reasoningEffort: '',
     sandbox: '',
     approval: '',
+    addDirs: [],
+    configOverrides: [],
+    strictConfig: false,
+    ignoreUserConfig: false,
+    ignoreRules: false,
     codexSessionId: session.codexSessionId,
     status: 'external',
     trashedAt: state.hiddenCodexSessions?.[session.codexSessionId] || '',
@@ -2025,23 +2082,37 @@ function scheduleServiceRestart() {
 }
 
 function buildCodexArgs(session, prompt, options = {}) {
+  const config = normalizeSessionConfig(session);
+  const appendCommonArgs = (args, resume = false) => {
+    if (config.model) args.push('-m', config.model);
+    if (!resume && config.profile) args.push('-p', config.profile);
+    if (config.reasoningEffort) args.push('-c', `model_reasoning_effort="${config.reasoningEffort}"`);
+    if (config.approval) args.push('-c', `approval_policy="${config.approval}"`);
+    if (config.strictConfig) args.push('--strict-config');
+    if (config.ignoreUserConfig) args.push('--ignore-user-config');
+    if (config.ignoreRules) args.push('--ignore-rules');
+    for (const override of config.configOverrides) args.push('-c', override);
+    for (const imagePath of options.imagePaths || []) args.push('--image', imagePath);
+    return args;
+  };
+
   if (session.codexSessionId) {
     const args = ['exec', 'resume', '--json', '--skip-git-repo-check'];
-    if (session.model) args.push('-m', session.model);
+    appendCommonArgs(args, true);
     if (options.elevated) args.push('--dangerously-bypass-approvals-and-sandbox');
-    for (const imagePath of options.imagePaths || []) args.push('--image', imagePath);
+    else if (config.sandbox) args.push('-c', `sandbox_mode="${config.sandbox}"`);
     args.push(session.codexSessionId, '-');
     return args;
   }
 
   const args = ['exec', '--json', '-C', session.cwd, '--skip-git-repo-check'];
-  if (session.model) args.push('-m', session.model);
+  appendCommonArgs(args, false);
   if (options.elevated) {
     args.push('--dangerously-bypass-approvals-and-sandbox');
-  } else if (session.sandbox) {
-    args.push('-s', session.sandbox);
+  } else if (config.sandbox) {
+    args.push('-s', config.sandbox);
   }
-  for (const imagePath of options.imagePaths || []) args.push('--image', imagePath);
+  for (const dir of config.addDirs) args.push('--add-dir', dir);
   args.push('-');
   return args;
 }
@@ -2481,13 +2552,12 @@ async function handleApi(req, res, url) {
     const id = randomUUID();
     const cwd = path.resolve(body.cwd || '/root/Projects');
     const title = String(body.title || path.basename(cwd) || 'Codex session').slice(0, 80);
+    const sessionConfig = normalizeSessionConfig(body);
     state.sessions[id] = {
       id,
       title,
       cwd,
-      model: String(body.model || ''),
-      sandbox: body.sandbox || 'workspace-write',
-      approval: body.approval || 'on-request',
+      ...sessionConfig,
       codexSessionId: '',
       status: 'idle',
       createdAt: nowIso(),
@@ -2503,10 +2573,12 @@ async function handleApi(req, res, url) {
   if (sessionMatch && req.method === 'PATCH') {
     const sessionId = decodeURIComponent(sessionMatch[1]);
     const body = await readJson(req);
-    const title = String(body.title || '').trim().slice(0, 80);
-    if (!title) return json(res, 400, { error: 'empty_title' });
+    const hasConfigPatch = body.config && typeof body.config === 'object';
+    const title = body.title === undefined ? '' : String(body.title || '').trim().slice(0, 80);
+    if (!hasConfigPatch && !title) return json(res, 400, { error: 'empty_title' });
 
     if (sessionId.startsWith('codex:')) {
+      if (hasConfigPatch) return json(res, 400, { error: 'external_session_config_readonly' });
       const codexSessionId = sessionId.slice('codex:'.length);
       state.codexSessionTitles ||= {};
       state.codexSessionTitles[codexSessionId] = title;
@@ -2525,7 +2597,8 @@ async function handleApi(req, res, url) {
 
     const session = state.sessions[sessionId];
     if (!session) return json(res, 404, { error: 'session_not_found' });
-    session.title = title;
+    if (title) session.title = title;
+    if (hasConfigPatch) Object.assign(session, normalizeSessionConfig(body.config, session));
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { session: publicSession(session) });
@@ -2587,8 +2660,15 @@ async function handleApi(req, res, url) {
     });
     if (!session) return json(res, 500, { error: 'fork_import_failed' });
     session.model = sourceSession?.model || session.model || '';
+    session.profile = sourceSession?.profile || session.profile || '';
+    session.reasoningEffort = sourceSession?.reasoningEffort || session.reasoningEffort || '';
     session.sandbox = sourceSession?.sandbox || session.sandbox || 'workspace-write';
     session.approval = sourceSession?.approval || session.approval || 'on-request';
+    session.addDirs = Array.isArray(sourceSession?.addDirs) ? [...sourceSession.addDirs] : (session.addDirs || []);
+    session.configOverrides = Array.isArray(sourceSession?.configOverrides) ? [...sourceSession.configOverrides] : (session.configOverrides || []);
+    session.strictConfig = sourceSession?.strictConfig === true || session.strictConfig === true;
+    session.ignoreUserConfig = sourceSession?.ignoreUserConfig === true || session.ignoreUserConfig === true;
+    session.ignoreRules = sourceSession?.ignoreRules === true || session.ignoreRules === true;
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 201, { ok: true, forked, session: publicSession(session) });

@@ -8,9 +8,9 @@ import { createMessageView } from './message-view.js?v=11';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=8';
 import { createQueueView } from './queue-view.js?v=6';
-import { createSessionStateController } from './session-state.js?v=2';
+import { createSessionStateController } from './session-state.js?v=3';
 import { createSkillView } from './skill-view.js?v=3';
-import { createTopbarView } from './topbar-view.js?v=1';
+import { createTopbarView } from './topbar-view.js?v=2';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -24,6 +24,7 @@ const state = {
   theme: storageGet('cmc.theme', 'graphite'),
   autoFollowBottom: storageGet('cmc.autoFollowBottom', '1') === '1',
   elevated: storageGet('cmc.elevated') === '1',
+  defaultRunConfig: storageJsonGet('cmc.defaultRunConfig', {}),
   showStarredOnly: storageGet('cmc.showStarredOnly') === '1',
   messageDisplayMode: storageGet('cmc.messageDisplayMode', 'full') === 'brief' ? 'brief' : 'full',
   pendingImages: [],
@@ -86,8 +87,21 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '128';
-const SW_CACHE_VERSION = 'codex-console-v145';
+const APP_ASSET_VERSION = '129';
+const SW_CACHE_VERSION = 'codex-console-v146';
+
+const DEFAULT_RUN_CONFIG = {
+  model: '',
+  profile: '',
+  sandbox: 'workspace-write',
+  approval: 'on-request',
+  reasoningEffort: '',
+  addDirs: [],
+  configOverrides: [],
+  strictConfig: false,
+  ignoreUserConfig: false,
+  ignoreRules: false
+};
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -178,6 +192,16 @@ const el = {
   fileInput: document.querySelector('#fileInput'),
   imagePreviewStrip: document.querySelector('#imagePreviewStrip'),
   elevatedRun: document.querySelector('#elevatedRun'),
+  defaultModelInput: document.querySelector('#defaultModelInput'),
+  defaultProfileInput: document.querySelector('#defaultProfileInput'),
+  defaultSandboxSelect: document.querySelector('#defaultSandboxSelect'),
+  defaultApprovalSelect: document.querySelector('#defaultApprovalSelect'),
+  defaultReasoningEffortSelect: document.querySelector('#defaultReasoningEffortSelect'),
+  defaultAddDirsInput: document.querySelector('#defaultAddDirsInput'),
+  defaultConfigOverridesInput: document.querySelector('#defaultConfigOverridesInput'),
+  defaultStrictConfigToggle: document.querySelector('#defaultStrictConfigToggle'),
+  defaultIgnoreUserConfigToggle: document.querySelector('#defaultIgnoreUserConfigToggle'),
+  defaultIgnoreRulesToggle: document.querySelector('#defaultIgnoreRulesToggle'),
   stopButton: document.querySelector('#stopButton'),
   sendButton: document.querySelector('#sendButton'),
   skillButton: document.querySelector('#skillButton'),
@@ -230,6 +254,10 @@ const el = {
   runtimeDialog: document.querySelector('#runtimeDialog'),
   closeRuntimeDialog: document.querySelector('#closeRuntimeDialog'),
   runtimePanel: document.querySelector('#runtimePanel'),
+  sessionConfigDialog: document.querySelector('#sessionConfigDialog'),
+  sessionConfigForm: document.querySelector('#sessionConfigForm'),
+  cancelSessionConfig: document.querySelector('#cancelSessionConfig'),
+  sessionConfigState: document.querySelector('#sessionConfigState'),
   queueEditDialog: document.querySelector('#queueEditDialog'),
   queueEditForm: document.querySelector('#queueEditForm'),
   queueEditInput: document.querySelector('#queueEditInput'),
@@ -318,6 +346,8 @@ applyTheme(state.theme);
 el.themeSelect.value = state.theme;
 el.autoFollowBottom.checked = state.autoFollowBottom;
 el.elevatedRun.checked = state.elevated;
+state.defaultRunConfig = normalizeRunConfig(state.defaultRunConfig);
+applyDefaultRunConfigToSettings();
 syncSessionViewControls();
 updateMessageDisplayButton();
 updateCollapseActionButtons();
@@ -395,6 +425,93 @@ function loadMessageCollapseStates(sessionId = state.activeId || 'global') {
   const safeStates = states && typeof states === 'object' ? states : {};
   state.messageCollapseStates.set(sessionId, safeStates);
   return safeStates;
+}
+
+function lineList(value) {
+  const items = Array.isArray(value) ? value : String(value || '').split(/\r?\n/);
+  return items.map((item) => String(item || '').trim()).filter(Boolean);
+}
+
+function normalizeRunConfig(value = {}) {
+  return {
+    ...DEFAULT_RUN_CONFIG,
+    model: String(value.model || '').trim(),
+    profile: String(value.profile || '').trim(),
+    sandbox: ['read-only', 'workspace-write', 'danger-full-access'].includes(value.sandbox) ? value.sandbox : DEFAULT_RUN_CONFIG.sandbox,
+    approval: ['untrusted', 'on-request', 'on-failure', 'never'].includes(value.approval) ? value.approval : DEFAULT_RUN_CONFIG.approval,
+    reasoningEffort: ['', 'minimal', 'low', 'medium', 'high'].includes(value.reasoningEffort) ? value.reasoningEffort : '',
+    addDirs: lineList(value.addDirs),
+    configOverrides: lineList(value.configOverrides),
+    strictConfig: value.strictConfig === true,
+    ignoreUserConfig: value.ignoreUserConfig === true,
+    ignoreRules: value.ignoreRules === true
+  };
+}
+
+function runConfigFromForm(form) {
+  const data = new FormData(form);
+  return normalizeRunConfig({
+    model: data.get('model'),
+    profile: data.get('profile'),
+    sandbox: data.get('sandbox'),
+    approval: data.get('approval'),
+    reasoningEffort: data.get('reasoningEffort'),
+    addDirs: data.get('addDirs'),
+    configOverrides: data.get('configOverrides'),
+    strictConfig: data.get('strictConfig') === 'on',
+    ignoreUserConfig: data.get('ignoreUserConfig') === 'on',
+    ignoreRules: data.get('ignoreRules') === 'on'
+  });
+}
+
+function applyRunConfigToForm(form, config = {}) {
+  const value = normalizeRunConfig(config);
+  if (!form) return;
+  if (form.elements.model) form.elements.model.value = value.model;
+  if (form.elements.profile) form.elements.profile.value = value.profile;
+  if (form.elements.sandbox) form.elements.sandbox.value = value.sandbox;
+  if (form.elements.approval) form.elements.approval.value = value.approval;
+  if (form.elements.reasoningEffort) form.elements.reasoningEffort.value = value.reasoningEffort;
+  if (form.elements.addDirs) form.elements.addDirs.value = value.addDirs.join('\n');
+  if (form.elements.configOverrides) form.elements.configOverrides.value = value.configOverrides.join('\n');
+  if (form.elements.strictConfig) form.elements.strictConfig.checked = value.strictConfig;
+  if (form.elements.ignoreUserConfig) form.elements.ignoreUserConfig.checked = value.ignoreUserConfig;
+  if (form.elements.ignoreRules) form.elements.ignoreRules.checked = value.ignoreRules;
+}
+
+function applyDefaultRunConfigToSettings() {
+  const value = normalizeRunConfig(state.defaultRunConfig);
+  if (el.defaultModelInput) el.defaultModelInput.value = value.model;
+  if (el.defaultProfileInput) el.defaultProfileInput.value = value.profile;
+  if (el.defaultSandboxSelect) el.defaultSandboxSelect.value = value.sandbox;
+  if (el.defaultApprovalSelect) el.defaultApprovalSelect.value = value.approval;
+  if (el.defaultReasoningEffortSelect) el.defaultReasoningEffortSelect.value = value.reasoningEffort;
+  if (el.defaultAddDirsInput) el.defaultAddDirsInput.value = value.addDirs.join('\n');
+  if (el.defaultConfigOverridesInput) el.defaultConfigOverridesInput.value = value.configOverrides.join('\n');
+  if (el.defaultStrictConfigToggle) el.defaultStrictConfigToggle.checked = value.strictConfig;
+  if (el.defaultIgnoreUserConfigToggle) el.defaultIgnoreUserConfigToggle.checked = value.ignoreUserConfig;
+  if (el.defaultIgnoreRulesToggle) el.defaultIgnoreRulesToggle.checked = value.ignoreRules;
+}
+
+function readDefaultRunConfigFromSettings() {
+  return normalizeRunConfig({
+    model: el.defaultModelInput?.value,
+    profile: el.defaultProfileInput?.value,
+    sandbox: el.defaultSandboxSelect?.value,
+    approval: el.defaultApprovalSelect?.value,
+    reasoningEffort: el.defaultReasoningEffortSelect?.value,
+    addDirs: el.defaultAddDirsInput?.value,
+    configOverrides: el.defaultConfigOverridesInput?.value,
+    strictConfig: el.defaultStrictConfigToggle?.checked,
+    ignoreUserConfig: el.defaultIgnoreUserConfigToggle?.checked,
+    ignoreRules: el.defaultIgnoreRulesToggle?.checked
+  });
+}
+
+function saveDefaultRunConfig() {
+  state.defaultRunConfig = readDefaultRunConfigFromSettings();
+  storageJsonSet('cmc.defaultRunConfig', state.defaultRunConfig);
+  updateRunSettingsState();
 }
 
 function saveSessionCache() {
@@ -910,6 +1027,7 @@ function openSessionActionSheet(session) {
     appendSessionActionButton('永久删除', () => deleteSession(session), { danger: true });
   } else {
     appendSessionActionButton('重命名', () => renameSession(session));
+    if (session.source !== 'codex') appendSessionActionButton('配置', () => openSessionConfigDialog(session));
     appendSessionActionButton('Fork', () => forkSession(session));
     appendSessionActionButton('删除', () => deleteSession(session), { danger: true });
   }
@@ -1640,22 +1758,17 @@ function renderServiceRuntime(data) {
         <span>服务 <strong>${escapeHtml(service.version ? `v${service.version}` : service.name || '-')}</strong></span>
         <span>PID <strong>${service.pid || '-'}</strong></span>
         <span>启动 <strong>${escapeHtml(formatDuration(service.uptimeMs || 0))}</strong></span>
-        <span>SSE <strong>${service.sseClients || 0}</strong></span>
         <span>运行 <strong>${service.runningSessions || 0}</strong></span>
-        <span>请求 <strong>${service.activeRequests || 0}/${formatNumber(service.totalRequests || 0)}</strong></span>
+        <span>SSE <strong>${service.sseClients || 0}</strong></span>
         <span>RSS <strong>${escapeHtml(formatBytes(service.memory?.rssBytes || 0))}</strong></span>
-        <span>堆 <strong>${escapeHtml(formatBytes(service.memory?.heapUsedBytes || 0))}</strong></span>
+        <span>磁盘 <strong>${escapeHtml(diskText)}</strong></span>
       </div>
-      <span>Node ${escapeHtml(service.node || '-')} · ${escapeHtml(service.host || '-')}:${service.port || '-'} · 磁盘 ${escapeHtml(diskText)}</span>
+      <span>Node ${escapeHtml(service.node || '-')} · ${escapeHtml(service.host || '-')}:${service.port || '-'} · 请求 ${service.activeRequests || 0}/${formatNumber(service.totalRequests || 0)}</span>
     </div>
   `;
 }
 
 function renderBrowserRuntime(local) {
-  const cacheText = local.cacheNames?.length ? local.cacheNames.slice(-2).join(', ') : '无';
-  const heapText = local.memoryLimitBytes
-    ? `${formatBytes(local.memoryUsedBytes)} / ${formatBytes(local.memoryLimitBytes)}`
-    : '浏览器未开放';
   return `
     <div class="runtime-section">
       <strong>浏览器本地</strong>
@@ -1663,57 +1776,31 @@ function renderBrowserRuntime(local) {
         <span>网络 <strong>${local.online ? '在线' : '离线'}</strong></span>
         <span>页面 <strong>${escapeHtml(local.visibility || '-')}</strong></span>
         <span>SW <strong>${escapeHtml(local.serviceWorker)}</strong></span>
-        <span>缓存 <strong>${local.cacheNames?.length || 0}</strong></span>
-        <span>存储 <strong>${escapeHtml(storageRatioText(local.storageUsageBytes, local.storageQuotaBytes))}</strong></span>
         <span>local <strong>${escapeHtml(formatBytes(local.localStorageBytes || 0))}</strong></span>
-        <span>消息 <strong>${local.currentCachedMessages}/${local.pageTotal || 0}</strong></span>
-        <span>分页 <strong>${local.pageOffset || 0}${local.pageHasMore ? '+' : ''}</strong></span>
+        <span>存储 <strong>${escapeHtml(storageRatioText(local.storageUsageBytes, local.storageQuotaBytes))}</strong></span>
+        <span>本页 <strong>${local.currentCachedMessages}/${local.pageTotal || 0}</strong></span>
+        <span>缓存页 <strong>${local.pageOffset || 0}${local.pageHasMore ? '+' : ''}</strong></span>
       </div>
-      <span>localStorage ${local.cmcLocalStorageKeys}/${local.localStorageKeys} 项 · JS 堆 ${escapeHtml(heapText)} · ${escapeHtml(cacheText)}</span>
+      <span>localStorage ${local.cmcLocalStorageKeys}/${local.localStorageKeys} 项</span>
     </div>
   `;
 }
 
-function renderFrontendRuntime(local) {
+function renderSessionRuntime(data, local) {
+  const session = data.session || {};
+  const active = data.activeRun;
+  const queueCount = Array.isArray(data.queue) ? data.queue.length : 0;
   return `
     <div class="runtime-section">
-      <strong>前端状态</strong>
+      <strong>当前会话</strong>
       <div class="runtime-grid compact">
-        <span>会话 <strong>${escapeHtml(local.activeId || '-')}</strong></span>
-        <span>状态 <strong>${escapeHtml(local.activeStatus || '-')}</strong></span>
-        <span>运行 <strong>${local.activeIsRunning ? '是' : '否'}</strong></span>
-        <span>可停止 <strong>${local.activeCanStop ? '是' : '否'}</strong></span>
+        <span>状态 <strong>${data.running ? (session.status === 'stopping' ? '停止中' : '运行中') : '空闲'}</strong></span>
+        <span>队列 <strong>${queueCount}</strong></span>
         <span>SSE <strong>${escapeHtml(local.eventConnectionStatus || '-')}</strong></span>
         <span>版本 <strong>${escapeHtml(local.appAssetVersion || '-')}</strong></span>
-        <span>渲染 <strong>${local.renderedMessages || 0}</strong></span>
-        <span>队列 <strong>${local.activeQueuedCount || 0}</strong></span>
-        <span>事件 <strong>${local.frontendEventCount || 0}</strong></span>
       </div>
-      <span>事件 ${escapeHtml(formatTime(local.lastEventAt) || '-')} · 主动刷新 ${escapeHtml(formatTime(local.lastContextRefreshAt) || '-')} · 状态快照 ${escapeHtml(formatTime(local.lastSessionSnapshotAt) || '-')} · SW ${escapeHtml(local.swCacheVersion)}</span>
-    </div>
-  `;
-}
-
-function perfText(metric) {
-  if (!metric?.count) return '-';
-  return `${Math.round(metric.lastMs || 0)} / ${Math.round(metric.maxMs || 0)}ms`;
-}
-
-function renderFrontendPerformance(local) {
-  const metrics = local.frontendPerformance?.metrics || {};
-  const renderDetail = metrics.messages_render?.detail;
-  return `
-    <div class="runtime-section">
-      <strong>前端性能</strong>
-      <div class="runtime-grid compact">
-        <span>输入延迟 <strong>${escapeHtml(perfText(metrics.prompt_input_frame))}</strong></span>
-        <span>输入自适应 <strong>${escapeHtml(perfText(metrics.prompt_autosize))}</strong></span>
-        <span>消息渲染 <strong>${escapeHtml(perfText(metrics.messages_render))}</strong></span>
-        <span>上下文刷新 <strong>${escapeHtml(perfText(metrics.context_refresh))}</strong></span>
-        <span>长任务 <strong>${metrics.longtask?.count || 0}</strong></span>
-        <span>最长长任务 <strong>${Math.round(metrics.longtask?.maxMs || 0)}ms</strong></span>
-      </div>
-      <span>数值为最近/最大耗时；最近渲染 ${escapeHtml(renderDetail?.count ? `${renderDetail.count} 条` : '-')}</span>
+      <p>${escapeHtml(active?.prompt || '当前没有运行中的输入')}</p>
+      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0} · 文件 ${active.fileCount || 0}` : '等待下一次发送')}</span>
     </div>
   `;
 }
@@ -1724,24 +1811,6 @@ function renderRuntimeActions() {
       <button class="ghost-button inline" type="button" data-runtime-action="refresh">刷新状态</button>
       <button class="ghost-button inline" type="button" data-runtime-action="reconnect">重连 SSE</button>
       <button class="ghost-button inline danger" type="button" data-runtime-action="clear-cache">清前端缓存</button>
-    </div>
-  `;
-}
-
-function renderFrontendEvents(local) {
-  const events = local.frontendEvents || [];
-  return `
-    <div class="runtime-section">
-      <strong>前端事件</strong>
-      <div class="runtime-event-list">
-        ${events.length ? events.map((event) => `
-          <div class="runtime-event ${escapeHtml(event.level || 'info')}">
-            <span>${escapeHtml(formatTime(event.at) || '-')}</span>
-            <strong>${escapeHtml(event.type || 'event')}</strong>
-            <small>${escapeHtml(summarizeText(event.detail || '', 120))}</small>
-          </div>
-        `).join('') : '<p class="runtime-empty">暂无前端事件。</p>'}
-      </div>
     </div>
   `;
 }
@@ -1795,11 +1864,11 @@ function bindRuntimeActions() {
 }
 
 async function renderRuntimePanel(data) {
-  const active = data.activeRun;
   const processes = data.processes || [];
   const local = await browserRuntimeInfo(data.session?.id || state.activeId);
   el.runtimePanel.innerHTML = `
     ${renderRuntimeActions()}
+    ${renderSessionRuntime(data, local)}
     <div class="runtime-section">
       <strong>Codex 运行时</strong>
       <div class="runtime-grid compact">
@@ -1811,21 +1880,9 @@ async function renderRuntimePanel(data) {
         <span>时长 <strong>${formatDuration(data.uptimeMs || 0)}</strong></span>
       </div>
     </div>
-    ${renderFrontendRuntime(local)}
-    ${renderFrontendPerformance(local)}
-    ${renderBrowserRuntime(local)}
-    ${renderServiceRuntime(data)}
     ${renderTokenUsage(data)}
-    ${renderFrontendEvents(local)}
-    <div class="runtime-section">
-      <strong>当前输入</strong>
-      <p>${escapeHtml(active?.prompt || '无运行中的输入')}</p>
-      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0} · 文件 ${active.fileCount || 0}` : '')}</span>
-    </div>
-    <div class="runtime-section">
-      <strong>队列</strong>
-      <p>${data.queue?.length ? `${data.queue.length} 条等待执行` : '无排队输入'}</p>
-    </div>
+    ${renderServiceRuntime(data)}
+    ${renderBrowserRuntime(local)}
     <div class="runtime-process-list">
       ${processes.length ? processes.map((item) => `
         <div class="runtime-process" style="--depth:${item.depth || 0}">
@@ -2123,9 +2180,16 @@ async function addImageFiles(fileList) {
 }
 
 function updateRunSettingsState() {
-  el.runSettingsState.textContent = el.elevatedRun.checked
-    ? '提权默认开启'
-    : '提权默认关闭';
+  const config = normalizeRunConfig(state.defaultRunConfig);
+  const parts = [
+    el.elevatedRun.checked ? '提权默认开启' : '提权默认关闭',
+    config.model ? `模型 ${config.model}` : '模型跟随 Codex',
+    config.profile ? `Profile ${config.profile}` : '',
+    config.reasoningEffort ? `推理 ${config.reasoningEffort}` : '',
+    config.addDirs.length ? `额外目录 ${config.addDirs.length}` : '',
+    config.configOverrides.length ? `覆盖 ${config.configOverrides.length}` : ''
+  ].filter(Boolean);
+  el.runSettingsState.textContent = parts.join(' · ');
 }
 
 function insertPromptText(text) {
@@ -2655,6 +2719,36 @@ async function renameSession(session) {
   }
 }
 
+function openSessionConfigDialog(session) {
+  if (!session?.id || !el.sessionConfigDialog || !el.sessionConfigForm) return;
+  el.sessionConfigForm.dataset.sessionId = session.id;
+  applyRunConfigToForm(el.sessionConfigForm, session);
+  el.sessionConfigState.textContent = '保存后下一次发送生效。';
+  openModal(el.sessionConfigDialog);
+}
+
+async function saveSessionConfig(event) {
+  event.preventDefault();
+  const sessionId = el.sessionConfigForm?.dataset.sessionId || '';
+  if (!sessionId) return;
+  el.sessionConfigState.textContent = '保存中...';
+  try {
+    const config = runConfigFromForm(el.sessionConfigForm);
+    const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ config })
+    });
+    if (data.session) mergeSessionSnapshot(data.session);
+    saveSessionCache();
+    renderSessions();
+    renderActive({ messages: false });
+    el.sessionConfigState.textContent = '已保存，下一次发送生效。';
+    closeModal(el.sessionConfigDialog);
+  } catch (error) {
+    el.sessionConfigState.textContent = error.message || '保存失败';
+  }
+}
+
 if (!el.loginForm.dataset.fallbackBound) {
   el.loginForm.addEventListener('submit', async (event) => {
     event.preventDefault();
@@ -2873,7 +2967,11 @@ for (const button of el.sessionViewButtons) {
 el.newSessionForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const form = new FormData(el.newSessionForm);
-  const payload = Object.fromEntries(form.entries());
+  const payload = {
+    title: form.get('title'),
+    cwd: form.get('cwd'),
+    ...runConfigFromForm(el.newSessionForm)
+  };
   try {
     const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
     state.sessions.unshift(data.session);
@@ -2900,7 +2998,10 @@ el.sessionActionSheet?.addEventListener('click', (event) => {
 });
 el.closeSessionActionSheet?.addEventListener('click', closeSessionActionSheet);
 el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
-el.newSessionButton.addEventListener('click', () => openModal(el.dialog));
+el.newSessionButton.addEventListener('click', () => {
+  applyRunConfigToForm(el.newSessionForm, state.defaultRunConfig);
+  openModal(el.dialog);
+});
 el.skillManagerButton.addEventListener('click', () => setDrawerPanel('skills'));
 el.drawerSettingsButton.addEventListener('click', () => setDrawerPanel('settings'));
 el.commandButton.addEventListener('click', () => {
@@ -2924,6 +3025,8 @@ el.runtimeButton.addEventListener('click', () => {
   openRuntimeDialog();
 });
 el.closeRuntimeDialog.addEventListener('click', closeRuntimeDialog);
+el.cancelSessionConfig?.addEventListener('click', () => closeModal(el.sessionConfigDialog));
+el.sessionConfigForm?.addEventListener('submit', saveSessionConfig);
 el.runtimeDialog.addEventListener('close', () => {
   clearInterval(state.runtimeTimer);
   state.runtimeTimer = null;
@@ -2947,6 +3050,21 @@ function selectSettingsPage(page) {
 for (const tab of el.settingsTabs) {
   tab.addEventListener('click', () => selectSettingsPage(tab.dataset.settingsTab));
 }
+[
+  el.defaultModelInput,
+  el.defaultProfileInput,
+  el.defaultSandboxSelect,
+  el.defaultApprovalSelect,
+  el.defaultReasoningEffortSelect,
+  el.defaultAddDirsInput,
+  el.defaultConfigOverridesInput,
+  el.defaultStrictConfigToggle,
+  el.defaultIgnoreUserConfigToggle,
+  el.defaultIgnoreRulesToggle
+].filter(Boolean).forEach((node) => {
+  node.addEventListener('change', saveDefaultRunConfig);
+  if (node.tagName === 'TEXTAREA' || node.tagName === 'INPUT') node.addEventListener('input', saveDefaultRunConfig);
+});
 el.refreshStorageButton.addEventListener('click', () => loadStorageStats().catch((error) => {
   el.storageStats.textContent = error.message || '刷新失败';
 }));

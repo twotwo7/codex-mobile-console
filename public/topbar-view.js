@@ -5,6 +5,15 @@ function statusIconMode(mode = '') {
   return 'offline';
 }
 
+function sessionMetaText(session) {
+  if (!session) return '未选择会话';
+  const parts = [];
+  if (session.cwd) parts.push(session.cwd);
+  if (session.model) parts.push(session.model);
+  if (session.profile) parts.push(`p:${session.profile}`);
+  return parts.join(' · ');
+}
+
 export function createTopbarView(options) {
   const {
     el,
@@ -42,7 +51,7 @@ export function createTopbarView(options) {
     }
 
     el.activeTitle.textContent = session.title;
-    el.activeMeta.textContent = session.cwd || '';
+    el.activeMeta.textContent = sessionMetaText(session);
     setBadge(
       isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : getOnline() ? '在线' : '离线',
       isRunning ? 'running' : getOnline() ? 'online' : ''

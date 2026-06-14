@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=112">
+    <link rel="stylesheet" href="/styles.css?v=113">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -96,10 +96,69 @@
               </label>
             </section>
             <section class="settings-page" data-settings-page="run">
-              <p class="settings-page-note">Codex 执行默认项。</p>
+              <p class="settings-page-note">新建会话默认项。</p>
+              <div class="field-grid">
+                <label>
+                  默认模型
+                  <input id="defaultModelInput" name="defaultModel" placeholder="留空使用 Codex 配置">
+                </label>
+                <label>
+                  默认 Profile
+                  <input id="defaultProfileInput" name="defaultProfile" placeholder="例如 work">
+                </label>
+              </div>
+              <div class="field-grid">
+                <label>
+                  默认沙箱
+                  <select id="defaultSandboxSelect" name="defaultSandbox">
+                    <option value="workspace-write">workspace-write</option>
+                    <option value="read-only">read-only</option>
+                    <option value="danger-full-access">danger-full-access</option>
+                  </select>
+                </label>
+                <label>
+                  默认审批
+                  <select id="defaultApprovalSelect" name="defaultApproval">
+                    <option value="on-request">on-request</option>
+                    <option value="never">never</option>
+                    <option value="untrusted">untrusted</option>
+                    <option value="on-failure">on-failure</option>
+                  </select>
+                </label>
+              </div>
+              <label>
+                推理强度
+                <select id="defaultReasoningEffortSelect" name="defaultReasoningEffort">
+                  <option value="">跟随 Codex 配置</option>
+                  <option value="minimal">minimal</option>
+                  <option value="low">low</option>
+                  <option value="medium">medium</option>
+                  <option value="high">high</option>
+                </select>
+              </label>
+              <label>
+                默认额外可写目录
+                <textarea id="defaultAddDirsInput" rows="2" placeholder="每行一个目录"></textarea>
+              </label>
+              <label>
+                默认配置覆盖
+                <textarea id="defaultConfigOverridesInput" rows="3" placeholder='每行一个 key=value，例如 approval_policy="never"'></textarea>
+              </label>
               <label class="settings-checkbox">
                 <input id="elevatedRun" type="checkbox">
                 <span>提权执行</span>
+              </label>
+              <label class="settings-checkbox">
+                <input id="defaultStrictConfigToggle" type="checkbox">
+                <span>严格检查 config.toml</span>
+              </label>
+              <label class="settings-checkbox">
+                <input id="defaultIgnoreUserConfigToggle" type="checkbox">
+                <span>忽略用户 config.toml</span>
+              </label>
+              <label class="settings-checkbox">
+                <input id="defaultIgnoreRulesToggle" type="checkbox">
+                <span>忽略 execpolicy rules</span>
               </label>
               <div id="runSettingsState" class="settings-state-row">提权默认关闭</div>
             </section>
@@ -252,10 +311,122 @@
               <option value="on-request">on-request</option>
               <option value="never">never</option>
               <option value="untrusted">untrusted</option>
+              <option value="on-failure">on-failure</option>
             </select>
           </label>
         </div>
+        <details class="session-config-details">
+          <summary>更多 Codex 配置</summary>
+          <div class="field-grid">
+            <label>
+              Profile
+              <input name="profile" placeholder="例如 work">
+            </label>
+            <label>
+              推理强度
+              <select name="reasoningEffort">
+                <option value="">跟随 Codex 配置</option>
+                <option value="minimal">minimal</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+            </label>
+          </div>
+          <label>
+            额外可写目录
+            <textarea name="addDirs" rows="2" placeholder="每行一个目录"></textarea>
+          </label>
+          <label>
+            配置覆盖
+            <textarea name="configOverrides" rows="3" placeholder='每行一个 key=value，例如 model_reasoning_effort="high"'></textarea>
+          </label>
+          <label class="settings-checkbox">
+            <input name="strictConfig" type="checkbox">
+            <span>严格检查 config.toml</span>
+          </label>
+          <label class="settings-checkbox">
+            <input name="ignoreUserConfig" type="checkbox">
+            <span>忽略用户 config.toml</span>
+          </label>
+          <label class="settings-checkbox">
+            <input name="ignoreRules" type="checkbox">
+            <span>忽略 execpolicy rules</span>
+          </label>
+        </details>
         <button class="primary-wide" type="submit">创建</button>
+      </form>
+    </dialog>
+
+    <dialog id="sessionConfigDialog" class="session-dialog session-config-dialog">
+      <form id="sessionConfigForm" method="dialog">
+        <div class="dialog-head">
+          <h2>会话配置</h2>
+          <button class="icon-button" type="button" id="cancelSessionConfig" aria-label="关闭会话配置">×</button>
+        </div>
+        <div class="field-grid">
+          <label>
+            模型
+            <input name="model" placeholder="留空使用 Codex 默认模型">
+          </label>
+          <label>
+            Profile
+            <input name="profile" placeholder="例如 work">
+          </label>
+        </div>
+        <div class="field-grid">
+          <label>
+            沙箱
+            <select name="sandbox">
+              <option value="workspace-write">workspace-write</option>
+              <option value="read-only">read-only</option>
+              <option value="danger-full-access">danger-full-access</option>
+            </select>
+          </label>
+          <label>
+            审批
+            <select name="approval">
+              <option value="on-request">on-request</option>
+              <option value="never">never</option>
+              <option value="untrusted">untrusted</option>
+              <option value="on-failure">on-failure</option>
+            </select>
+          </label>
+        </div>
+        <label>
+          推理强度
+          <select name="reasoningEffort">
+            <option value="">跟随 Codex 配置</option>
+            <option value="minimal">minimal</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        <label>
+          额外可写目录
+          <textarea name="addDirs" rows="3" placeholder="每行一个目录"></textarea>
+        </label>
+        <label>
+          配置覆盖
+          <textarea name="configOverrides" rows="4" placeholder='每行一个 key=value，例如 approval_policy="never"'></textarea>
+        </label>
+        <div class="session-config-toggles">
+          <label class="settings-checkbox">
+            <input name="strictConfig" type="checkbox">
+            <span>严格配置</span>
+          </label>
+          <label class="settings-checkbox">
+            <input name="ignoreUserConfig" type="checkbox">
+            <span>忽略用户配置</span>
+          </label>
+          <label class="settings-checkbox">
+            <input name="ignoreRules" type="checkbox">
+            <span>忽略 rules</span>
+          </label>
+        </div>
+        <div id="sessionConfigState" class="settings-state-row">保存后下一次发送生效。</div>
+        <button class="primary-wide" type="submit">保存配置</button>
       </form>
     </dialog>
 
@@ -387,6 +558,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=128" type="module"></script>
+    <script src="/app.js?v=129" type="module"></script>
   </body>
 </html>

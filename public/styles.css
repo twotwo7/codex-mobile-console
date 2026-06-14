@@ -2052,6 +2052,10 @@ button:disabled {
   width: min(760px, calc(100% - 22px));
 }
 
+.session-config-dialog {
+  width: min(620px, calc(100% - 22px));
+}
+
 .queue-edit-dialog {
   width: min(620px, calc(100% - 22px));
 }
@@ -2130,6 +2134,31 @@ button:disabled {
   color: var(--danger);
 }
 
+.session-config-details {
+  display: grid;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.session-config-details summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.session-config-details[open] summary {
+  margin-bottom: 2px;
+}
+
+.session-config-toggles {
+  display: grid;
+  gap: 8px;
+}
+
 .runtime-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2187,50 +2216,6 @@ button:disabled {
 .runtime-process small {
   color: var(--muted);
   font-size: 11px;
-}
-
-.runtime-event-list {
-  display: grid;
-  gap: 5px;
-  max-height: 210px;
-  overflow: auto;
-}
-
-.runtime-event {
-  display: grid;
-  grid-template-columns: 58px minmax(88px, 0.7fr) minmax(0, 1.3fr);
-  align-items: center;
-  gap: 7px;
-  min-width: 0;
-  padding: 5px 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.runtime-event:last-child {
-  border-bottom: 0;
-}
-
-.runtime-event strong {
-  margin: 0;
-  min-width: 0;
-  overflow: hidden;
-  color: var(--text);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtime-event small {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.runtime-event.warn strong {
-  color: var(--danger);
 }
 
 .runtime-meter {
