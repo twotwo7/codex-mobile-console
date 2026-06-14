@@ -173,15 +173,40 @@ function normalizeSessionConfig(value = {}, current = {}) {
 function normalizeSessionGoal(value = {}, current = {}) {
   const objective = cleanShortString(value.objective ?? current.objective ?? '', 500);
   const notes = String(value.notes ?? current.notes ?? '').trim().slice(0, 4000);
+  const phase = cleanShortString(value.phase ?? current.phase ?? '', 120);
+  const conclusion = String(value.conclusion ?? current.conclusion ?? '').trim().slice(0, 2000);
+  const rawRisks = Array.isArray(value.risks) ? value.risks : (Array.isArray(current.risks) ? current.risks : []);
+  const risks = rawRisks
+    .map((item) => cleanShortString(item, 240))
+    .filter(Boolean)
+    .slice(0, 12);
+  const rawPlan = Array.isArray(value.plan) ? value.plan : (Array.isArray(current.plan) ? current.plan : []);
+  const plan = rawPlan
+    .map((item) => {
+      const text = typeof item === 'string' ? item : item?.text;
+      const statusValue = typeof item === 'object' ? item.status : '';
+      const status = ['todo', 'doing', 'done', 'blocked'].includes(statusValue) ? statusValue : 'todo';
+      return {
+        text: cleanShortString(text, 240),
+        status
+      };
+    })
+    .filter((item) => item.text)
+    .slice(0, 20);
   const status = ['active', 'paused', 'complete'].includes(value.status)
     ? value.status
     : ['active', 'paused', 'complete'].includes(current.status) ? current.status : (objective ? 'active' : 'paused');
   const updatedAt = value.updatedAt || current.updatedAt || '';
+  const hasContent = objective || notes || phase || conclusion || risks.length || plan.length;
   return {
     objective,
     notes,
+    phase,
+    plan,
+    conclusion,
+    risks,
     status,
-    updatedAt: objective || notes ? updatedAt || nowIso() : ''
+    updatedAt: hasContent ? updatedAt || nowIso() : ''
   };
 }
 

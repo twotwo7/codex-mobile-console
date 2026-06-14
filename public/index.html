@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=115">
+    <link rel="stylesheet" href="/styles.css?v=116">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -223,7 +223,7 @@
                 <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
                   <button id="favoritesButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">只看收藏</button>
                   <button id="messageDisplayButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">结论视图</button>
-                  <button id="sessionGoalButton" class="top-menu-item" type="button" role="menuitem">会话目标</button>
+                  <button id="sessionGoalButton" class="top-menu-item" type="button" role="menuitem">任务面板</button>
                   <button id="collapseMessagesButton" class="top-menu-item" type="button" role="menuitem">折叠对话</button>
                   <button id="expandMessagesButton" class="top-menu-item" type="button" role="menuitem">展开对话</button>
                   <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
@@ -434,28 +434,49 @@
     <dialog id="sessionGoalDialog" class="session-dialog session-goal-dialog">
       <form id="sessionGoalForm" method="dialog">
         <div class="dialog-head">
-          <h2>会话目标</h2>
-          <button class="icon-button" type="button" id="cancelSessionGoal" aria-label="关闭会话目标">×</button>
+          <h2>任务面板</h2>
+          <button class="icon-button" type="button" id="cancelSessionGoal" aria-label="关闭任务面板">×</button>
         </div>
         <label>
           目标
           <textarea name="objective" rows="3" placeholder="这轮会话要达成什么结果"></textarea>
         </label>
+        <div class="field-grid">
+          <label>
+            状态
+            <select name="status">
+              <option value="active">进行中</option>
+              <option value="paused">暂存</option>
+              <option value="complete">完成</option>
+            </select>
+          </label>
+          <label>
+            当前阶段
+            <input name="phase" placeholder="例如 调试 / 等待确认 / 收尾">
+          </label>
+        </div>
         <label>
-          备注
-          <textarea name="notes" rows="5" placeholder="约束、上下文、验收标准等"></textarea>
+          计划
+          <textarea name="planText" rows="5" placeholder="每行一项；可用 [todo] / [doing] / [done] / [blocked] 开头"></textarea>
         </label>
         <label>
-          状态
-          <select name="status">
-            <option value="active">进行中</option>
-            <option value="paused">暂存</option>
-            <option value="complete">完成</option>
-          </select>
+          最近结论
+          <textarea name="conclusion" rows="3" placeholder="Codex 最近一次明确结论或当前结果"></textarea>
         </label>
+        <div class="field-grid">
+          <label>
+            风险/待确认
+            <textarea name="risksText" rows="4" placeholder="每行一个风险、阻塞或需要用户确认的问题"></textarea>
+          </label>
+          <label>
+            备注
+            <textarea name="notes" rows="4" placeholder="约束、上下文、验收标准等"></textarea>
+          </label>
+        </div>
         <div id="sessionGoalState" class="settings-state-row">目标只保存在本应用，用于查看和快速插入。</div>
         <div class="session-goal-actions">
-          <button class="ghost-button inline" type="button" id="insertSessionGoal">插入输入框</button>
+          <button class="ghost-button inline" type="button" id="insertSessionGoal">插入上下文</button>
+          <button class="ghost-button inline" type="button" id="syncSessionGoal">生成更新指令</button>
           <button class="ghost-button inline danger" type="button" id="clearSessionGoal">清空</button>
           <button type="submit" id="saveSessionGoal">保存</button>
         </div>
@@ -590,6 +611,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=131" type="module"></script>
+    <script src="/app.js?v=132" type="module"></script>
   </body>
 </html>

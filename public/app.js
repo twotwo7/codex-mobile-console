@@ -10,7 +10,7 @@ import { createPromptActions } from './prompt-actions.js?v=8';
 import { createQueueView } from './queue-view.js?v=6';
 import { createSessionStateController } from './session-state.js?v=4';
 import { createSkillView } from './skill-view.js?v=3';
-import { createTopbarView } from './topbar-view.js?v=3';
+import { createTopbarView } from './topbar-view.js?v=4';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '131';
-const SW_CACHE_VERSION = 'codex-console-v148';
+const APP_ASSET_VERSION = '132';
+const SW_CACHE_VERSION = 'codex-console-v149';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -264,6 +264,7 @@ const el = {
   cancelSessionGoal: document.querySelector('#cancelSessionGoal'),
   sessionGoalState: document.querySelector('#sessionGoalState'),
   insertSessionGoal: document.querySelector('#insertSessionGoal'),
+  syncSessionGoal: document.querySelector('#syncSessionGoal'),
   clearSessionGoal: document.querySelector('#clearSessionGoal'),
   queueEditDialog: document.querySelector('#queueEditDialog'),
   queueEditForm: document.querySelector('#queueEditForm'),
@@ -1033,7 +1034,7 @@ function openSessionActionSheet(session) {
     appendSessionActionButton('还原', () => restoreSession(session));
     appendSessionActionButton('永久删除', () => deleteSession(session), { danger: true });
   } else {
-    appendSessionActionButton('目标', () => openSessionGoalDialog(session));
+    appendSessionActionButton('任务面板', () => openSessionGoalDialog(session));
     appendSessionActionButton('重命名', () => renameSession(session));
     if (session.source !== 'codex') appendSessionActionButton('配置', () => openSessionConfigDialog(session));
     appendSessionActionButton('Fork', () => forkSession(session));
@@ -2201,9 +2202,24 @@ function updateRunSettingsState() {
 }
 
 function normalizeGoal(goal = {}) {
+  const rawPlan = Array.isArray(goal.plan) ? goal.plan : [];
+  const plan = rawPlan
+    .map((item) => {
+      const text = typeof item === 'string' ? item : item?.text;
+      const status = typeof item === 'object' && ['todo', 'doing', 'done', 'blocked'].includes(item.status) ? item.status : 'todo';
+      return { text: String(text || '').trim(), status };
+    })
+    .filter((item) => item.text);
+  const risks = (Array.isArray(goal.risks) ? goal.risks : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
   return {
     objective: String(goal.objective || '').trim(),
     notes: String(goal.notes || '').trim(),
+    phase: String(goal.phase || '').trim(),
+    plan,
+    conclusion: String(goal.conclusion || '').trim(),
+    risks,
     status: ['active', 'paused', 'complete'].includes(goal.status) ? goal.status : 'active',
     updatedAt: goal.updatedAt || ''
   };
@@ -2215,14 +2231,78 @@ function goalStatusText(status) {
   return '进行中';
 }
 
+function planStatusText(status) {
+  if (status === 'doing') return 'doing';
+  if (status === 'done') return 'done';
+  if (status === 'blocked') return 'blocked';
+  return 'todo';
+}
+
+function planTextFromItems(items = []) {
+  return items.map((item) => `[${planStatusText(item.status)}] ${item.text}`).join('\n');
+}
+
+function planItemsFromText(text = '') {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^\[(todo|doing|done|blocked)\]\s*(.+)$/i);
+      return {
+        status: match ? match[1].toLowerCase() : 'todo',
+        text: match ? match[2].trim() : line
+      };
+    })
+    .filter((item) => item.text);
+}
+
+function goalFromForm() {
+  const form = el.sessionGoalForm;
+  return normalizeGoal({
+    objective: form.elements.objective.value,
+    notes: form.elements.notes.value,
+    status: form.elements.status.value,
+    phase: form.elements.phase.value,
+    plan: planItemsFromText(form.elements.planText.value),
+    conclusion: form.elements.conclusion.value,
+    risks: String(form.elements.risksText.value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
+  });
+}
+
 function goalPromptText(goal = {}) {
   const value = normalizeGoal(goal);
   const lines = [
-    '当前会话目标：',
-    value.objective || '(未填写)',
-    value.notes ? `\n补充说明：\n${value.notes}` : ''
+    '当前任务面板：',
+    `目标：${value.objective || '(未填写)'}`,
+    `状态：${goalStatusText(value.status)}`,
+    value.phase ? `当前阶段：${value.phase}` : '',
+    value.plan.length ? `计划：\n${value.plan.map((item, index) => `${index + 1}. [${planStatusText(item.status)}] ${item.text}`).join('\n')}` : '',
+    value.conclusion ? `最近结论：\n${value.conclusion}` : '',
+    value.risks.length ? `风险/待确认：\n${value.risks.map((item) => `- ${item}`).join('\n')}` : '',
+    value.notes ? `备注：\n${value.notes}` : ''
   ].filter(Boolean);
   return lines.join('\n');
+}
+
+function goalSyncPromptText(goal = {}) {
+  return [
+    '请根据当前会话上下文，更新任务面板。',
+    '只输出一个 JSON 对象，不要输出 Markdown 代码块，不要添加解释文字。',
+    '字段要求：',
+    '{',
+    '  "objective": "当前目标",',
+    '  "status": "active|paused|complete",',
+    '  "phase": "当前阶段",',
+    '  "plan": [{"text":"计划项","status":"todo|doing|done|blocked"}],',
+    '  "conclusion": "最近结论",',
+    '  "risks": ["风险或待确认问题"],',
+    '  "notes": "必要补充"',
+    '}',
+    '',
+    '当前已有任务面板如下，请在此基础上更新：',
+    goalPromptText(goal)
+  ].join('\n');
 }
 
 function openSessionGoalDialog(session = getActiveSession()) {
@@ -2232,9 +2312,13 @@ function openSessionGoalDialog(session = getActiveSession()) {
   el.sessionGoalForm.elements.objective.value = goal.objective;
   el.sessionGoalForm.elements.notes.value = goal.notes;
   el.sessionGoalForm.elements.status.value = goal.status;
+  el.sessionGoalForm.elements.phase.value = goal.phase;
+  el.sessionGoalForm.elements.planText.value = planTextFromItems(goal.plan);
+  el.sessionGoalForm.elements.conclusion.value = goal.conclusion;
+  el.sessionGoalForm.elements.risksText.value = goal.risks.join('\n');
   el.sessionGoalState.textContent = goal.updatedAt
     ? `${goalStatusText(goal.status)} · 更新 ${formatTime(goal.updatedAt)}`
-    : '目标只保存在本应用，用于查看和快速插入。';
+    : '任务面板由本应用维护，不等同于 Codex 内部状态。';
   openModal(el.sessionGoalDialog);
 }
 
@@ -2242,11 +2326,7 @@ async function saveSessionGoal(event, overrideGoal = null) {
   event?.preventDefault?.();
   const sessionId = el.sessionGoalForm?.dataset.sessionId || state.activeId || '';
   if (!sessionId) return;
-  const formGoal = overrideGoal || {
-    objective: el.sessionGoalForm.elements.objective.value,
-    notes: el.sessionGoalForm.elements.notes.value,
-    status: el.sessionGoalForm.elements.status.value
-  };
+  const formGoal = overrideGoal || goalFromForm();
   el.sessionGoalState.textContent = '保存中...';
   try {
     const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {
@@ -2265,12 +2345,12 @@ async function saveSessionGoal(event, overrideGoal = null) {
 }
 
 function insertCurrentSessionGoal() {
-  const goal = normalizeGoal({
-    objective: el.sessionGoalForm?.elements.objective.value,
-    notes: el.sessionGoalForm?.elements.notes.value,
-    status: el.sessionGoalForm?.elements.status.value
-  });
-  insertPromptText(goalPromptText(goal));
+  insertPromptText(goalPromptText(goalFromForm()));
+  closeModal(el.sessionGoalDialog);
+}
+
+function insertGoalSyncPrompt() {
+  insertPromptText(goalSyncPromptText(goalFromForm()));
   closeModal(el.sessionGoalDialog);
 }
 
@@ -3117,11 +3197,16 @@ el.sessionConfigForm?.addEventListener('submit', saveSessionConfig);
 el.cancelSessionGoal?.addEventListener('click', () => closeModal(el.sessionGoalDialog));
 el.sessionGoalForm?.addEventListener('submit', saveSessionGoal);
 el.insertSessionGoal?.addEventListener('click', insertCurrentSessionGoal);
+el.syncSessionGoal?.addEventListener('click', insertGoalSyncPrompt);
 el.clearSessionGoal?.addEventListener('click', () => {
   el.sessionGoalForm.elements.objective.value = '';
   el.sessionGoalForm.elements.notes.value = '';
   el.sessionGoalForm.elements.status.value = 'paused';
-  saveSessionGoal(null, { objective: '', notes: '', status: 'paused' });
+  el.sessionGoalForm.elements.phase.value = '';
+  el.sessionGoalForm.elements.planText.value = '';
+  el.sessionGoalForm.elements.conclusion.value = '';
+  el.sessionGoalForm.elements.risksText.value = '';
+  saveSessionGoal(null, { objective: '', notes: '', status: 'paused', phase: '', plan: [], conclusion: '', risks: [] });
 });
 el.runtimeDialog.addEventListener('close', () => {
   clearInterval(state.runtimeTimer);
