@@ -8,9 +8,9 @@ import { createMessageView } from './message-view.js?v=11';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=8';
 import { createQueueView } from './queue-view.js?v=6';
-import { createSessionStateController } from './session-state.js?v=3';
+import { createSessionStateController } from './session-state.js?v=4';
 import { createSkillView } from './skill-view.js?v=3';
-import { createTopbarView } from './topbar-view.js?v=2';
+import { createTopbarView } from './topbar-view.js?v=3';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '129';
-const SW_CACHE_VERSION = 'codex-console-v146';
+const APP_ASSET_VERSION = '130';
+const SW_CACHE_VERSION = 'codex-console-v147';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -180,6 +180,7 @@ const el = {
   topMoreMenu: document.querySelector('#topMoreMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
   messageDisplayButton: document.querySelector('#messageDisplayButton'),
+  sessionGoalButton: document.querySelector('#sessionGoalButton'),
   collapseMessagesButton: document.querySelector('#collapseMessagesButton'),
   expandMessagesButton: document.querySelector('#expandMessagesButton'),
   runtimeButton: document.querySelector('#runtimeButton'),
@@ -258,6 +259,12 @@ const el = {
   sessionConfigForm: document.querySelector('#sessionConfigForm'),
   cancelSessionConfig: document.querySelector('#cancelSessionConfig'),
   sessionConfigState: document.querySelector('#sessionConfigState'),
+  sessionGoalDialog: document.querySelector('#sessionGoalDialog'),
+  sessionGoalForm: document.querySelector('#sessionGoalForm'),
+  cancelSessionGoal: document.querySelector('#cancelSessionGoal'),
+  sessionGoalState: document.querySelector('#sessionGoalState'),
+  insertSessionGoal: document.querySelector('#insertSessionGoal'),
+  clearSessionGoal: document.querySelector('#clearSessionGoal'),
   queueEditDialog: document.querySelector('#queueEditDialog'),
   queueEditForm: document.querySelector('#queueEditForm'),
   queueEditInput: document.querySelector('#queueEditInput'),
@@ -1026,6 +1033,7 @@ function openSessionActionSheet(session) {
     appendSessionActionButton('还原', () => restoreSession(session));
     appendSessionActionButton('永久删除', () => deleteSession(session), { danger: true });
   } else {
+    appendSessionActionButton('目标', () => openSessionGoalDialog(session));
     appendSessionActionButton('重命名', () => renameSession(session));
     if (session.source !== 'codex') appendSessionActionButton('配置', () => openSessionConfigDialog(session));
     appendSessionActionButton('Fork', () => forkSession(session));
@@ -2192,6 +2200,80 @@ function updateRunSettingsState() {
   el.runSettingsState.textContent = parts.join(' · ');
 }
 
+function normalizeGoal(goal = {}) {
+  return {
+    objective: String(goal.objective || '').trim(),
+    notes: String(goal.notes || '').trim(),
+    status: ['active', 'paused', 'complete'].includes(goal.status) ? goal.status : 'active',
+    updatedAt: goal.updatedAt || ''
+  };
+}
+
+function goalStatusText(status) {
+  if (status === 'complete') return '完成';
+  if (status === 'paused') return '暂存';
+  return '进行中';
+}
+
+function goalPromptText(goal = {}) {
+  const value = normalizeGoal(goal);
+  const lines = [
+    '当前会话目标：',
+    value.objective || '(未填写)',
+    value.notes ? `\n补充说明：\n${value.notes}` : ''
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+function openSessionGoalDialog(session = getActiveSession()) {
+  if (!session?.id || !el.sessionGoalDialog || !el.sessionGoalForm) return;
+  const goal = normalizeGoal(session.goal || {});
+  el.sessionGoalForm.dataset.sessionId = session.id;
+  el.sessionGoalForm.elements.objective.value = goal.objective;
+  el.sessionGoalForm.elements.notes.value = goal.notes;
+  el.sessionGoalForm.elements.status.value = goal.status;
+  el.sessionGoalState.textContent = goal.updatedAt
+    ? `${goalStatusText(goal.status)} · 更新 ${formatTime(goal.updatedAt)}`
+    : '目标只保存在本应用，用于查看和快速插入。';
+  openModal(el.sessionGoalDialog);
+}
+
+async function saveSessionGoal(event, overrideGoal = null) {
+  event?.preventDefault?.();
+  const sessionId = el.sessionGoalForm?.dataset.sessionId || state.activeId || '';
+  if (!sessionId) return;
+  const formGoal = overrideGoal || {
+    objective: el.sessionGoalForm.elements.objective.value,
+    notes: el.sessionGoalForm.elements.notes.value,
+    status: el.sessionGoalForm.elements.status.value
+  };
+  el.sessionGoalState.textContent = '保存中...';
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ goal: formGoal })
+    });
+    if (data.session) mergeSessionSnapshot(data.session);
+    saveSessionCache();
+    renderSessions();
+    renderActive({ messages: false });
+    el.sessionGoalState.textContent = '已保存。';
+    if (!overrideGoal) closeModal(el.sessionGoalDialog);
+  } catch (error) {
+    el.sessionGoalState.textContent = error.message || '保存失败';
+  }
+}
+
+function insertCurrentSessionGoal() {
+  const goal = normalizeGoal({
+    objective: el.sessionGoalForm?.elements.objective.value,
+    notes: el.sessionGoalForm?.elements.notes.value,
+    status: el.sessionGoalForm?.elements.status.value
+  });
+  insertPromptText(goalPromptText(goal));
+  closeModal(el.sessionGoalDialog);
+}
+
 function insertPromptText(text) {
   const value = el.promptInput.value || '';
   const start = el.promptInput.selectionStart ?? value.length;
@@ -2897,6 +2979,11 @@ el.messageDisplayButton.addEventListener('click', () => {
   renderActive({ stickToBottom: shouldFollowNewMessage(state.activeId) });
 });
 
+el.sessionGoalButton?.addEventListener('click', () => {
+  closeTopMoreMenu();
+  openSessionGoalDialog();
+});
+
 el.collapseMessagesButton.addEventListener('click', () => {
   setAllConversationMessagesCollapsed(true);
 });
@@ -3027,6 +3114,15 @@ el.runtimeButton.addEventListener('click', () => {
 el.closeRuntimeDialog.addEventListener('click', closeRuntimeDialog);
 el.cancelSessionConfig?.addEventListener('click', () => closeModal(el.sessionConfigDialog));
 el.sessionConfigForm?.addEventListener('submit', saveSessionConfig);
+el.cancelSessionGoal?.addEventListener('click', () => closeModal(el.sessionGoalDialog));
+el.sessionGoalForm?.addEventListener('submit', saveSessionGoal);
+el.insertSessionGoal?.addEventListener('click', insertCurrentSessionGoal);
+el.clearSessionGoal?.addEventListener('click', () => {
+  el.sessionGoalForm.elements.objective.value = '';
+  el.sessionGoalForm.elements.notes.value = '';
+  el.sessionGoalForm.elements.status.value = 'paused';
+  saveSessionGoal(null, { objective: '', notes: '', status: 'paused' });
+});
 el.runtimeDialog.addEventListener('close', () => {
   clearInterval(state.runtimeTimer);
   state.runtimeTimer = null;

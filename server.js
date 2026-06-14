@@ -170,6 +170,21 @@ function normalizeSessionConfig(value = {}, current = {}) {
   };
 }
 
+function normalizeSessionGoal(value = {}, current = {}) {
+  const objective = cleanShortString(value.objective ?? current.objective ?? '', 500);
+  const notes = String(value.notes ?? current.notes ?? '').trim().slice(0, 4000);
+  const status = ['active', 'paused', 'complete'].includes(value.status)
+    ? value.status
+    : ['active', 'paused', 'complete'].includes(current.status) ? current.status : (objective ? 'active' : 'paused');
+  const updatedAt = value.updatedAt || current.updatedAt || '';
+  return {
+    objective,
+    notes,
+    status,
+    updatedAt: objective || notes ? updatedAt || nowIso() : ''
+  };
+}
+
 function clampInteger(value, min, max, fallback) {
   const next = Number(value);
   if (!Number.isFinite(next)) return fallback;
@@ -480,6 +495,7 @@ function safeCompare(a, b) {
 function publicSession(session) {
   session.messages ||= [];
   session.queue ||= [];
+  const goal = normalizeSessionGoal(session.goal || {});
   const runtimeRunning = running.has(session.id);
   const isStopping = runtimeRunning && session.status === 'stopping';
   const effectiveStatus = runtimeRunning
@@ -500,6 +516,7 @@ function publicSession(session) {
     strictConfig: session.strictConfig === true,
     ignoreUserConfig: session.ignoreUserConfig === true,
     ignoreRules: session.ignoreRules === true,
+    goal,
     codexSessionId: session.codexSessionId || '',
     status: effectiveStatus,
     storedStatus: session.status,
@@ -766,10 +783,12 @@ async function runtimeInfo(session) {
 }
 
 function publicExternalSession(session) {
+  const codexSessionId = session.codexSessionId;
+  state.codexSessionGoals ||= {};
   return {
-    id: `codex:${session.codexSessionId}`,
+    id: `codex:${codexSessionId}`,
     source: 'codex',
-    title: state.codexSessionTitles?.[session.codexSessionId] || session.title,
+    title: state.codexSessionTitles?.[codexSessionId] || session.title,
     cwd: session.cwd,
     model: '',
     profile: '',
@@ -781,9 +800,10 @@ function publicExternalSession(session) {
     strictConfig: false,
     ignoreUserConfig: false,
     ignoreRules: false,
-    codexSessionId: session.codexSessionId,
+    goal: normalizeSessionGoal(state.codexSessionGoals[codexSessionId] || {}),
+    codexSessionId,
     status: 'external',
-    trashedAt: state.hiddenCodexSessions?.[session.codexSessionId] || '',
+    trashedAt: state.hiddenCodexSessions?.[codexSessionId] || '',
     createdAt: session.createdAt || session.updatedAt,
     updatedAt: session.updatedAt,
     lastSeq: 0,
@@ -1965,6 +1985,7 @@ async function importCodexSession(codexSessionId, options = {}) {
     model: '',
     sandbox: 'workspace-write',
     approval: 'on-request',
+    goal: normalizeSessionGoal(state.codexSessionGoals?.[codexSessionId] || {}),
     codexSessionId,
     status: 'idle',
     createdAt: now,
@@ -2558,6 +2579,7 @@ async function handleApi(req, res, url) {
       title,
       cwd,
       ...sessionConfig,
+      goal: normalizeSessionGoal(body.goal || {}),
       codexSessionId: '',
       status: 'idle',
       createdAt: nowIso(),
@@ -2574,24 +2596,31 @@ async function handleApi(req, res, url) {
     const sessionId = decodeURIComponent(sessionMatch[1]);
     const body = await readJson(req);
     const hasConfigPatch = body.config && typeof body.config === 'object';
+    const hasGoalPatch = body.goal && typeof body.goal === 'object';
     const title = body.title === undefined ? '' : String(body.title || '').trim().slice(0, 80);
-    if (!hasConfigPatch && !title) return json(res, 400, { error: 'empty_title' });
+    if (!hasConfigPatch && !hasGoalPatch && !title) return json(res, 400, { error: 'empty_patch' });
 
     if (sessionId.startsWith('codex:')) {
       if (hasConfigPatch) return json(res, 400, { error: 'external_session_config_readonly' });
       const codexSessionId = sessionId.slice('codex:'.length);
-      state.codexSessionTitles ||= {};
-      state.codexSessionTitles[codexSessionId] = title;
-      for (const session of Object.values(state.sessions || {})) {
-        if (session.codexSessionId === codexSessionId) {
-          session.title = title;
-          session.updatedAt = nowIso();
+      if (title) {
+        state.codexSessionTitles ||= {};
+        state.codexSessionTitles[codexSessionId] = title;
+        for (const session of Object.values(state.sessions || {})) {
+          if (session.codexSessionId === codexSessionId) {
+            session.title = title;
+            session.updatedAt = nowIso();
+          }
         }
+      }
+      if (hasGoalPatch) {
+        state.codexSessionGoals ||= {};
+        state.codexSessionGoals[codexSessionId] = normalizeSessionGoal(body.goal, state.codexSessionGoals[codexSessionId] || {});
       }
       scheduleSave();
       const external = await findCodexSession(codexSessionId);
       return json(res, 200, {
-        session: publicExternalSession(external || { codexSessionId, title, cwd: '', updatedAt: nowIso(), createdAt: nowIso() })
+        session: publicExternalSession(external || { codexSessionId, title: title || state.codexSessionTitles?.[codexSessionId] || 'Codex session', cwd: '', updatedAt: nowIso(), createdAt: nowIso() })
       });
     }
 
@@ -2599,6 +2628,7 @@ async function handleApi(req, res, url) {
     if (!session) return json(res, 404, { error: 'session_not_found' });
     if (title) session.title = title;
     if (hasConfigPatch) Object.assign(session, normalizeSessionConfig(body.config, session));
+    if (hasGoalPatch) session.goal = normalizeSessionGoal(body.goal, session.goal || {});
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { session: publicSession(session) });
@@ -2669,6 +2699,7 @@ async function handleApi(req, res, url) {
     session.strictConfig = sourceSession?.strictConfig === true || session.strictConfig === true;
     session.ignoreUserConfig = sourceSession?.ignoreUserConfig === true || session.ignoreUserConfig === true;
     session.ignoreRules = sourceSession?.ignoreRules === true || session.ignoreRules === true;
+    session.goal = normalizeSessionGoal(sourceSession?.goal || {}, session.goal || {});
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 201, { ok: true, forked, session: publicSession(session) });

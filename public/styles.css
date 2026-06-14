@@ -2056,6 +2056,33 @@ button:disabled {
   width: min(620px, calc(100% - 22px));
 }
 
+.session-goal-dialog {
+  width: min(620px, calc(100% - 22px));
+}
+
+.session-goal-dialog form {
+  gap: 10px;
+}
+
+.session-goal-dialog textarea {
+  resize: vertical;
+}
+
+.session-goal-dialog textarea[name="objective"] {
+  min-height: 76px;
+}
+
+.session-goal-dialog textarea[name="notes"] {
+  min-height: 116px;
+  max-height: min(38svh, 320px);
+}
+
+.session-goal-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.2fr;
+  gap: 8px;
+}
+
 .queue-edit-dialog {
   width: min(620px, calc(100% - 22px));
 }

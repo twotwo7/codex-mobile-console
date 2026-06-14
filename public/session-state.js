@@ -12,6 +12,7 @@ const SESSION_STATUS_KEYS = [
   'strictConfig',
   'ignoreUserConfig',
   'ignoreRules',
+  'goal',
   'codexSessionId',
   'status',
   'trashedAt',

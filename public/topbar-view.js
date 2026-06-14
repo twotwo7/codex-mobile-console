@@ -11,6 +11,7 @@ function sessionMetaText(session) {
   if (session.cwd) parts.push(session.cwd);
   if (session.model) parts.push(session.model);
   if (session.profile) parts.push(`p:${session.profile}`);
+  if (session.goal?.objective) parts.push(`目标:${session.goal.status === 'complete' ? '完成' : session.goal.status === 'paused' ? '暂存' : '进行中'}`);
   return parts.join(' · ');
 }
 
