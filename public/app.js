@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '130';
-const SW_CACHE_VERSION = 'codex-console-v147';
+const APP_ASSET_VERSION = '131';
+const SW_CACHE_VERSION = 'codex-console-v148';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1818,7 +1818,7 @@ function renderRuntimeActions() {
     <div class="runtime-actions">
       <button class="ghost-button inline" type="button" data-runtime-action="refresh">刷新状态</button>
       <button class="ghost-button inline" type="button" data-runtime-action="reconnect">重连 SSE</button>
-      <button class="ghost-button inline danger" type="button" data-runtime-action="clear-cache">清前端缓存</button>
+      <button class="ghost-button inline danger" type="button" data-runtime-action="clear-cache">清缓存</button>
     </div>
   `;
 }

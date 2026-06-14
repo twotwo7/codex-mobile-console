@@ -2138,22 +2138,17 @@ button:disabled {
 }
 
 .runtime-actions {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 7px;
-  padding: 0 0 2px;
-  background: var(--dialog-bg);
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
 }
 
 .runtime-actions .ghost-button {
-  flex: 1 1 110px;
   min-height: 36px;
   margin-top: 0;
-  padding: 7px 9px;
+  padding: 7px 6px;
   font-size: 12px;
+  white-space: nowrap;
 }
 
 .runtime-actions .danger {
