@@ -1033,19 +1033,34 @@ async function savePromptFiles(files) {
 function promptWithAttachments(prompt, images = [], files = []) {
   const base = String(prompt || '').trim()
     || (images.length ? '请分析这些图片。' : '请分析这些文件。');
-  if (!files.length) return base;
+  const imageText = images.map((image, index) => [
+    `${index + 1}. ${image.name || image.fileName || '未命名图片'}`,
+    `   本机路径: ${image.path}`,
+    `   访问地址: ${image.url || ''}`,
+    `   类型: ${image.type || '未知'}`
+  ].join('\n')).join('\n');
   const fileText = files.map((file, index) => [
     `${index + 1}. ${file.name || file.fileName || '未命名文件'}`,
     `   路径: ${file.path}`,
     `   类型: ${file.type || '未知'}`,
     `   大小: ${uploadSizeText(file.size)}`
   ].join('\n')).join('\n');
-  return [
-    base,
-    '',
-    '附加文件已保存到本机，按需读取这些路径，不要猜测文件内容：',
-    fileText
-  ].join('\n');
+  const sections = [base];
+  if (images.length) {
+    sections.push(
+      '',
+      '附加图片已保存到本机，并且也会通过 Codex 图片输入传入。若需要定位原图，请使用这些路径或地址：',
+      imageText
+    );
+  }
+  if (files.length) {
+    sections.push(
+      '',
+      '附加文件已保存到本机，按需读取这些路径，不要猜测文件内容：',
+      fileText
+    );
+  }
+  return sections.join('\n');
 }
 
 async function collectFiles(root, out = []) {
