@@ -707,7 +707,12 @@ function parseCodexUsageLine(item, current = {}) {
   const modelContextWindow = Number(info.model_context_window || current.modelContextWindow || 0);
   const last = normalizeUsage(info.last_token_usage);
   const total = normalizeUsage(info.total_token_usage);
-  const contextTokens = last.inputTokens || 0;
+  const effectiveInputTokens = last.inputTokens
+    || total.inputTokens
+    || (modelContextWindow && total.totalTokens >= modelContextWindow ? total.totalTokens : 0);
+  const contextTokens = modelContextWindow
+    ? Math.min(modelContextWindow, effectiveInputTokens)
+    : effectiveInputTokens;
   const contextRemaining = modelContextWindow ? Math.max(0, modelContextWindow - contextTokens) : 0;
   const contextPercent = modelContextWindow ? Math.min(100, Math.round((contextTokens / modelContextWindow) * 1000) / 10) : 0;
   return {
@@ -727,6 +732,48 @@ function parseCodexUsageLine(item, current = {}) {
     },
     rateLimits: payload.rate_limits || current.rateLimits || null
   };
+}
+
+function summarizeCodexEvent(event) {
+  if (!event) return null;
+  if (event.type === 'error' && event.message) return String(event.message);
+  if (event.type === 'turn.failed') {
+    return String(event.error?.message || event.message || 'Codex turn failed.');
+  }
+  const payload = event.payload || {};
+  if (payload.type === 'error' && (payload.message || payload.error)) {
+    return String(payload.message || payload.error);
+  }
+  return null;
+}
+
+function updateSessionUsageFromEvent(session, event) {
+  const before = session.lastCodexUsage || {};
+  const next = parseCodexUsageLine(event, before);
+  if (next === before) return;
+  session.lastCodexUsage = next;
+}
+
+function codexContextIsFull(usage) {
+  return Boolean(
+    usage?.modelContextWindow
+    && usage.contextRemaining === 0
+    && usage.contextPercent >= 100
+  );
+}
+
+function codexExitMessage(code, session, lastError) {
+  if (codexContextIsFull(session.lastCodexUsage)) {
+    return [
+      `Codex exited with code ${code}.`,
+      `Codex context is full (${session.lastCodexUsage.contextTokens}/${session.lastCodexUsage.modelContextWindow} tokens).`,
+      'Start a fresh Codex session for this project, or compact this native Codex session before retrying.'
+    ].join('\n');
+  }
+  if (lastError) {
+    return `Codex exited with code ${code}: ${lastError}`;
+  }
+  return `Codex exited with code ${code}.`;
 }
 
 async function codexUsageInfo(codexSessionId) {
@@ -2305,16 +2352,23 @@ function runCodex(session, prompt, options = {}) {
   child.stdin.end();
 
   let stdoutBuffer = '';
+  let lastCodexError = '';
   child.stdout.on('data', (chunk) => {
     stdoutBuffer += chunk.toString('utf8');
     const lines = stdoutBuffer.split('\n');
     stdoutBuffer = lines.pop() || '';
-    for (const line of lines) handleCodexLine(session, line);
+    for (const line of lines) {
+      const result = handleCodexLine(session, line);
+      if (result?.error) lastCodexError = result.error;
+    }
   });
 
   child.stderr.on('data', (chunk) => {
     const text = chunk.toString('utf8').trim();
-    if (text) addMessage(session, { role: 'tool', text, rawType: 'stderr' });
+    if (text) {
+      lastCodexError = text;
+      addMessage(session, { role: 'tool', text, rawType: 'stderr' });
+    }
   });
 
   child.on('error', (error) => {
@@ -2333,7 +2387,10 @@ function runCodex(session, prompt, options = {}) {
 
   child.on('close', (code) => {
     if (!running.has(session.id) && session.status === 'error') return;
-    if (stdoutBuffer.trim()) handleCodexLine(session, stdoutBuffer);
+    if (stdoutBuffer.trim()) {
+      const result = handleCodexLine(session, stdoutBuffer);
+      if (result?.error) lastCodexError = result.error;
+    }
     running.delete(session.id);
     const wasStopping = session.status === 'stopping';
     const next = session.queue?.shift() || null;
@@ -2348,7 +2405,7 @@ function runCodex(session, prompt, options = {}) {
       role: 'system',
       text: next?.prompt
         ? wasStopping ? 'Codex run stopped. Starting next queued prompt.' : 'Codex run finished. Starting next queued prompt.'
-        : wasStopping ? 'Codex run stopped.' : code === 0 ? 'Codex run finished.' : `Codex exited with code ${code}.`,
+        : wasStopping ? 'Codex run stopped.' : code === 0 ? 'Codex run finished.' : codexExitMessage(code, session, lastCodexError),
       status: nextStatus,
       queuedCount: session.queue?.length || 0
     });
@@ -2419,18 +2476,21 @@ function stopRunningSession(session) {
 
 function handleCodexLine(session, line) {
   const text = line.trim();
-  if (!text) return;
+  if (!text) return null;
   let event = null;
   try {
     event = JSON.parse(text);
   } catch {
     addMessage(session, { role: 'tool', text, rawType: 'stdout' });
-    return;
+    return null;
   }
 
   updateCodexSessionId(session, event);
+  updateSessionUsageFromEvent(session, event);
+  const error = summarizeCodexEvent(event);
   const message = deriveMessageFromCodexEvent(event);
   if (message) addMessage(session, message);
+  return { event, error };
 }
 
 async function serveStatic(req, res, pathname) {
