@@ -554,6 +554,8 @@ function publicSession(session) {
     queuedCount: session.queue.length,
     queue: session.queue.map((item) => ({
       id: item.id,
+      messageId: item.messageId || '',
+      clientMessageId: item.clientMessageId || '',
       prompt: item.prompt,
       displayPrompt: item.displayPrompt || item.prompt,
       elevated: item.elevated === true,
@@ -2920,6 +2922,67 @@ async function handleApi(req, res, url) {
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { ok: true, session: publicSession(session) });
+  }
+
+  const messageRetryMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages\/([^/]+)\/retry$/);
+  if (messageRetryMatch && req.method === 'POST') {
+    const session = state.sessions[decodeURIComponent(messageRetryMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    reconcileSessionRunState(session, 'retry');
+    const messageId = decodeURIComponent(messageRetryMatch[2]);
+    const message = (session.messages || []).find((item) => (
+      item.id === messageId
+      || item.clientMessageId === messageId
+      || String(item.seq) === messageId
+    ));
+    if (!message || message.role !== 'user') return json(res, 404, { error: 'message_not_found' });
+    if (!['failed', 'stopped', 'recovered'].includes(message.runState) && message.delivery !== 'failed' && message.failed !== true) {
+      return json(res, 409, { error: 'message_not_retryable', session: publicSession(session) });
+    }
+    const displayPrompt = String(message.text || '').trim()
+      || ((message.images || []).length ? '请分析这些图片。' : '请分析这些文件。');
+    const images = Array.isArray(message.images) ? message.images : [];
+    const files = Array.isArray(message.files) ? message.files : [];
+    const effectivePrompt = promptWithAttachments(displayPrompt, images, files);
+    const retryId = randomUUID();
+    message.retryOf = message.retryOf || message.id || message.clientMessageId || '';
+    message.failed = false;
+    message.pending = false;
+    message.runState = running.has(session.id) ? 'queued' : 'submitted';
+    message.delivery = message.runState;
+    message.updatedAt = nowIso();
+    broadcastEvent(session.id, 'message_update', message);
+    if (running.has(session.id)) {
+      session.queue ||= [];
+      session.queue.push({
+        id: retryId,
+        prompt: effectivePrompt,
+        displayPrompt,
+        elevated: message.elevated === true,
+        images,
+        files,
+        createdAt: nowIso(),
+        clientMessageId: message.clientMessageId || '',
+        messageId: message.id
+      });
+      session.updatedAt = nowIso();
+      scheduleSave();
+      return json(res, 202, { ok: true, queued: true, session: publicSession(session), message });
+    }
+    try {
+      runCodex(session, effectivePrompt, {
+        elevated: message.elevated === true,
+        imagePaths: images.map((image) => image.path).filter(Boolean),
+        files,
+        messageId: message.id,
+        clientMessageId: message.clientMessageId || ''
+      });
+    } catch (error) {
+      session.status = 'error';
+      updateMessageRunState(session, message.id, 'failed', { delivery: 'failed' });
+      addMessage(session, { role: 'system', text: String(error.message || error), status: 'error' });
+    }
+    return json(res, 202, { ok: true, session: publicSession(session), message });
   }
 
   const messagePatchMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages\/([^/]+)$/);

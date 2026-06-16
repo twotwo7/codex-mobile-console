@@ -131,16 +131,39 @@ export function createPromptActions(options) {
     }
   }
 
-  function retryMessage(message) {
-    sendPrompt(message.text || '', {
-      images: (message.retryImages || message.images || []).map((image) => ({
-        ...image,
-        data: image.data || image.dataUrl
-      })).filter((image) => image.data),
-      keepInput: true,
-      keepImages: true,
-      keepFiles: true
-    });
+  async function retryMessage(message) {
+    const session = getActiveSession();
+    const messageId = message.id || message.clientMessageId || message.seq;
+    if (!session || !messageId) return;
+    const localImages = (message.retryImages || message.images || []).map((image) => ({
+      ...image,
+      data: image.data || image.dataUrl
+    })).filter((image) => image.data);
+
+    if (message.failed && !message.id && localImages.length) {
+      sendPrompt(message.text || '', {
+        images: localImages,
+        keepInput: true,
+        keepImages: true,
+        keepFiles: true
+      });
+      return;
+    }
+
+    try {
+      const data = await api(`/api/sessions/${session.id}/messages/${encodeURIComponent(messageId)}/retry`, { method: 'POST' });
+      if (data.message) updateMessage(session.id, data.message);
+      if (data.session) {
+        if (mergeSessionSnapshot(data.session)) renderSessions();
+        renderActive({ messages: false });
+      }
+    } catch (error) {
+      upsertMessage(session.id, {
+        at: new Date().toISOString(),
+        role: 'system',
+        text: error.message || '重试失败'
+      });
+    }
   }
 
   async function cancelQueuedPrompt(queueId) {

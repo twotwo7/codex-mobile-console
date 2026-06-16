@@ -152,10 +152,10 @@ export function createMessageView(actions) {
       popover.append(star);
     }
 
-    if (message.failed && message.role === 'user') {
+    if (isRetryableUserMessage(message)) {
       const retry = document.createElement('button');
       retry.type = 'button';
-      retry.textContent = '重发';
+      retry.textContent = message.failed ? '重发' : '重试';
       retry.addEventListener('click', () => {
         popover.hidden = true;
         actions.retryMessage(message);
@@ -225,6 +225,13 @@ function deliveryLabel(message) {
   if (stateLabel === 'supplement') return '已补充';
   if (stateLabel === 'sent') return '已发送';
   return '';
+}
+
+function isRetryableUserMessage(message) {
+  if (message.role !== 'user') return false;
+  if (message.failed) return true;
+  const stateLabel = message.runState || message.delivery;
+  return ['failed', 'stopped', 'recovered'].includes(stateLabel);
 }
 
 function closeMessageMenus(except) {
