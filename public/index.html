@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=118">
+    <link rel="stylesheet" href="/styles.css?v=119">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -275,9 +275,10 @@
             </div>
             <input id="imageInput" class="visually-hidden" type="file" accept="image/png,image/jpeg,image/webp" multiple>
             <input id="fileInput" class="visually-hidden" type="file" multiple>
-            <label class="bottom-follow-toggle" title="自动跟随底部">
+            <label class="follow-toggle" title="自动跟随底部">
               <input id="autoFollowBottom" type="checkbox">
-              <span>跟随</span>
+              <span class="follow-toggle-icon" aria-hidden="true"></span>
+              <span class="follow-toggle-text">跟随</span>
             </label>
           </div>
           <div id="imagePreviewStrip" class="image-preview-strip" hidden></div>
@@ -624,6 +625,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=136" type="module"></script>
+    <script src="/app.js?v=137" type="module"></script>
   </body>
 </html>

@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=118">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=119">
       </head>
       <body>
         <main class="workspace">
@@ -96,6 +96,11 @@ async function setFixture(page) {
             <div class="prompt-tools">
               <button class="command-button" type="button">命令</button>
               <div class="attachment-tool"><button class="command-button" type="button">附件</button><div class="attachment-menu"><button type="button">图片</button><button type="button">文件</button></div></div>
+              <label class="follow-toggle" title="自动跟随底部">
+                <input type="checkbox" checked>
+                <span class="follow-toggle-icon" aria-hidden="true"></span>
+                <span class="follow-toggle-text">跟随</span>
+              </label>
             </div>
             <div class="image-preview-strip">
               <div class="image-preview-item"><img alt="preview" src="${sampleImage()}"><span>180KB</span><button>×</button></div>
@@ -141,6 +146,12 @@ function assertStableBox(before, after, label, tolerance = 1) {
     if (Math.abs(before[key] - after[key]) > tolerance) {
       throw new Error(`${label} shifted on drawer switch: ${key} ${before[key]} -> ${after[key]}`);
     }
+  }
+}
+
+function assertAlignedBox(a, b, label, tolerance = 2) {
+  if (Math.abs(a.y - b.y) > tolerance || Math.abs(a.height - b.height) > tolerance) {
+    throw new Error(`${label} is not aligned: ${JSON.stringify({ a, b })}`);
   }
 }
 
@@ -239,6 +250,10 @@ async function run() {
 
       await setFixture(page);
       await assertVisibleBox(page, '.prompt-bar', 'prompt bar');
+      const commandButton = await assertVisibleBox(page, '.command-button', 'command button');
+      const followToggle = await assertVisibleBox(page, '.follow-toggle', 'follow toggle');
+      assertAlignedBox(commandButton, followToggle, 'follow toggle');
+      await assertVisibleBox(page, '.follow-toggle-icon', 'follow toggle icon');
       await assertVisibleBox(page, '.queue-select input', 'queue merge checkbox');
       await assertVisibleBox(page, '.queue-merge-button', 'queue merge button');
       await assertVisibleBox(page, '.message-menu-popover', 'message menu');

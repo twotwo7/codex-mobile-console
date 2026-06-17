@@ -1429,30 +1429,68 @@ button:disabled {
   gap: 8px;
 }
 
-.bottom-follow-toggle {
+.follow-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  min-height: 30px;
+  gap: 5px;
+  min-height: 34px;
   margin-left: auto;
-  padding: 0 2px;
-  border: 0;
-  background: transparent;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
   white-space: nowrap;
+  cursor: pointer;
 }
 
-.bottom-follow-toggle input {
-  width: 16px;
-  height: 16px;
-  margin: 0;
-  accent-color: #4da3ff;
+.follow-toggle input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
-.bottom-follow-toggle:has(input:checked) {
+.follow-toggle-icon {
+  width: 17px;
+  height: 17px;
+  border: 2px solid currentColor;
+  border-radius: 5px;
+  display: grid;
+  place-items: center;
+  color: #4da3ff;
+  background: transparent;
+}
+
+.follow-toggle-icon::before {
+  content: '';
+  width: 9px;
+  height: 6px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg) translate(1px, -1px);
+  opacity: 0;
+}
+
+.follow-toggle:has(input:checked) {
   color: var(--text);
+  border-color: color-mix(in srgb, #4da3ff 46%, var(--line));
+}
+
+.follow-toggle:has(input:checked) .follow-toggle-icon {
+  background: color-mix(in srgb, #4da3ff 16%, transparent);
+}
+
+.follow-toggle:has(input:checked) .follow-toggle-icon::before {
+  opacity: 1;
+}
+
+.follow-toggle:focus-within {
+  outline: 2px solid color-mix(in srgb, #4da3ff 50%, transparent);
+  outline-offset: 2px;
 }
 
 .prompt-row {
