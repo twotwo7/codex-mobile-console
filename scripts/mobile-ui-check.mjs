@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=119">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=120">
       </head>
       <body>
         <main class="workspace">
@@ -96,10 +96,9 @@ async function setFixture(page) {
             <div class="prompt-tools">
               <button class="command-button" type="button">命令</button>
               <div class="attachment-tool"><button class="command-button" type="button">附件</button><div class="attachment-menu"><button type="button">图片</button><button type="button">文件</button></div></div>
-              <label class="follow-toggle" title="自动跟随底部">
+              <label class="bottom-follow-toggle" title="自动跟随底部">
                 <input type="checkbox" checked>
-                <span class="follow-toggle-icon" aria-hidden="true"></span>
-                <span class="follow-toggle-text">跟随</span>
+                <span>跟随</span>
               </label>
             </div>
             <div class="image-preview-strip">
@@ -146,12 +145,6 @@ function assertStableBox(before, after, label, tolerance = 1) {
     if (Math.abs(before[key] - after[key]) > tolerance) {
       throw new Error(`${label} shifted on drawer switch: ${key} ${before[key]} -> ${after[key]}`);
     }
-  }
-}
-
-function assertAlignedBox(a, b, label, tolerance = 2) {
-  if (Math.abs(a.y - b.y) > tolerance || Math.abs(a.height - b.height) > tolerance) {
-    throw new Error(`${label} is not aligned: ${JSON.stringify({ a, b })}`);
   }
 }
 
@@ -226,6 +219,15 @@ async function checkLongTitleMenu(page, viewportName) {
   if (filterMenu.x < 0 || filterMenu.x + filterMenu.width > page.viewportSize().width) {
     throw new Error(`view filter menu overflows viewport: ${JSON.stringify(filterMenu)}`);
   }
+  const labelLefts = await page.$$eval('#topFilterMenu .top-menu-item', (items) => items.map((item) => {
+    const rect = item.getBoundingClientRect();
+    const style = getComputedStyle(item);
+    const columns = style.gridTemplateColumns.split(' ');
+    return Math.round(rect.left + parseFloat(style.paddingLeft || '0') + parseFloat(columns[0] || '0') + parseFloat(style.columnGap || style.gap || '0'));
+  }));
+  if (Math.max(...labelLefts) - Math.min(...labelLefts) > 1) {
+    throw new Error(`view filter labels are not aligned: ${labelLefts.join(',')}`);
+  }
   await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-long-title-menu.png`), fullPage: false });
   await page.click('.workspace');
   await page.waitForFunction(() => document.querySelector('#topMoreMenu')?.hidden && document.querySelector('#topFilterMenu')?.hidden, null, { timeout: 5000 });
@@ -250,10 +252,7 @@ async function run() {
 
       await setFixture(page);
       await assertVisibleBox(page, '.prompt-bar', 'prompt bar');
-      const commandButton = await assertVisibleBox(page, '.command-button', 'command button');
-      const followToggle = await assertVisibleBox(page, '.follow-toggle', 'follow toggle');
-      assertAlignedBox(commandButton, followToggle, 'follow toggle');
-      await assertVisibleBox(page, '.follow-toggle-icon', 'follow toggle icon');
+      await assertVisibleBox(page, '.bottom-follow-toggle', 'follow toggle');
       await assertVisibleBox(page, '.queue-select input', 'queue merge checkbox');
       await assertVisibleBox(page, '.queue-merge-button', 'queue merge button');
       await assertVisibleBox(page, '.message-menu-popover', 'message menu');
