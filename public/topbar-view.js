@@ -71,16 +71,39 @@ export function createTopbarView(options) {
     if (!el.topMoreButton || !el.topMoreMenu) return;
     el.topMoreMenu.hidden = !open;
     el.topMoreButton.setAttribute('aria-expanded', String(open));
+    if (open) setTopFilterMenu(false);
   }
 
   function closeTopMoreMenu() {
     setTopMoreMenu(false);
   }
 
+  function setTopFilterMenu(open) {
+    if (!el.topFilterButton || !el.topFilterMenu) return;
+    el.topFilterMenu.hidden = !open;
+    el.topFilterButton.setAttribute('aria-expanded', String(open));
+    if (open) {
+      el.topMoreMenu.hidden = true;
+      el.topMoreButton.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  function closeTopFilterMenu() {
+    setTopFilterMenu(false);
+  }
+
+  function closeTopMenus() {
+    closeTopMoreMenu();
+    closeTopFilterMenu();
+  }
+
   return {
+    closeTopFilterMenu,
+    closeTopMenus,
     closeTopMoreMenu,
     renderActiveStatus,
     setBadge,
+    setTopFilterMenu,
     setTopMoreMenu
   };
 }

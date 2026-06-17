@@ -10,7 +10,7 @@ import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
 import { createSessionStateController } from './session-state.js?v=5';
 import { createSkillView } from './skill-view.js?v=3';
-import { createTopbarView } from './topbar-view.js?v=5';
+import { createTopbarView } from './topbar-view.js?v=6';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '135';
-const SW_CACHE_VERSION = 'codex-console-v152';
+const APP_ASSET_VERSION = '136';
+const SW_CACHE_VERSION = 'codex-console-v153';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -181,6 +181,8 @@ const el = {
   commandButton: document.querySelector('#commandButton'),
   topMoreButton: document.querySelector('#topMoreButton'),
   topMoreMenu: document.querySelector('#topMoreMenu'),
+  topFilterButton: document.querySelector('#topFilterButton'),
+  topFilterMenu: document.querySelector('#topFilterMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
   messageDisplayButton: document.querySelector('#messageDisplayButton'),
   sessionGoalButton: document.querySelector('#sessionGoalButton'),
@@ -423,7 +425,7 @@ function setAllConversationMessagesCollapsed(collapsed) {
   }
   state.messageCollapseStates.set(sessionId, states);
   storageJsonSet(collapseStateKey(sessionId), states);
-  closeTopMoreMenu();
+  closeTopFilterMenu();
   renderActive({
     stickToBottom: false,
     restoreAnchor: firstVisibleMessageAnchor()
@@ -786,7 +788,7 @@ function updateInstallUi() {
 }
 
 async function installAppToHomeScreen() {
-  closeTopMoreMenu();
+  closeTopMenus();
   if (isStandaloneApp()) {
     state.installStatus = '当前已经是桌面应用模式。';
     updateInstallUi();
@@ -2164,7 +2166,7 @@ async function continueTaskInNewSession(data = {}) {
 
 function openQueueEditDialog(item) {
   messageView.closeMessageMenus();
-  closeTopMoreMenu();
+  closeTopMenus();
   closeAttachmentMenu();
   const current = item.displayPrompt || item.prompt || '';
   el.queueEditInput.value = current;
@@ -2256,6 +2258,18 @@ function setTopMoreMenu(open) {
 
 function closeTopMoreMenu() {
   topbarView.closeTopMoreMenu();
+}
+
+function setTopFilterMenu(open) {
+  topbarView.setTopFilterMenu(open);
+}
+
+function closeTopFilterMenu() {
+  topbarView.closeTopFilterMenu();
+}
+
+function closeTopMenus() {
+  topbarView.closeTopMenus();
 }
 
 function setAttachmentMenu(open) {
@@ -3237,13 +3251,13 @@ el.promptInput.addEventListener('keydown', (event) => {
 
 document.addEventListener('click', () => {
   messageView.closeMessageMenus();
-  closeTopMoreMenu();
+  closeTopMenus();
   closeAttachmentMenu();
 });
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') messageView.closeMessageMenus();
-  if (event.key === 'Escape') closeTopMoreMenu();
+  if (event.key === 'Escape') closeTopMenus();
   if (event.key === 'Escape') closeAttachmentMenu();
   if (event.key === 'Escape' && !el.sessionActionSheet?.hidden) closeSessionActionSheet();
   if (event.key === 'Escape' && !el.imageViewer.hidden) closeImageViewer();
@@ -3260,17 +3274,26 @@ el.topMoreMenu.addEventListener('click', (event) => {
   event.stopPropagation();
 });
 
+el.topFilterButton.addEventListener('click', (event) => {
+  event.stopPropagation();
+  setTopFilterMenu(el.topFilterMenu.hidden);
+});
+
+el.topFilterMenu.addEventListener('click', (event) => {
+  event.stopPropagation();
+});
+
 el.favoritesButton.addEventListener('click', () => {
   state.showStarredOnly = !state.showStarredOnly;
   storageSet('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
-  closeTopMoreMenu();
+  closeTopFilterMenu();
   renderActive();
 });
 
 el.messageDisplayButton.addEventListener('click', () => {
   state.messageDisplayMode = state.messageDisplayMode === 'brief' ? 'full' : 'brief';
   storageSet('cmc.messageDisplayMode', state.messageDisplayMode);
-  closeTopMoreMenu();
+  closeTopFilterMenu();
   updateMessageDisplayButton();
   renderActive({ stickToBottom: shouldFollowNewMessage(state.activeId) });
 });
@@ -3293,7 +3316,7 @@ el.installAppSettingsButton?.addEventListener('click', installAppToHomeScreen);
 
 el.attachmentButton.addEventListener('click', (event) => {
   event.stopPropagation();
-  closeTopMoreMenu();
+  closeTopMenus();
   setAttachmentMenu(el.attachmentMenu.hidden);
 });
 
@@ -3405,7 +3428,7 @@ el.drawerRefreshSkillsButton.addEventListener('click', () => {
   refreshSkillsInBackground();
 });
 el.runtimeButton.addEventListener('click', () => {
-  closeTopMoreMenu();
+  closeTopMenus();
   openRuntimeDialog();
 });
 el.closeRuntimeDialog.addEventListener('click', closeRuntimeDialog);

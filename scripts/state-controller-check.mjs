@@ -51,6 +51,8 @@ function createHarness() {
     connectionBadge: fakeElement(),
     favoritesButton: fakeElement(),
     runtimeButton: fakeElement(),
+    topFilterButton: fakeElement(),
+    topFilterMenu: fakeElement(),
     stopButton: fakeElement(),
     topMoreButton: fakeElement(),
     topMoreMenu: fakeElement()
@@ -137,9 +139,17 @@ function createHarness() {
   topbar.setTopMoreMenu(true);
   assert.equal(el.topMoreMenu.hidden, false);
   assert.equal(el.topMoreButton.attrs['aria-expanded'], 'true');
+  assert.equal(el.topFilterMenu.hidden, true);
   topbar.closeTopMoreMenu();
   assert.equal(el.topMoreMenu.hidden, true);
   assert.equal(el.topMoreButton.attrs['aria-expanded'], 'false');
+  topbar.setTopFilterMenu(true);
+  assert.equal(el.topFilterMenu.hidden, false);
+  assert.equal(el.topFilterButton.attrs['aria-expanded'], 'true');
+  assert.equal(el.topMoreMenu.hidden, true);
+  topbar.closeTopMenus();
+  assert.equal(el.topFilterMenu.hidden, true);
+  assert.equal(el.topMoreMenu.hidden, true);
 }
 
 {

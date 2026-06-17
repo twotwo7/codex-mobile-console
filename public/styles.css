@@ -836,7 +836,7 @@ button:disabled {
 .top-title-row {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
+  gap: 2px;
   width: fit-content;
   max-width: 100%;
   min-width: 0;
@@ -951,9 +951,9 @@ button:disabled {
 
 .top-more-button {
   flex: 0 0 auto;
-  width: 24px;
-  min-width: 24px;
-  min-height: 24px;
+  width: 23px;
+  min-width: 23px;
+  min-height: 23px;
   padding: 0;
   border: 1px solid transparent;
   border-radius: 6px;
@@ -961,6 +961,20 @@ button:disabled {
   color: var(--muted);
   font-size: 13px;
   line-height: 1;
+}
+
+.top-filter-button {
+  display: grid;
+  place-items: center;
+}
+
+.top-filter-button::before {
+  content: '';
+  width: 14px;
+  height: 14px;
+  background: currentColor;
+  -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M3 5a1 1 0 0 1 1-1h16a1 1 0 0 1 .8 1.6L14 14.67V20a1 1 0 0 1-1.45.9l-3-1.5A1 1 0 0 1 9 18.5v-3.83L3.2 5.6A1 1 0 0 1 3 5'/%3E%3C/svg%3E") center / contain no-repeat;
+  mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' d='M3 5a1 1 0 0 1 1-1h16a1 1 0 0 1 .8 1.6L14 14.67V20a1 1 0 0 1-1.45.9l-3-1.5A1 1 0 0 1 9 18.5v-3.83L3.2 5.6A1 1 0 0 1 3 5'/%3E%3C/svg%3E") center / contain no-repeat;
 }
 
 .top-more-button:focus-visible,

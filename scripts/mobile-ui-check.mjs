@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=112">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=118">
       </head>
       <body>
         <main class="workspace">
@@ -40,11 +40,18 @@ async function setFixture(page) {
                 <div class="top-more">
                   <button class="top-more-button" type="button" aria-label="更多会话操作" aria-expanded="true">▾</button>
                   <div class="top-more-menu" role="menu">
-                    <button class="top-menu-item active" type="button">已筛选收藏</button>
+                    <button class="top-menu-item" type="button">任务面板</button>
+                    <button class="top-menu-item" type="button">运行时信息</button>
+                    <button class="top-menu-item" type="button">安装到桌面</button>
+                  </div>
+                </div>
+                <div class="top-more top-filter">
+                  <button class="top-more-button top-filter-button" type="button" aria-label="视图筛选" aria-expanded="false"></button>
+                  <div class="top-more-menu top-filter-menu" role="menu" hidden>
+                    <button class="top-menu-item active" type="button" role="menuitemcheckbox" aria-checked="true">已筛选收藏</button>
                     <button class="top-menu-item active" type="button" role="menuitemcheckbox" aria-checked="true">结论视图开启</button>
                     <button class="top-menu-item" type="button">折叠对话</button>
                     <button class="top-menu-item" type="button">展开对话</button>
-                    <button class="top-menu-item" type="button">运行时信息</button>
                   </div>
                 </div>
               </div>
@@ -184,9 +191,13 @@ async function checkLongTitleMenu(page, viewportName) {
   const titleRow = await assertVisibleBox(page, '.top-title-row', 'long title row');
   const title = await assertVisibleBox(page, '#activeTitle', 'long title text');
   const arrow = await assertVisibleBox(page, '#topMoreButton', 'title menu arrow');
+  const filter = await assertVisibleBox(page, '#topFilterButton', 'view filter button');
   const actions = await assertVisibleBox(page, '.top-actions', 'top actions');
   if (arrow.x <= title.x || arrow.x + arrow.width > actions.x - 2) {
     throw new Error(`title menu arrow is not stable: ${JSON.stringify({ title, arrow, actions })}`);
+  }
+  if (filter.x <= arrow.x || filter.x + filter.width > actions.x - 2) {
+    throw new Error(`view filter button is not stable: ${JSON.stringify({ arrow, filter, actions })}`);
   }
   if (titleRow.height > 28) {
     throw new Error(`long title row wrapped: ${JSON.stringify(titleRow)}`);
@@ -197,9 +208,16 @@ async function checkLongTitleMenu(page, viewportName) {
   if (menu.x < 0 || menu.x + menu.width > page.viewportSize().width) {
     throw new Error(`title menu overflows viewport: ${JSON.stringify(menu)}`);
   }
+  await page.click('#topFilterButton');
+  await page.waitForSelector('#topFilterMenu:not([hidden])', { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#topMoreMenu')?.hidden, null, { timeout: 5000 });
+  const filterMenu = await assertVisibleBox(page, '#topFilterMenu', 'view filter menu');
+  if (filterMenu.x < 0 || filterMenu.x + filterMenu.width > page.viewportSize().width) {
+    throw new Error(`view filter menu overflows viewport: ${JSON.stringify(filterMenu)}`);
+  }
   await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-long-title-menu.png`), fullPage: false });
   await page.click('.workspace');
-  await page.waitForFunction(() => document.querySelector('#topMoreMenu')?.hidden, null, { timeout: 5000 });
+  await page.waitForFunction(() => document.querySelector('#topMoreMenu')?.hidden && document.querySelector('#topFilterMenu')?.hidden, null, { timeout: 5000 });
 }
 
 async function run() {
