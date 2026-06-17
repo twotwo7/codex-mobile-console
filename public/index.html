@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=116">
+    <link rel="stylesheet" href="/styles.css?v=117">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -211,6 +211,14 @@
           <div id="sessionActionButtons" class="session-action-buttons"></div>
         </div>
       </div>
+
+      <dialog id="taskDetailDialog" class="session-dialog task-detail-dialog">
+        <div class="dialog-head">
+          <h2>任务详情</h2>
+          <button class="icon-button" type="button" id="closeTaskDetailDialog" aria-label="关闭任务详情">×</button>
+        </div>
+        <div id="taskDetailBody" class="task-detail-body"></div>
+      </dialog>
 
       <main class="workspace">
         <header class="topbar">
@@ -611,6 +619,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=134" type="module"></script>
+    <script src="/app.js?v=135" type="module"></script>
   </body>
 </html>

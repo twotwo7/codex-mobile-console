@@ -1154,17 +1154,19 @@ async function runtimeInfo(session) {
   const rootPid = child?.pid || 0;
   const startedAt = session.activeRun?.startedAt || '';
   const uptimeMs = startedAt ? Math.max(0, Date.now() - Date.parse(startedAt)) : 0;
+  const view = sessionView(session);
   const [processes, codexUsage, service] = await Promise.all([
     processTree(rootPid),
     codexUsageInfo(session.codexSessionId),
     serviceRuntimeInfo()
   ]);
   if (codexUsage?.available) session.lastCodexUsage = codexUsage;
-  const statusSummary = deriveSessionStatusSummary(session);
   return {
-    session: publicSession(session),
-    statusSummary,
-    contextHealth: statusSummary.contextHealth,
+    session: view.session,
+    view,
+    statusSummary: view.statusSummary,
+    contextHealth: view.contextHealth,
+    taskDetail: view.taskDetail,
     running: Boolean(child),
     pid: rootPid,
     killed: child?.killed === true,
@@ -1217,12 +1219,14 @@ function sessionView(session) {
   ensureSessionHarness(session);
   const statusSummary = deriveSessionStatusSummary(session);
   const child = running.get(session.id);
+  const active = activeRunRecord(session);
+  const last = latestRun(session);
   return {
     version: 1,
     session: publicSession(session),
     statusSummary,
-    activeRun: publicRun(activeRunRecord(session)),
-    lastRun: publicRun(latestRun(session)),
+    activeRun: publicRun(active),
+    lastRun: publicRun(last),
     queueSummary: queueSummary(session),
     contextHealth: statusSummary.contextHealth,
     runtimeSummary: {
@@ -1231,7 +1235,15 @@ function sessionView(session) {
       startedAt: session.activeRun?.startedAt || '',
       canStop: statusSummary.canStop
     },
-    recentAudit: session.audit.slice(-20)
+    recentAudit: session.audit.slice(-20),
+    taskDetail: {
+      run: publicRun(active || last),
+      recentEvents: (active || last)?.events?.slice(-12) || [],
+      failure: (active || last)?.errorSummary ? {
+        code: (active || last)?.errorCode || '',
+        summary: (active || last)?.errorSummary || ''
+      } : null
+    }
   };
 }
 
@@ -3096,7 +3108,7 @@ async function handleApi(req, res, url) {
       afterSeq: url.searchParams.get('afterSeq'),
       previousTurn: url.searchParams.get('previousTurn')
     });
-    return json(res, 200, { session: publicSession(session), ...range });
+    return json(res, 200, { session: publicSession(session), view: sessionView(session), ...range });
   }
 
   if (url.pathname === '/api/projects') {
@@ -3214,7 +3226,7 @@ async function handleApi(req, res, url) {
     const limit = Number.isFinite(rawLimit) ? Math.max(0, Math.min(5000, Math.floor(rawLimit))) : 500;
     const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.min(50000, Math.floor(rawOffset))) : 0;
     const page = await displayMessagePage(session, { limit, offset });
-    return json(res, 200, { session: publicSession(session), ...page });
+    return json(res, 200, { session: publicSession(session), view: sessionView(session), ...page });
   }
 
   const runtimeMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/runtime$/);
@@ -3615,7 +3627,7 @@ function handleEvents(req, res, url) {
     'cache-control': 'no-store',
     'connection': 'keep-alive'
   });
-  sendSse(res, 'hello', { sessionId, session: publicSession(session), now: nowIso() });
+  sendSse(res, 'hello', { sessionId, session: publicSession(session), view: sessionView(session), now: nowIso() });
   for (const message of session.messages || []) {
     if (message.seq > after) sendSse(res, 'message', message);
   }

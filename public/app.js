@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '134';
-const SW_CACHE_VERSION = 'codex-console-v151';
+const APP_ASSET_VERSION = '135';
+const SW_CACHE_VERSION = 'codex-console-v152';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -165,6 +165,9 @@ const el = {
   sessionActionTitle: document.querySelector('#sessionActionTitle'),
   sessionActionMeta: document.querySelector('#sessionActionMeta'),
   sessionActionButtons: document.querySelector('#sessionActionButtons'),
+  taskDetailDialog: document.querySelector('#taskDetailDialog'),
+  closeTaskDetailDialog: document.querySelector('#closeTaskDetailDialog'),
+  taskDetailBody: document.querySelector('#taskDetailBody'),
   newSessionButton: document.querySelector('#newSessionButton'),
   skillManagerButton: document.querySelector('#skillManagerButton'),
   logoutButton: document.querySelector('#logoutButton'),
@@ -1035,6 +1038,7 @@ function openSessionActionSheet(session) {
     appendSessionActionButton('还原', () => restoreSession(session));
     appendSessionActionButton('永久删除', () => deleteSession(session), { danger: true });
   } else {
+    appendSessionActionButton('任务详情', () => openTaskDetailDialog(session));
     appendSessionActionButton('任务面板', () => openSessionGoalDialog(session));
     appendSessionActionButton('重命名', () => renameSession(session));
     if (session.source !== 'codex') appendSessionActionButton('配置', () => openSessionConfigDialog(session));
@@ -1226,7 +1230,25 @@ function syncStreamingMarkers() {
 }
 
 function mergeSessionSnapshot(nextSession) {
-  return sessionState.mergeSessionSnapshot(nextSession);
+  let changed = sessionState.mergeSessionSnapshot(nextSession);
+  if (nextSession?.view) changed = mergeSessionView(nextSession.view, nextSession.id) || changed;
+  return changed;
+}
+
+function mergeSessionView(view, fallbackId = '') {
+  if (!view?.session?.id && !fallbackId) return false;
+  return sessionState.mergeSessionSnapshot({
+    ...(view.session || {}),
+    id: view.session?.id || fallbackId,
+    statusSummary: view.statusSummary,
+    activeRun: view.activeRun,
+    lastRun: view.lastRun,
+    contextHealth: view.contextHealth,
+    runCounts: view.session?.runCounts,
+    queuedCount: view.queueSummary?.count ?? view.session?.queuedCount,
+    recentAudit: view.recentAudit,
+    taskDetail: view.taskDetail
+  });
 }
 
 function renderMessages(sessionId, options = {}) {
@@ -1983,6 +2005,163 @@ function renderRuntimeError(error) {
   });
 }
 
+async function fetchRuntimeInfo(session = getActiveSession()) {
+  if (!session?.id) return null;
+  const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/runtime`);
+  if (data.view) mergeSessionView(data.view, session.id);
+  if (data.session && mergeSessionSnapshot(data.session)) {
+    renderSessions();
+    renderActive({ messages: false });
+  }
+  return data;
+}
+
+function renderTaskEvent(event = {}) {
+  const label = event.type || event.status || event.name || 'event';
+  const detail = event.summary || event.message || event.error || event.code || '';
+  return `
+    <li>
+      <span>${escapeHtml(formatTime(event.at || event.time || event.createdAt))}</span>
+      <strong>${escapeHtml(label)}</strong>
+      ${detail ? `<em>${escapeHtml(summarizeText(detail, 96))}</em>` : ''}
+    </li>
+  `;
+}
+
+function taskContinuationText(data = {}) {
+  const session = data.session || getActiveSession() || {};
+  const harness = data.harness || {};
+  const task = session.taskDetail || data.taskDetail || {};
+  const run = harness.activeRun || task.run || session.lastRun || {};
+  const goal = normalizeGoal(session.goal || {});
+  const failure = task.failure || (run.errorSummary ? { code: run.errorCode || '', summary: run.errorSummary } : null);
+  const parts = [
+    '请从旧会话继续完成任务。你现在处在一个新的 Codex 会话中，请先恢复上下文，再继续推进。',
+    '',
+    `旧会话：${session.title || session.id || '未命名会话'}`,
+    `工作目录：${session.cwd || '(未知)'}`,
+    session.codexSessionId ? `旧 Codex 会话 ID：${session.codexSessionId}` : '',
+    '',
+    goal.objective ? goalPromptText(goal) : '',
+    run.promptSummary ? `最近任务输入：\n${run.promptSummary}` : '',
+    failure ? `最近失败：${failure.code || 'unknown'}\n${failure.summary || ''}` : '',
+    '',
+    '请先用简短清单复述你将如何续接，然后继续执行。'
+  ].filter(Boolean);
+  return parts.join('\n');
+}
+
+function renderTaskDetailPanel(data = {}) {
+  const session = data.session || getActiveSession() || {};
+  const summary = data.statusSummary || session.statusSummary || {};
+  const task = session.taskDetail || data.taskDetail || {};
+  const harness = data.harness || {};
+  const run = harness.activeRun || task.run || session.activeRun || session.lastRun || null;
+  const events = task.recentEvents || harness.recentAudit || session.recentAudit || [];
+  const failure = task.failure || (run?.errorSummary ? { code: run.errorCode || '', summary: run.errorSummary } : null);
+  const contextHealth = data.contextHealth || session.contextHealth || summary.contextHealth || {};
+  const canContinue = Boolean(session?.id && session.source !== 'codex');
+
+  el.taskDetailBody.innerHTML = `
+    <section class="task-detail-section">
+      <strong>当前任务</strong>
+      <div class="runtime-grid compact">
+        <span>状态 <strong>${escapeHtml(summary.label || session.status || '-')}</strong></span>
+        <span>队列 <strong>${summary.queueCount ?? session.queuedCount ?? 0}</strong></span>
+        <span>上下文 <strong>${escapeHtml(contextHealth.label || '未知')}</strong></span>
+        <span>运行 <strong>${escapeHtml(run?.status || '无')}</strong></span>
+      </div>
+      <p>${escapeHtml(run?.promptSummary || '当前没有正在执行或最近失败的任务摘要。')}</p>
+    </section>
+    ${failure ? `
+      <section class="task-detail-section danger">
+        <strong>失败信息</strong>
+        <p>${escapeHtml([failure.code, failure.summary].filter(Boolean).join(' · ') || '最近任务失败。')}</p>
+      </section>
+    ` : ''}
+    <section class="task-detail-section">
+      <strong>最近事件</strong>
+      ${events.length ? `<ol class="task-event-list">${events.slice(-8).reverse().map(renderTaskEvent).join('')}</ol>` : '<p>暂无事件。</p>'}
+    </section>
+    <div class="runtime-actions">
+      <button class="ghost-button inline" type="button" data-task-action="refresh">刷新</button>
+      <button class="ghost-button inline" type="button" data-task-action="continue"${canContinue ? '' : ' disabled'}>新会话继续</button>
+      <button class="ghost-button inline" type="button" data-task-action="copy">复制续接提示</button>
+    </div>
+  `;
+
+  el.taskDetailBody.querySelector('[data-task-action="refresh"]')?.addEventListener('click', () => openTaskDetailDialog(session));
+  el.taskDetailBody.querySelector('[data-task-action="copy"]')?.addEventListener('click', async () => {
+    const prompt = taskContinuationText({ ...data, session });
+    await navigator.clipboard?.writeText(prompt).catch(() => {});
+  });
+  el.taskDetailBody.querySelector('[data-task-action="continue"]')?.addEventListener('click', async () => {
+    await continueTaskInNewSession({ ...data, session });
+  });
+}
+
+async function openTaskDetailDialog(session = getActiveSession()) {
+  if (!session?.id || !el.taskDetailDialog || !el.taskDetailBody) return;
+  openModal(el.taskDetailDialog);
+  el.taskDetailBody.textContent = '加载中...';
+  try {
+    const data = await fetchRuntimeInfo(session);
+    renderTaskDetailPanel(data || { session });
+  } catch (error) {
+    el.taskDetailBody.innerHTML = `
+      <section class="task-detail-section danger">
+        <strong>任务详情加载失败</strong>
+        <p>${escapeHtml(error.message || '暂时无法获取任务详情。')}</p>
+      </section>
+      <div class="runtime-actions">
+        <button class="ghost-button inline" type="button" data-task-action="retry">重试</button>
+      </div>
+    `;
+    el.taskDetailBody.querySelector('[data-task-action="retry"]')?.addEventListener('click', () => openTaskDetailDialog(session));
+  }
+}
+
+function closeTaskDetailDialog() {
+  closeModal(el.taskDetailDialog);
+}
+
+async function continueTaskInNewSession(data = {}) {
+  const source = data.session || getActiveSession();
+  if (!source?.id) return;
+  const prompt = taskContinuationText(data);
+  const payload = {
+    title: `${source.title || 'Codex session'} 续接`,
+    cwd: source.cwd || '/root/Projects',
+    ...normalizeRunConfig(source),
+    goal: normalizeGoal(source.goal || {})
+  };
+  const buttons = [...el.taskDetailBody.querySelectorAll('button')];
+  buttons.forEach((button) => {
+    button.disabled = true;
+  });
+  try {
+    const created = await api('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
+    if (created.session) {
+      state.sessions.unshift(created.session);
+      mergeSessionSnapshot(created.session);
+      setActiveSessionId(created.session.id);
+      saveSessionCache();
+      renderSessions();
+      renderActive({ messages: false });
+      closeTaskDetailDialog();
+      await loadSession(created.session.id);
+      await promptActions.sendPrompt(prompt, { keepInput: true });
+    }
+  } catch (error) {
+    buttons.forEach((button) => {
+      button.disabled = false;
+    });
+    alert(error.message || '新会话继续失败');
+    renderSessions();
+    renderActive({ messages: false });
+  }
+}
+
 function openQueueEditDialog(item) {
   messageView.closeMessageMenus();
   closeTopMoreMenu();
@@ -2049,12 +2228,8 @@ async function loadRuntimeInfo() {
     el.runtimePanel.textContent = '未选择会话';
     return;
   }
-  const data = await api(`/api/sessions/${encodeURIComponent(session.id)}/runtime`);
+  const data = await fetchRuntimeInfo(session);
   await renderRuntimePanel(data);
-  if (data.session && mergeSessionSnapshot(data.session)) {
-    renderSessions();
-    renderActive({ messages: false });
-  }
 }
 
 function openRuntimeDialog() {
@@ -2551,6 +2726,9 @@ async function refreshSessions(options = {}) {
   try {
     const data = await api('/api/sessions');
     state.sessions = data.sessions || [];
+    for (const session of state.sessions) {
+      if (session.view?.session) mergeSessionView(session.view, session.id);
+    }
     saveSessionCache();
     const firstWebSession = state.sessions.find((item) => item.source !== 'codex' && !item.trashedAt);
     if (!state.activeId && firstWebSession) setActiveSessionId(firstWebSession.id);
@@ -2603,6 +2781,7 @@ async function loadSession(id, options = {}) {
     const data = await api(sessionMessagesUrl(id, { limit }));
     const session = data.session || { id };
     mergeSessionSnapshot(session);
+    if (data.view) mergeSessionView(data.view, id);
     const cached = state.messages.get(id) || [];
     const merged = options.full === true
       ? mergeMessages([], data.messages || [])
@@ -2746,7 +2925,8 @@ function connectEvents(id) {
     mirrorConnectionState(connectionState.markEvent('open'));
     let sessionChanged = false;
     const data = parseEventData(event, {});
-    sessionChanged = data?.session ? mergeSessionSnapshot(data.session) : false;
+    if (data?.view) sessionChanged = mergeSessionView(data.view, data.sessionId || id);
+    if (data?.session) sessionChanged = mergeSessionSnapshot(data.session) || sessionChanged;
     recordFrontendEvent('sse.hello', `session:${sessionChanged}`);
     if (sessionChanged) renderSessions();
     renderActive({ messages: false });
@@ -2770,7 +2950,8 @@ function connectEvents(id) {
     mirrorConnectionState(connectionState.markEvent('open'));
     const session = parseEventData(event);
     if (!session) return;
-    const changed = mergeSessionSnapshot(session);
+    let changed = session.view ? mergeSessionView(session.view, session.id || id) : false;
+    changed = mergeSessionSnapshot(session) || changed;
     recordFrontendEvent('sse.session', `${session.id || id} changed:${changed} status:${session.status || '-'}`);
     if (changed) renderSessions();
     if (session.id === state.activeId) renderActive({ messages: false });
@@ -3199,6 +3380,7 @@ el.sessionActionSheet?.addEventListener('click', (event) => {
   if (event.target === el.sessionActionSheet) closeSessionActionSheet();
 });
 el.closeSessionActionSheet?.addEventListener('click', closeSessionActionSheet);
+el.closeTaskDetailDialog?.addEventListener('click', closeTaskDetailDialog);
 el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
 el.newSessionButton.addEventListener('click', () => {
   applyRunConfigToForm(el.newSessionForm, state.defaultRunConfig);

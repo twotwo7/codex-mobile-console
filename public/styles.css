@@ -2060,6 +2060,10 @@ button:disabled {
   width: min(720px, calc(100% - 22px));
 }
 
+.task-detail-dialog {
+  width: min(680px, calc(100% - 22px));
+}
+
 .session-goal-dialog form {
   gap: 10px;
   max-height: min(82svh, 760px);
@@ -2146,6 +2150,13 @@ button:disabled {
   overflow: auto;
 }
 
+.task-detail-body {
+  display: grid;
+  gap: 10px;
+  max-height: min(72vh, 680px);
+  overflow: auto;
+}
+
 .runtime-actions {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -2207,6 +2218,58 @@ button:disabled {
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--surface-2);
+}
+
+.task-detail-section {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.task-detail-section.danger {
+  border-color: color-mix(in srgb, var(--danger) 42%, var(--line));
+}
+
+.task-detail-section p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.task-event-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.task-event-list li {
+  display: grid;
+  grid-template-columns: auto minmax(0, 88px) minmax(0, 1fr);
+  gap: 6px;
+  align-items: center;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.task-event-list strong,
+.task-event-list em {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-event-list em {
+  font-style: normal;
 }
 
 .runtime-grid span {
