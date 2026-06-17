@@ -8,9 +8,9 @@ import { createMessageView } from './message-view.js?v=12';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
-import { createSessionStateController } from './session-state.js?v=4';
+import { createSessionStateController } from './session-state.js?v=5';
 import { createSkillView } from './skill-view.js?v=3';
-import { createTopbarView } from './topbar-view.js?v=4';
+import { createTopbarView } from './topbar-view.js?v=5';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '133';
-const SW_CACHE_VERSION = 'codex-console-v150';
+const APP_ASSET_VERSION = '134';
+const SW_CACHE_VERSION = 'codex-console-v151';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -989,13 +989,14 @@ function appendSessionListMore(fragment, total, visibleCount) {
 function sessionStatusKind(session) {
   if (session.trashedAt) return 'trashed';
   if (isSessionRunning(session)) return 'running';
-  if (session.status === 'error') return 'error';
+  if ((session.statusSummary?.status || session.status) === 'error') return 'error';
   if (session.source === 'codex') return 'external';
   return 'idle';
 }
 
 function sessionStatusLabel(session) {
   if (session.trashedAt) return '回收站';
+  if (session.statusSummary?.label) return session.statusSummary.label;
   if (isSessionRunning(session)) return session.status === 'stopping' ? '停止中' : '运行中';
   if (session.source === 'codex') return '全局 Codex';
   return session.status || 'idle';
@@ -1488,8 +1489,10 @@ function renderRunIndicator(session) {
   const indicator = document.createElement('div');
   indicator.className = 'run-indicator';
   indicator.dataset.runIndicator = '1';
-  const waiting = session?.queuedCount ? ` · 待执行 ${session.queuedCount} 条` : '';
-  const label = session?.status === 'stopping'
+  const queueCount = session?.statusSummary?.queueCount ?? session?.queuedCount ?? 0;
+  const waiting = queueCount ? ` · 待执行 ${queueCount} 条` : '';
+  const status = session?.statusSummary?.status || session?.status;
+  const label = status === 'stopping'
     ? '正在停止当前输入'
     : `Codex 正在处理当前输入${waiting}`;
   indicator.innerHTML = `
@@ -1797,19 +1800,50 @@ function renderBrowserRuntime(local) {
 
 function renderSessionRuntime(data, local) {
   const session = data.session || {};
-  const active = data.activeRun;
+  const summary = data.statusSummary || session.statusSummary || {};
+  const health = data.contextHealth || session.contextHealth || summary.contextHealth || {};
+  const active = data.harness?.activeRun || data.activeRun;
   const queueCount = Array.isArray(data.queue) ? data.queue.length : 0;
   return `
     <div class="runtime-section">
       <strong>当前会话</strong>
       <div class="runtime-grid compact">
-        <span>状态 <strong>${data.running ? (session.status === 'stopping' ? '停止中' : '运行中') : '空闲'}</strong></span>
-        <span>队列 <strong>${queueCount}</strong></span>
+        <span>状态 <strong>${escapeHtml(summary.label || (data.running ? '运行中' : '空闲'))}</strong></span>
+        <span>队列 <strong>${summary.queueCount ?? queueCount}</strong></span>
+        <span>上下文 <strong>${escapeHtml(health.label || '未知')}</strong></span>
         <span>SSE <strong>${escapeHtml(local.eventConnectionStatus || '-')}</strong></span>
         <span>版本 <strong>${escapeHtml(local.appAssetVersion || '-')}</strong></span>
       </div>
-      <p>${escapeHtml(active?.prompt || '当前没有运行中的输入')}</p>
-      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.imageCount || 0} · 文件 ${active.fileCount || 0}` : '等待下一次发送')}</span>
+      <p>${escapeHtml(active?.promptSummary || active?.prompt || '当前没有运行中的输入')}</p>
+      <span>${escapeHtml(active?.startedAt ? `开始 ${formatTime(active.startedAt)} · 图片 ${active.attachments?.imageCount ?? active.imageCount ?? 0} · 文件 ${active.attachments?.fileCount ?? active.fileCount ?? 0}` : '等待下一次发送')}</span>
+    </div>
+  `;
+}
+
+function renderHarnessRuntime(data) {
+  const harness = data.harness || {};
+  const active = harness.activeRun;
+  const recentRuns = harness.recentRuns || [];
+  const recentAudit = harness.recentAudit || [];
+  const runRows = recentRuns.slice(-5).reverse().map((run) => `
+    <span>${escapeHtml(run.status || '-')} <strong>${escapeHtml(run.errorCode || run.promptSummary || run.id || '-')}</strong></span>
+  `).join('');
+  const auditRows = recentAudit.slice(-5).reverse().map((event) => `
+    <span>${escapeHtml(event.type || '-')} <strong>${escapeHtml(event.summary || '-')}</strong></span>
+  `).join('');
+  return `
+    <div class="runtime-section">
+      <strong>Harness 状态</strong>
+      <div class="runtime-grid compact">
+        <span>当前 Run <strong>${escapeHtml(active?.status || '无')}</strong></span>
+        <span>输出 <strong>${active?.outputCount || 0}</strong></span>
+        <span>工具 <strong>${active?.toolCount || 0}</strong></span>
+        <span>事件 <strong>${active?.eventCount || 0}</strong></span>
+        ${active?.errorCode ? `<span>失败 <strong>${escapeHtml(active.errorCode)}</strong></span>` : ''}
+      </div>
+      ${active?.errorSummary ? `<p>${escapeHtml(active.errorSummary)}</p>` : ''}
+      ${runRows ? `<div class="runtime-grid compact">${runRows}</div>` : '<span>暂无历史 run。</span>'}
+      ${auditRows ? `<div class="runtime-grid compact">${auditRows}</div>` : ''}
     </div>
   `;
 }
@@ -1890,6 +1924,7 @@ async function renderRuntimePanel(data) {
       </div>
     </div>
     ${renderTokenUsage(data)}
+    ${renderHarnessRuntime(data)}
     ${renderServiceRuntime(data)}
     ${renderBrowserRuntime(local)}
     <div class="runtime-process-list">

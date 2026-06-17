@@ -34,6 +34,9 @@ const DEFAULT_STORAGE_SETTINGS = {
   runtimeRetentionDays: 7,
   maxUploadMb: 1024
 };
+const MAX_SESSION_RUNS = 200;
+const MAX_RUN_EVENTS = 80;
+const MAX_AUDIT_EVENTS = 200;
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -110,6 +113,7 @@ async function init() {
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     await saveState();
   }
+  for (const session of Object.values(state.sessions || {})) ensureSessionHarness(session);
   const restartMarker = await consumeRestartMarker();
   reconcileRunningSessions(restartMarker);
   pruneAuthSessions();
@@ -246,11 +250,277 @@ function summarizeRunPrompt(activeRun) {
   return prompt.length > 180 ? `${prompt.slice(0, 180)}...` : prompt;
 }
 
+function compactEventText(value, limit = 800) {
+  return String(value || '').replace(/\s+/g, ' ').trim().slice(0, limit);
+}
+
+function ensureSessionHarness(session) {
+  if (!session) return session;
+  session.messages ||= [];
+  session.queue ||= [];
+  session.runs = Array.isArray(session.runs) ? session.runs : [];
+  session.audit = Array.isArray(session.audit) ? session.audit : [];
+  if (session.runs.length > MAX_SESSION_RUNS) session.runs = session.runs.slice(-MAX_SESSION_RUNS);
+  if (session.audit.length > MAX_AUDIT_EVENTS) session.audit = session.audit.slice(-MAX_AUDIT_EVENTS);
+  return session;
+}
+
+function runAttachments(images = [], files = []) {
+  return {
+    imageCount: images.length,
+    fileCount: files.length,
+    images: images.slice(0, 12).map((image) => ({
+      name: image.name || image.fileName || '',
+      type: image.type || '',
+      url: image.url || ''
+    })),
+    files: files.slice(0, 12).map((file) => ({
+      name: file.name || file.fileName || '',
+      type: file.type || '',
+      size: Number(file.size || 0),
+      url: file.url || ''
+    }))
+  };
+}
+
+function auditSession(session, type, detail = {}) {
+  ensureSessionHarness(session);
+  const entry = {
+    id: randomUUID(),
+    at: nowIso(),
+    type,
+    runId: detail.runId || '',
+    messageId: detail.messageId || '',
+    summary: compactEventText(detail.summary || detail.error || detail.prompt || detail.status || type, 500)
+  };
+  session.audit.push(entry);
+  if (session.audit.length > MAX_AUDIT_EVENTS) session.audit = session.audit.slice(-MAX_AUDIT_EVENTS);
+  return entry;
+}
+
+function findRun(session, runId) {
+  ensureSessionHarness(session);
+  if (!runId) return null;
+  return session.runs.find((run) => run.id === runId) || null;
+}
+
+function findRunByMessage(session, messageId) {
+  ensureSessionHarness(session);
+  if (!messageId) return null;
+  return session.runs.find((run) => run.userMessageId === messageId || run.clientMessageId === messageId) || null;
+}
+
+function latestRun(session) {
+  ensureSessionHarness(session);
+  return session.runs.at(-1) || null;
+}
+
+function activeRunRecord(session) {
+  ensureSessionHarness(session);
+  return findRun(session, session.activeRun?.runId) || findRunByMessage(session, session.activeRun?.messageId) || null;
+}
+
+function publicRun(run) {
+  if (!run) return null;
+  return {
+    id: run.id,
+    userMessageId: run.userMessageId || '',
+    clientMessageId: run.clientMessageId || '',
+    status: run.status || 'unknown',
+    promptSummary: run.promptSummary || summarizeRunPrompt(run),
+    elevated: run.elevated === true,
+    codexSessionId: run.codexSessionId || '',
+    pid: run.pid || 0,
+    queuedAt: run.queuedAt || '',
+    startedAt: run.startedAt || '',
+    endedAt: run.endedAt || '',
+    exitCode: run.exitCode ?? null,
+    signalCode: run.signalCode || null,
+    errorCode: run.errorCode || '',
+    errorSummary: run.errorSummary || '',
+    tokenSnapshot: run.tokenSnapshot || null,
+    outputCount: run.outputCount || 0,
+    toolCount: run.toolCount || 0,
+    eventCount: Array.isArray(run.events) ? run.events.length : 0,
+    attachments: run.attachments || { imageCount: 0, fileCount: 0, images: [], files: [] }
+  };
+}
+
+function createHarnessRun(session, props = {}) {
+  ensureSessionHarness(session);
+  const existing = props.runId ? findRun(session, props.runId) : null;
+  if (existing) return existing;
+  const prompt = String(props.prompt || '');
+  const run = {
+    id: props.runId || randomUUID(),
+    userMessageId: props.messageId || '',
+    clientMessageId: props.clientMessageId || '',
+    status: props.status || 'submitted',
+    prompt: compactText(prompt, 12000),
+    promptSummary: summarizeRunPrompt({ prompt }),
+    elevated: props.elevated === true,
+    codexSessionId: session.codexSessionId || '',
+    pid: 0,
+    queuedAt: props.status === 'queued' ? nowIso() : '',
+    createdAt: nowIso(),
+    startedAt: '',
+    endedAt: '',
+    exitCode: null,
+    signalCode: null,
+    errorCode: '',
+    errorSummary: '',
+    tokenSnapshot: null,
+    outputCount: 0,
+    toolCount: 0,
+    attachments: runAttachments(props.images || [], props.files || []),
+    outputMessageIds: [],
+    events: []
+  };
+  session.runs.push(run);
+  if (session.runs.length > MAX_SESSION_RUNS) session.runs = session.runs.slice(-MAX_SESSION_RUNS);
+  auditSession(session, 'run.created', { runId: run.id, messageId: run.userMessageId, prompt: run.promptSummary });
+  return run;
+}
+
+function appendRunEvent(session, type, detail = {}, options = {}) {
+  ensureSessionHarness(session);
+  const run = findRun(session, options.runId)
+    || findRunByMessage(session, options.messageId)
+    || activeRunRecord(session)
+    || latestRun(session);
+  if (!run) return null;
+  const event = {
+    at: nowIso(),
+    type,
+    summary: compactEventText(detail.summary || detail.error || detail.message || detail.text || type, 800)
+  };
+  if (detail.exitCode !== undefined) event.exitCode = detail.exitCode;
+  if (detail.status) event.status = detail.status;
+  if (detail.errorCode) event.errorCode = detail.errorCode;
+  if (detail.contextTokens !== undefined) event.contextTokens = detail.contextTokens;
+  if (detail.contextRemaining !== undefined) event.contextRemaining = detail.contextRemaining;
+  run.events ||= [];
+  run.events.push(event);
+  if (run.events.length > MAX_RUN_EVENTS) run.events = run.events.slice(-MAX_RUN_EVENTS);
+  return event;
+}
+
+function updateRunStatus(session, runId, status, patch = {}) {
+  ensureSessionHarness(session);
+  const run = findRun(session, runId) || findRunByMessage(session, runId);
+  if (!run) return null;
+  run.status = status;
+  Object.assign(run, patch);
+  if (status === 'queued' && !run.queuedAt) run.queuedAt = nowIso();
+  if (['running', 'stopping'].includes(status) && !run.startedAt) run.startedAt = nowIso();
+  if (['completed', 'failed', 'stopped', 'recovered', 'merged'].includes(status)) run.endedAt ||= nowIso();
+  auditSession(session, `run.${status}`, {
+    runId: run.id,
+    messageId: run.userMessageId,
+    summary: patch.errorSummary || run.promptSummary || status
+  });
+  return run;
+}
+
+function contextHealthFromUsage(usage) {
+  if (!usage?.modelContextWindow) {
+    return { state: 'unknown', label: '上下文未知', severity: 'neutral', action: '' };
+  }
+  if (codexContextIsFull(usage)) {
+    return {
+      state: 'full',
+      label: '上下文已满',
+      severity: 'danger',
+      action: 'new_session',
+      detail: `${usage.contextTokens}/${usage.modelContextWindow}`
+    };
+  }
+  if (usage.contextPercent >= 90 || usage.contextRemaining <= 16000) {
+    return {
+      state: 'warning',
+      label: '上下文接近上限',
+      severity: 'warn',
+      action: 'compact_or_new_session',
+      detail: `${usage.contextTokens}/${usage.modelContextWindow}`
+    };
+  }
+  return {
+    state: 'ok',
+    label: '上下文正常',
+    severity: 'ok',
+    action: '',
+    detail: `${usage.contextTokens}/${usage.modelContextWindow}`
+  };
+}
+
+function classifyCodexFailure({ code, lastError = '', session, spawnError = null, wasStopping = false } = {}) {
+  const errorText = String(lastError || spawnError?.message || '').trim();
+  if (wasStopping) return { code: 'process_killed', retryable: true, summary: '任务已停止。' };
+  if (codexContextIsFull(session?.lastCodexUsage)) {
+    return {
+      code: 'context_full',
+      retryable: false,
+      summary: `Codex 上下文已满（${session.lastCodexUsage.contextTokens}/${session.lastCodexUsage.modelContextWindow} tokens），请新建干净会话或先压缩原生会话。`
+    };
+  }
+  if (spawnError?.code === 'ENOENT') {
+    return { code: 'codex_not_found', retryable: false, summary: 'Codex 命令不可用，检查 CODEX_BIN 或 PATH。' };
+  }
+  if (/no such file or directory|cwd|ENOENT/i.test(errorText)) {
+    return { code: 'cwd_missing', retryable: false, summary: `工作目录或文件不存在：${compactEventText(errorText, 260)}` };
+  }
+  if (/permission denied|EACCES/i.test(errorText)) {
+    return { code: 'permission_denied', retryable: true, summary: `权限不足：${compactEventText(errorText, 260)}` };
+  }
+  if (/stream disconnected|upstream request failed|reconnecting/i.test(errorText)) {
+    return { code: 'upstream_disconnected', retryable: true, summary: `Codex 上游连接中断：${compactEventText(errorText, 260)}` };
+  }
+  if (code !== undefined && code !== 0) {
+    return {
+      code: 'unknown_exit',
+      retryable: true,
+      summary: errorText ? `Codex 退出码 ${code}：${compactEventText(errorText, 260)}` : `Codex 退出码 ${code}。`
+    };
+  }
+  return { code: 'unknown', retryable: true, summary: errorText || '未知 Codex 失败。' };
+}
+
+function deriveSessionStatusSummary(session) {
+  ensureSessionHarness(session);
+  const runtimeRunning = running.has(session.id);
+  const active = activeRunRecord(session);
+  const isStopping = runtimeRunning && session.status === 'stopping';
+  const queueCount = session.queue.length;
+  const contextHealth = contextHealthFromUsage(session.lastCodexUsage);
+  let status = 'idle';
+  if (runtimeRunning) status = isStopping ? 'stopping' : 'running';
+  else if (session.status === 'error') status = 'error';
+  else if (queueCount > 0) status = 'queued';
+  else if (['running', 'stopping'].includes(session.status)) status = 'idle';
+  else status = session.status || 'idle';
+  const labels = {
+    running: '运行中',
+    stopping: '停止中',
+    queued: '有排队',
+    error: '失败',
+    idle: '空闲'
+  };
+  return {
+    status,
+    label: labels[status] || status,
+    running: runtimeRunning,
+    canStop: runtimeRunning && !isStopping,
+    queueCount,
+    activeRunId: active?.id || session.activeRun?.runId || '',
+    lastRunStatus: latestRun(session)?.status || '',
+    contextHealth
+  };
+}
+
 function reconcileRunningSessions(restartMarker = null) {
   const planned = Boolean(restartMarker);
   for (const session of Object.values(state.sessions || {})) {
-    session.messages ||= [];
-    session.queue ||= [];
+    ensureSessionHarness(session);
     if (session.status === 'running' || session.status === 'stopping') {
       const activeRun = session.activeRun;
       const promptSummary = summarizeRunPrompt(activeRun);
@@ -260,7 +530,18 @@ function reconcileRunningSessions(restartMarker = null) {
           delivery: planned ? 'recovered' : 'failed'
         });
       }
+      updateRunStatus(session, activeRun?.runId || activeRun?.messageId, planned ? 'recovered' : 'failed', {
+        errorCode: planned ? 'service_restarted' : 'service_crashed',
+        errorSummary: planned
+          ? 'Service restarted with a recovery marker.'
+          : 'Service restarted unexpectedly while Codex was running.'
+      });
       delete session.activeRun;
+      auditSession(session, planned ? 'service.restart.recovered' : 'service.restart.unexpected', {
+        runId: activeRun?.runId || '',
+        messageId: activeRun?.messageId || '',
+        summary: promptSummary
+      });
       addMessage(session, {
         role: 'system',
         text: [
@@ -336,6 +617,14 @@ function mergeQueuedItems(session, selectedIds = []) {
   primary.elevated = items.some((item) => item.elevated === true);
   primary.images = mergedImages;
   primary.files = mergedFiles;
+  const primaryRun = findRun(session, primary.runId);
+  if (primaryRun) {
+    primaryRun.prompt = compactText(mergedPrompt, 12000);
+    primaryRun.promptSummary = summarizeRunPrompt({ prompt: mergedPrompt });
+    primaryRun.elevated = primary.elevated;
+    primaryRun.attachments = runAttachments(mergedImages, mergedFiles);
+    appendRunEvent(session, 'queue.merged_primary', { summary: `merged ${items.length} queued inputs` }, { runId: primaryRun.id });
+  }
   let inserted = false;
   session.queue = session.queue.flatMap((item) => {
     if (!isSelected(item)) return [item];
@@ -356,9 +645,14 @@ function mergeQueuedItems(session, selectedIds = []) {
 
   for (const item of items.slice(1)) {
     updateMessageRunState(session, item.messageId || item.clientMessageId, 'merged', { delivery: 'merged' });
+    updateRunStatus(session, item.runId || item.messageId || item.clientMessageId, 'merged', {
+      errorCode: 'merged_into_queue_item',
+      errorSummary: `Merged into ${primary.runId || primary.id}`
+    });
   }
 
   session.updatedAt = nowIso();
+  auditSession(session, 'queue.merged', { runId: primary.runId || '', messageId: primary.messageId || '', summary: `${items.length} items` });
   scheduleSave();
   broadcastSession(session);
   return { primary, primaryMessage, mergedCount: items.length };
@@ -372,17 +666,26 @@ function incompleteRunMessages(session) {
 }
 
 function recoverStaleSession(session, reason = 'monitor') {
-  session.messages ||= [];
-  session.queue ||= [];
+  ensureSessionHarness(session);
   const activeMessageId = session.activeRun?.messageId;
+  const activeRunId = session.activeRun?.runId || activeMessageId;
   for (const message of incompleteRunMessages(session)) {
     const isQueued = session.queue.some((item) => item.clientMessageId === message.clientMessageId || item.messageId === message.id);
     if (isQueued) continue;
     updateMessageRunState(session, message.id, 'recovered', { delivery: 'recovered' });
+    updateRunStatus(session, message.runId || message.id || message.clientMessageId, 'recovered', {
+      errorCode: 'stale_without_process',
+      errorSummary: `Recovered stale run state (${reason}).`
+    });
   }
+  updateRunStatus(session, activeRunId, 'recovered', {
+    errorCode: 'stale_without_process',
+    errorSummary: `Recovered stale run state (${reason}).`
+  });
   delete session.activeRun;
   session.status = 'idle';
   session.updatedAt = nowIso();
+  auditSession(session, 'session.recovered_stale', { runId: activeRunId || '', messageId: activeMessageId || '', summary: reason });
   addMessage(session, {
     role: 'system',
     text: `Recovered stale run state (${reason}). No Codex process was active for this session.`,
@@ -394,8 +697,7 @@ function recoverStaleSession(session, reason = 'monitor') {
 
 function reconcileSessionRunState(session, reason = 'snapshot') {
   if (!session || session.source === 'codex') return false;
-  session.messages ||= [];
-  session.queue ||= [];
+  ensureSessionHarness(session);
   const hasChild = running.has(session.id);
   const hasQueue = session.queue.length > 0;
   const staleStatus = ['running', 'stopping'].includes(session.status) && !hasChild;
@@ -518,14 +820,17 @@ function safeCompare(a, b) {
 }
 
 function publicSession(session) {
-  session.messages ||= [];
-  session.queue ||= [];
+  ensureSessionHarness(session);
   const goal = normalizeSessionGoal(session.goal || {});
-  const runtimeRunning = running.has(session.id);
-  const isStopping = runtimeRunning && session.status === 'stopping';
-  const effectiveStatus = runtimeRunning
-    ? isStopping ? 'stopping' : 'running'
-    : ['running', 'stopping'].includes(session.status) ? 'idle' : session.status;
+  const statusSummary = deriveSessionStatusSummary(session);
+  const activeRun = activeRunRecord(session);
+  const lastRun = latestRun(session);
+  const effectiveStatus = statusSummary.status === 'queued' ? 'idle' : statusSummary.status;
+  const runCounts = session.runs.reduce((acc, run) => {
+    const key = run.status || 'unknown';
+    acc[key] = (acc[key] || 0) + 1;
+    return acc;
+  }, {});
   return {
     id: session.id,
     source: session.source || 'web',
@@ -544,9 +849,15 @@ function publicSession(session) {
     goal,
     codexSessionId: session.codexSessionId || '',
     status: effectiveStatus,
+    statusSummary,
     storedStatus: session.status,
-    isRunning: runtimeRunning,
-    canStop: runtimeRunning && !isStopping,
+    isRunning: statusSummary.running,
+    canStop: statusSummary.canStop,
+    activeRun: publicRun(activeRun),
+    lastRun: publicRun(lastRun),
+    runCounts,
+    contextHealth: statusSummary.contextHealth,
+    recentAudit: (session.audit || []).slice(-10),
     trashedAt: session.trashedAt || '',
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
@@ -554,6 +865,7 @@ function publicSession(session) {
     queuedCount: session.queue.length,
     queue: session.queue.map((item) => ({
       id: item.id,
+      runId: item.runId || '',
       messageId: item.messageId || '',
       clientMessageId: item.clientMessageId || '',
       prompt: item.prompt,
@@ -574,7 +886,8 @@ function publicSession(session) {
       })),
       createdAt: item.createdAt
     })),
-    messageCount: session.messages.length
+    messageCount: session.messages.length,
+    runCount: session.runs.length
   };
 }
 
@@ -752,6 +1065,21 @@ function updateSessionUsageFromEvent(session, event) {
   const next = parseCodexUsageLine(event, before);
   if (next === before) return;
   session.lastCodexUsage = next;
+  const run = activeRunRecord(session);
+  if (run && next.available) {
+    run.tokenSnapshot = {
+      updatedAt: next.updatedAt || nowIso(),
+      modelContextWindow: next.modelContextWindow || 0,
+      contextTokens: next.contextTokens || 0,
+      contextRemaining: next.contextRemaining || 0,
+      contextPercent: next.contextPercent || 0
+    };
+    appendRunEvent(session, 'token_count', {
+      contextTokens: run.tokenSnapshot.contextTokens,
+      contextRemaining: run.tokenSnapshot.contextRemaining,
+      summary: `context ${run.tokenSnapshot.contextTokens}/${run.tokenSnapshot.modelContextWindow}`
+    }, { runId: run.id });
+  }
 }
 
 function codexContextIsFull(usage) {
@@ -821,6 +1149,7 @@ async function codexUsageInfo(codexSessionId) {
 }
 
 async function runtimeInfo(session) {
+  ensureSessionHarness(session);
   const child = running.get(session.id);
   const rootPid = child?.pid || 0;
   const startedAt = session.activeRun?.startedAt || '';
@@ -830,8 +1159,12 @@ async function runtimeInfo(session) {
     codexUsageInfo(session.codexSessionId),
     serviceRuntimeInfo()
   ]);
+  if (codexUsage?.available) session.lastCodexUsage = codexUsage;
+  const statusSummary = deriveSessionStatusSummary(session);
   return {
     session: publicSession(session),
+    statusSummary,
+    contextHealth: statusSummary.contextHealth,
     running: Boolean(child),
     pid: rootPid,
     killed: child?.killed === true,
@@ -851,8 +1184,54 @@ async function runtimeInfo(session) {
     cpuMs: processes.reduce((sum, item) => sum + (item.cpuMs || 0), 0),
     processes,
     codexUsage,
+    harness: {
+      activeRun: publicRun(activeRunRecord(session)),
+      lastRun: publicRun(latestRun(session)),
+      recentRuns: session.runs.slice(-8).map(publicRun),
+      recentAudit: session.audit.slice(-20)
+    },
     service,
     checkedAt: nowIso()
+  };
+}
+
+function queueSummary(session) {
+  ensureSessionHarness(session);
+  return {
+    count: session.queue.length,
+    items: session.queue.map((item, index) => ({
+      index,
+      id: item.id,
+      runId: item.runId || '',
+      messageId: item.messageId || '',
+      clientMessageId: item.clientMessageId || '',
+      promptSummary: summarizeRunPrompt({ prompt: item.displayPrompt || item.prompt || '' }),
+      imageCount: item.images?.length || 0,
+      fileCount: item.files?.length || 0,
+      createdAt: item.createdAt || ''
+    }))
+  };
+}
+
+function sessionView(session) {
+  ensureSessionHarness(session);
+  const statusSummary = deriveSessionStatusSummary(session);
+  const child = running.get(session.id);
+  return {
+    version: 1,
+    session: publicSession(session),
+    statusSummary,
+    activeRun: publicRun(activeRunRecord(session)),
+    lastRun: publicRun(latestRun(session)),
+    queueSummary: queueSummary(session),
+    contextHealth: statusSummary.contextHealth,
+    runtimeSummary: {
+      running: Boolean(child),
+      pid: child?.pid || 0,
+      startedAt: session.activeRun?.startedAt || '',
+      canStop: statusSummary.canStop
+    },
+    recentAudit: session.audit.slice(-20)
   };
 }
 
@@ -2080,8 +2459,12 @@ async function importCodexSession(codexSessionId, options = {}) {
     createdAt: now,
     updatedAt: now,
     lastSeq: 0,
+    queue: [],
+    runs: [],
+    audit: [],
     messages: history
   };
+  auditSession(state.sessions[id], 'session.imported', { summary: codexSessionId });
   addMessage(state.sessions[id], {
     role: 'system',
     text: options.systemText || `Imported Codex thread ${codexSessionId}. Loaded ${history.length} saved messages.`
@@ -2118,15 +2501,27 @@ async function listDirectories(dir) {
 }
 
 function addMessage(session, message) {
-  session.messages ||= [];
+  ensureSessionHarness(session);
   const entry = {
     seq: state.nextSeq++,
     id: randomUUID(),
     at: nowIso(),
     ...message
   };
+  const run = activeRunRecord(session);
+  if (!entry.runId && run && ['assistant', 'tool', 'system'].includes(entry.role || '')) entry.runId = run.id;
   attachReplyImages(session, entry);
   session.messages.push(entry);
+  if (run && ['assistant', 'tool'].includes(entry.role || '')) {
+    run.outputMessageIds ||= [];
+    run.outputMessageIds.push(entry.id);
+    if (entry.role === 'assistant') run.outputCount = (run.outputCount || 0) + 1;
+    if (entry.role === 'tool') run.toolCount = (run.toolCount || 0) + 1;
+    appendRunEvent(session, entry.role === 'assistant' ? 'assistant_message' : 'tool_message', {
+      messageId: entry.id,
+      summary: entry.text || entry.rawType || entry.role
+    }, { runId: run.id });
+  }
   session.lastSeq = entry.seq;
   session.updatedAt = entry.at;
   scheduleSave();
@@ -2311,8 +2706,24 @@ function updateCodexSessionId(session, event) {
 function runCodex(session, prompt, options = {}) {
   if (running.has(session.id)) throw new Error('session_running');
 
-  session.queue ||= [];
+  ensureSessionHarness(session);
+  const run = createHarnessRun(session, {
+    runId: options.runId,
+    prompt,
+    elevated: options.elevated === true,
+    images: options.images || [],
+    files: options.files || [],
+    messageId: options.messageId || '',
+    clientMessageId: options.clientMessageId || '',
+    status: 'submitted'
+  });
+  updateRunStatus(session, run.id, 'running', {
+    startedAt: nowIso(),
+    elevated: options.elevated === true,
+    codexSessionId: session.codexSessionId || run.codexSessionId || ''
+  });
   session.activeRun = {
+    runId: run.id,
     prompt,
     elevated: options.elevated === true,
     imagePaths: options.imagePaths || [],
@@ -2321,9 +2732,10 @@ function runCodex(session, prompt, options = {}) {
     clientMessageId: options.clientMessageId || '',
     startedAt: nowIso()
   };
-  updateMessageRunState(session, options.messageId || options.clientMessageId, 'running', { delivery: 'running' });
+  updateMessageRunState(session, options.messageId || options.clientMessageId, 'running', { delivery: 'running', runId: run.id });
   session.status = 'running';
   session.updatedAt = nowIso();
+  auditSession(session, 'run.spawn.requested', { runId: run.id, messageId: run.userMessageId, summary: run.promptSummary });
   scheduleSave();
   addMessage(session, {
     role: 'system',
@@ -2346,6 +2758,8 @@ function runCodex(session, prompt, options = {}) {
     stdio: ['pipe', 'pipe', 'pipe']
   });
   running.set(session.id, child);
+  updateRunStatus(session, run.id, 'running', { pid: child.pid || 0 });
+  appendRunEvent(session, 'process.spawned', { summary: `${command} ${commandArgs.slice(0, 6).join(' ')}` }, { runId: run.id });
   broadcastSession(session);
 
   child.stdin.write(prompt);
@@ -2373,12 +2787,23 @@ function runCodex(session, prompt, options = {}) {
 
   child.on('error', (error) => {
     running.delete(session.id);
+    const failure = classifyCodexFailure({ spawnError: error, session });
     session.status = 'error';
-    updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, 'failed', { delivery: 'failed' });
+    updateRunStatus(session, session.activeRun?.runId || run.id, 'failed', {
+      endedAt: nowIso(),
+      errorCode: failure.code,
+      errorSummary: failure.summary
+    });
+    appendRunEvent(session, 'process.error', { errorCode: failure.code, error: failure.summary }, { runId: session.activeRun?.runId || run.id });
+    updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, 'failed', {
+      delivery: 'failed',
+      errorCode: failure.code,
+      errorSummary: failure.summary
+    });
     delete session.activeRun;
     addMessage(session, {
       role: 'system',
-      text: `Failed to start Codex: ${error.message}`,
+      text: `Failed to start Codex: ${failure.summary}`,
       status: 'error'
     });
     broadcastSession(session);
@@ -2396,8 +2821,27 @@ function runCodex(session, prompt, options = {}) {
     const next = session.queue?.shift() || null;
     const nextStatus = next?.prompt ? 'running' : code === 0 || wasStopping ? 'idle' : 'error';
     const finalRunState = wasStopping ? 'stopped' : code === 0 ? 'completed' : 'failed';
+    const failure = finalRunState === 'failed'
+      ? classifyCodexFailure({ code, lastError: lastCodexError, session, wasStopping })
+      : null;
+    const activeRunId = session.activeRun?.runId || run.id;
+    updateRunStatus(session, activeRunId, finalRunState, {
+      endedAt: nowIso(),
+      exitCode: code,
+      signalCode: child.signalCode || null,
+      errorCode: failure?.code || '',
+      errorSummary: failure?.summary || ''
+    });
+    appendRunEvent(session, 'process.exit', {
+      exitCode: code,
+      status: finalRunState,
+      errorCode: failure?.code || '',
+      summary: failure?.summary || `Codex exited with ${code}`
+    }, { runId: activeRunId });
     updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, finalRunState, {
-      delivery: finalRunState
+      delivery: finalRunState,
+      errorCode: failure?.code || '',
+      errorSummary: failure?.summary || ''
     });
     session.status = nextStatus;
     session.updatedAt = nowIso();
@@ -2414,8 +2858,10 @@ function runCodex(session, prompt, options = {}) {
     if (next?.prompt) {
       scheduleSave();
       runCodex(session, next.prompt, {
+        runId: next.runId,
         elevated: next.elevated,
         imagePaths: (next.images || []).map((image) => image.path),
+        images: next.images || [],
         files: next.files || [],
         messageId: next.messageId,
         clientMessageId: next.clientMessageId
@@ -2436,6 +2882,8 @@ function stopRunningSession(session) {
   session.status = 'stopping';
   session.updatedAt = nowIso();
   const queuedCount = session.queue?.length || 0;
+  updateRunStatus(session, session.activeRun?.runId || session.activeRun?.messageId, 'stopping');
+  appendRunEvent(session, 'stop.requested', { summary: `queued:${queuedCount}` }, { runId: session.activeRun?.runId });
   updateMessageRunState(session, session.activeRun?.messageId || session.activeRun?.clientMessageId, 'stopping', { delivery: 'stopping' });
   addMessage(session, {
     role: 'system',
@@ -2486,8 +2934,24 @@ function handleCodexLine(session, line) {
   }
 
   updateCodexSessionId(session, event);
+  const run = activeRunRecord(session);
+  if (run && session.codexSessionId) run.codexSessionId = session.codexSessionId;
   updateSessionUsageFromEvent(session, event);
   const error = summarizeCodexEvent(event);
+  if (event.type === 'thread.started' && event.thread_id) {
+    appendRunEvent(session, 'thread.started', { summary: event.thread_id }, { runId: run?.id });
+  } else if (event.type === 'turn.started') {
+    appendRunEvent(session, 'turn.started', { summary: 'turn started' }, { runId: run?.id });
+  } else if (event.type === 'turn.failed' || error) {
+    appendRunEvent(session, 'turn.failed', { errorCode: 'turn_failed', error }, { runId: run?.id });
+  } else if (event.payload?.type === 'task_started') {
+    appendRunEvent(session, 'task.started', { summary: 'task started' }, { runId: run?.id });
+  } else if (event.payload?.type === 'exec_command_end') {
+    appendRunEvent(session, 'exec.end', {
+      status: event.payload.status || '',
+      summary: Array.isArray(event.payload.command) ? event.payload.command.join(' ') : ''
+    }, { runId: run?.id });
+  }
   const message = deriveMessageFromCodexEvent(event);
   if (message) addMessage(session, message);
   return { event, error };
@@ -2687,8 +3151,12 @@ async function handleApi(req, res, url) {
       createdAt: nowIso(),
       updatedAt: nowIso(),
       lastSeq: 0,
+      queue: [],
+      runs: [],
+      audit: [],
       messages: []
     };
+    auditSession(state.sessions[id], 'session.created', { summary: cwd });
     addMessage(state.sessions[id], { role: 'system', text: `Session created in ${cwd}.` });
     return json(res, 201, { session: publicSession(state.sessions[id]) });
   }
@@ -2755,6 +3223,14 @@ async function handleApi(req, res, url) {
     if (!session) return json(res, 404, { error: 'session_not_found' });
     reconcileSessionRunState(session, 'runtime');
     return json(res, 200, await runtimeInfo(session));
+  }
+
+  const sessionViewMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/view$/);
+  if (sessionViewMatch && req.method === 'GET') {
+    const session = state.sessions[decodeURIComponent(sessionViewMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    reconcileSessionRunState(session, 'session-view');
+    return json(res, 200, sessionView(session));
   }
 
   const forkMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/fork$/);
@@ -2897,17 +3373,32 @@ async function handleApi(req, res, url) {
       runState: running.has(session.id) ? 'queued' : 'submitted',
       delivery: running.has(session.id) ? 'queued' : 'submitted'
     });
+    const run = createHarnessRun(session, {
+      prompt: effectivePrompt,
+      elevated,
+      images,
+      files,
+      messageId: userMessage.id,
+      clientMessageId,
+      status: running.has(session.id) ? 'queued' : 'submitted'
+    });
+    userMessage.runId = run.id;
+    broadcastEvent(session.id, 'message_update', userMessage);
     if (running.has(session.id)) {
       session.queue ||= [];
-      session.queue.push({ id: queueId, prompt: effectivePrompt, displayPrompt, elevated, images, files, createdAt: nowIso(), clientMessageId, messageId: userMessage.id });
+      session.queue.push({ id: queueId, runId: run.id, prompt: effectivePrompt, displayPrompt, elevated, images, files, createdAt: nowIso(), clientMessageId, messageId: userMessage.id });
+      updateRunStatus(session, run.id, 'queued');
+      auditSession(session, 'queue.added', { runId: run.id, messageId: userMessage.id, prompt: displayPrompt });
       session.updatedAt = nowIso();
       scheduleSave();
       return json(res, 202, { session: publicSession(session), queued: true });
     }
     try {
       runCodex(session, effectivePrompt, {
+        runId: run.id,
         elevated,
         imagePaths: images.map((image) => image.path),
+        images,
         files,
         messageId: userMessage.id,
         clientMessageId
@@ -2949,6 +3440,7 @@ async function handleApi(req, res, url) {
     if (body.action === 'top' && index > 0) {
       session.queue.splice(index, 1);
       session.queue.unshift(item);
+      auditSession(session, 'queue.topped', { runId: item.runId || '', messageId: item.messageId || '', summary: item.displayPrompt || item.prompt || '' });
     }
 
     if (typeof body.prompt === 'string') {
@@ -2956,14 +3448,23 @@ async function handleApi(req, res, url) {
       if (!prompt) return json(res, 400, { error: 'empty_prompt' });
       item.prompt = promptWithAttachments(prompt, item.images || [], item.files || []);
       item.displayPrompt = prompt;
+      const run = findRun(session, item.runId);
+      if (run) {
+        run.prompt = compactText(item.prompt, 12000);
+        run.promptSummary = summarizeRunPrompt({ prompt });
+        run.attachments = runAttachments(item.images || [], item.files || []);
+        appendRunEvent(session, 'queue.edited', { summary: prompt }, { runId: run.id });
+      }
       message = (session.messages || []).find((entry) => entry.id === item.messageId || entry.clientMessageId === item.clientMessageId);
       if (message) {
         message.text = prompt;
         message.pending = false;
         message.failed = false;
+        message.runId = item.runId || message.runId;
         message.updatedAt = nowIso();
         broadcastEvent(session.id, 'message_update', message);
       }
+      auditSession(session, 'queue.edited', { runId: item.runId || '', messageId: item.messageId || '', prompt });
     }
 
     session.updatedAt = nowIso();
@@ -2979,6 +3480,11 @@ async function handleApi(req, res, url) {
     if (index < 0) return json(res, 404, { error: 'queue_item_not_found', session: publicSession(session) });
     const [removed] = session.queue.splice(index, 1);
     updateMessageRunState(session, removed?.messageId || removed?.clientMessageId, 'stopped', { delivery: 'stopped' });
+    updateRunStatus(session, removed?.runId || removed?.messageId || removed?.clientMessageId, 'stopped', {
+      errorCode: 'queue_cancelled',
+      errorSummary: 'Queued run was cancelled.'
+    });
+    auditSession(session, 'queue.cancelled', { runId: removed?.runId || '', messageId: removed?.messageId || '', summary: removed?.displayPrompt || removed?.prompt || '' });
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { ok: true, session: publicSession(session) });
@@ -2999,23 +3505,41 @@ async function handleApi(req, res, url) {
     if (!['failed', 'stopped', 'recovered'].includes(message.runState) && message.delivery !== 'failed' && message.failed !== true) {
       return json(res, 409, { error: 'message_not_retryable', session: publicSession(session) });
     }
+    if (contextHealthFromUsage(session.lastCodexUsage).state === 'full') {
+      return json(res, 409, {
+        error: 'context_full',
+        message: '当前 Codex 原生会话上下文已满，普通重试大概率继续失败。请新建干净会话或先压缩原生会话。',
+        session: publicSession(session)
+      });
+    }
     const displayPrompt = String(message.text || '').trim()
       || ((message.images || []).length ? '请分析这些图片。' : '请分析这些文件。');
     const images = Array.isArray(message.images) ? message.images : [];
     const files = Array.isArray(message.files) ? message.files : [];
     const effectivePrompt = promptWithAttachments(displayPrompt, images, files);
     const retryId = randomUUID();
+    const run = createHarnessRun(session, {
+      prompt: effectivePrompt,
+      elevated: message.elevated === true,
+      images,
+      files,
+      messageId: message.id,
+      clientMessageId: message.clientMessageId || '',
+      status: running.has(session.id) ? 'queued' : 'submitted'
+    });
     message.retryOf = message.retryOf || message.id || message.clientMessageId || '';
     message.failed = false;
     message.pending = false;
     message.runState = running.has(session.id) ? 'queued' : 'submitted';
     message.delivery = message.runState;
+    message.runId = run.id;
     message.updatedAt = nowIso();
     broadcastEvent(session.id, 'message_update', message);
     if (running.has(session.id)) {
       session.queue ||= [];
       session.queue.push({
         id: retryId,
+        runId: run.id,
         prompt: effectivePrompt,
         displayPrompt,
         elevated: message.elevated === true,
@@ -3025,14 +3549,18 @@ async function handleApi(req, res, url) {
         clientMessageId: message.clientMessageId || '',
         messageId: message.id
       });
+      updateRunStatus(session, run.id, 'queued');
+      auditSession(session, 'queue.retry_added', { runId: run.id, messageId: message.id, prompt: displayPrompt });
       session.updatedAt = nowIso();
       scheduleSave();
       return json(res, 202, { ok: true, queued: true, session: publicSession(session), message });
     }
     try {
       runCodex(session, effectivePrompt, {
+        runId: run.id,
         elevated: message.elevated === true,
         imagePaths: images.map((image) => image.path).filter(Boolean),
+        images,
         files,
         messageId: message.id,
         clientMessageId: message.clientMessageId || ''

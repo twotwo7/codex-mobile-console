@@ -22,11 +22,17 @@ const SESSION_STATUS_KEYS = [
   'storedStatus',
   'isRunning',
   'canStop',
-  'queuedCount'
+  'queuedCount',
+  'statusSummary',
+  'activeRun',
+  'lastRun',
+  'runCounts',
+  'contextHealth'
 ];
 
 export function isSessionRunning(session) {
   if (!session) return false;
+  if (typeof session.statusSummary?.running === 'boolean') return session.statusSummary.running;
   if (['idle', 'error'].includes(session.status)) return false;
   if (typeof session.isRunning === 'boolean') return session.isRunning;
   return session.status === 'running' || session.status === 'stopping';
@@ -52,6 +58,11 @@ function messageSequenceValue(message) {
 
 function latestMessageSeq(messages) {
   return Math.max(0, ...(messages || []).map((message) => Number(message.seq || 0)).filter((seq) => seq > 0));
+}
+
+function sameSnapshotValue(a, b) {
+  if (a === b) return true;
+  return JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 }
 
 export function createSessionStateController(options) {
@@ -87,7 +98,7 @@ export function createSessionStateController(options) {
 
     const current = sessions[index];
     const next = { ...current, ...patch };
-    const changed = SESSION_STATUS_KEYS.some((key) => current[key] !== next[key])
+    const changed = SESSION_STATUS_KEYS.some((key) => !sameSnapshotValue(current[key], next[key]))
       || JSON.stringify(current.queue || []) !== JSON.stringify(next.queue || []);
     if (!changed) return false;
 
@@ -105,9 +116,18 @@ export function createSessionStateController(options) {
     const latestSeq = latestMessageSeq(messages);
     if (messageSeq && latestSeq && messageSeq < latestSeq) return false;
     const nextRunning = status === 'running' || status === 'stopping';
+    const statusSummary = {
+      ...(getSessions().find((item) => item.id === sessionId)?.statusSummary || {}),
+      status,
+      label: status === 'running' ? '运行中' : status === 'stopping' ? '停止中' : status === 'error' ? '失败' : '空闲',
+      running: nextRunning,
+      canStop: status === 'running',
+      queueCount: message.queuedCount ?? getSessions().find((item) => item.id === sessionId)?.queuedCount ?? 0
+    };
     return mergeSessionSnapshot({
       id: sessionId,
       status,
+      statusSummary,
       isRunning: nextRunning,
       canStop: status === 'running',
       queuedCount: message.queuedCount,

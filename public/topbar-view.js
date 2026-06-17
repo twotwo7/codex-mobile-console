@@ -39,7 +39,9 @@ export function createTopbarView(options) {
 
   function renderActiveStatus(session) {
     const isRunning = isSessionRunning(session);
-    const canStop = session?.canStop !== false && isRunning && session?.status !== 'stopping';
+    const summary = session?.statusSummary || {};
+    const canStop = summary.canStop ?? (session?.canStop !== false && isRunning && session?.status !== 'stopping');
+    const label = summary.label || (session?.status === 'stopping' ? '停止中' : '运行中');
     el.stopButton.hidden = !isRunning;
     el.stopButton.disabled = !session || !canStop;
     el.stopButton.setAttribute('aria-label', canStop ? '停止当前任务' : '正在停止当前任务');
@@ -59,7 +61,7 @@ export function createTopbarView(options) {
     el.activeTitle.textContent = session.title;
     el.activeMeta.textContent = sessionMetaText(session);
     setBadge(
-      isRunning ? session.status === 'stopping' ? '停止中' : '运行中' : getOnline() ? '在线' : '离线',
+      isRunning ? label : getOnline() ? '在线' : '离线',
       isRunning ? 'running' : getOnline() ? 'online' : ''
     );
     updateFavoritesButton();
