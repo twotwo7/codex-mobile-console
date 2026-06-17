@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '138';
-const SW_CACHE_VERSION = 'codex-console-v155';
+const APP_ASSET_VERSION = '139';
+const SW_CACHE_VERSION = 'codex-console-v156';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -189,7 +189,6 @@ const el = {
   collapseMessagesButton: document.querySelector('#collapseMessagesButton'),
   expandMessagesButton: document.querySelector('#expandMessagesButton'),
   runtimeButton: document.querySelector('#runtimeButton'),
-  installAppButton: document.querySelector('#installAppButton'),
   attachmentButton: document.querySelector('#attachmentButton'),
   attachmentMenu: document.querySelector('#attachmentMenu'),
   imageButton: document.querySelector('#imageButton'),
@@ -780,7 +779,7 @@ function updateInstallUi() {
     : canPrompt ? '可以直接安装为桌面应用。'
       : state.installStatus || '可通过浏览器菜单添加到桌面。';
   if (el.installAppStatus) el.installAppStatus.textContent = status;
-  for (const button of [el.installAppButton, el.installAppSettingsButton]) {
+  for (const button of [el.installAppSettingsButton]) {
     if (!button) continue;
     button.disabled = standalone;
     button.textContent = standalone ? '已安装' : canPrompt ? '安装到桌面' : '查看方法';
@@ -3311,7 +3310,6 @@ el.expandMessagesButton.addEventListener('click', () => {
   setAllConversationMessagesCollapsed(false);
 });
 
-el.installAppButton?.addEventListener('click', installAppToHomeScreen);
 el.installAppSettingsButton?.addEventListener('click', installAppToHomeScreen);
 
 el.attachmentButton.addEventListener('click', (event) => {

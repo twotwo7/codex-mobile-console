@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=120">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=121">
       </head>
       <body>
         <main class="workspace">
@@ -42,7 +42,6 @@ async function setFixture(page) {
                   <div class="top-more-menu" role="menu">
                     <button class="top-menu-item" type="button">任务面板</button>
                     <button class="top-menu-item" type="button">运行时信息</button>
-                    <button class="top-menu-item" type="button">安装到桌面</button>
                   </div>
                 </div>
                 <div class="top-more top-filter">
