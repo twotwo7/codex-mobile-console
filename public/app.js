@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '141';
-const SW_CACHE_VERSION = 'codex-console-v158';
+const APP_ASSET_VERSION = '142';
+const SW_CACHE_VERSION = 'codex-console-v159';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -268,6 +268,7 @@ const el = {
   sessionGoalDialog: document.querySelector('#sessionGoalDialog'),
   sessionGoalForm: document.querySelector('#sessionGoalForm'),
   cancelSessionGoal: document.querySelector('#cancelSessionGoal'),
+  sessionGoalSummary: document.querySelector('#sessionGoalSummary'),
   sessionGoalState: document.querySelector('#sessionGoalState'),
   insertSessionGoal: document.querySelector('#insertSessionGoal'),
   syncSessionGoal: document.querySelector('#syncSessionGoal'),
@@ -2561,7 +2562,8 @@ function goalPromptText(goal = {}) {
 
 function goalSyncPromptText(goal = {}) {
   return [
-    '请根据当前会话上下文，更新任务面板。',
+    '请根据当前会话上下文，帮我生成或更新任务面板。',
+    '你需要先理解我当前要完成什么、已经做到哪里、下一步该做什么。',
     '只输出一个 JSON 对象，不要输出 Markdown 代码块，不要添加解释文字。',
     '字段要求：',
     '{',
@@ -2579,6 +2581,24 @@ function goalSyncPromptText(goal = {}) {
   ].join('\n');
 }
 
+function renderSessionGoalSummary(goal = {}) {
+  if (!el.sessionGoalSummary) return;
+  const value = normalizeGoal(goal);
+  const planText = value.plan.length
+    ? `${value.plan.filter((item) => item.status === 'done').length}/${value.plan.length} 已完成`
+    : '暂无计划';
+  el.sessionGoalSummary.innerHTML = `
+    <strong>${escapeHtml(value.objective || '还没有任务目标')}</strong>
+    <div class="goal-summary-grid">
+      <span>状态 <b>${escapeHtml(goalStatusText(value.status))}</b></span>
+      <span>阶段 <b>${escapeHtml(value.phase || '未填写')}</b></span>
+      <span>计划 <b>${escapeHtml(planText)}</b></span>
+      <span>风险 <b>${value.risks.length}</b></span>
+    </div>
+    <p>${escapeHtml(value.conclusion || value.notes || '建议直接让 Codex 根据当前对话生成任务面板。')}</p>
+  `;
+}
+
 function openSessionGoalDialog(session = getActiveSession()) {
   if (!session?.id || !el.sessionGoalDialog || !el.sessionGoalForm) return;
   const goal = normalizeGoal(session.goal || {});
@@ -2590,9 +2610,10 @@ function openSessionGoalDialog(session = getActiveSession()) {
   el.sessionGoalForm.elements.planText.value = planTextFromItems(goal.plan);
   el.sessionGoalForm.elements.conclusion.value = goal.conclusion;
   el.sessionGoalForm.elements.risksText.value = goal.risks.join('\n');
+  renderSessionGoalSummary(goal);
   el.sessionGoalState.textContent = goal.updatedAt
     ? `${goalStatusText(goal.status)} · 更新 ${formatTime(goal.updatedAt)}`
-    : '任务面板由本应用维护，不等同于 Codex 内部状态。';
+    : '推荐让 Codex 先生成，再按结果保存。';
   openModal(el.sessionGoalDialog);
 }
 
@@ -2611,6 +2632,7 @@ async function saveSessionGoal(event, overrideGoal = null) {
     saveSessionCache();
     renderSessions();
     renderActive({ messages: false });
+    renderSessionGoalSummary(formGoal);
     el.sessionGoalState.textContent = '已保存。';
     if (!overrideGoal) closeModal(el.sessionGoalDialog);
   } catch (error) {
@@ -2624,7 +2646,7 @@ function insertCurrentSessionGoal() {
 }
 
 function insertGoalSyncPrompt() {
-  insertPromptText(goalSyncPromptText(goalFromForm()));
+  promptActions.sendPrompt(goalSyncPromptText(goalFromForm()), { keepInput: true });
   closeModal(el.sessionGoalDialog);
 }
 
@@ -3496,7 +3518,9 @@ el.clearSessionGoal?.addEventListener('click', () => {
   el.sessionGoalForm.elements.planText.value = '';
   el.sessionGoalForm.elements.conclusion.value = '';
   el.sessionGoalForm.elements.risksText.value = '';
-  saveSessionGoal(null, { objective: '', notes: '', status: 'paused', phase: '', plan: [], conclusion: '', risks: [] });
+  const emptyGoal = { objective: '', notes: '', status: 'paused', phase: '', plan: [], conclusion: '', risks: [] };
+  renderSessionGoalSummary(emptyGoal);
+  saveSessionGoal(null, emptyGoal);
 });
 el.runtimeDialog.addEventListener('close', () => {
   clearInterval(state.runtimeTimer);

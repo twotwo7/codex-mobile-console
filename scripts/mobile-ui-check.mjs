@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=122">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=123">
       </head>
       <body>
         <main class="workspace">
@@ -139,6 +139,20 @@ async function checkSkillDialog(page) {
   await page.waitForSelector('#skillDialog', { state: 'hidden', timeout: 5000 });
 }
 
+async function checkGoalDialog(page) {
+  await page.click('#topMoreButton');
+  await page.waitForSelector('#topMoreMenu:not([hidden])', { timeout: 5000 });
+  await page.click('#sessionGoalButton');
+  await page.waitForSelector('#sessionGoalDialog[open]', { timeout: 5000 });
+  await assertVisibleBox(page, '#sessionGoalDialog', 'goal dialog');
+  await assertVisibleBox(page, '.goal-summary-card', 'goal summary card');
+  await assertVisibleBox(page, '#syncSessionGoal', 'goal ai button');
+  const manualOpen = await page.locator('.session-goal-manual[open]').count();
+  if (manualOpen) throw new Error('manual goal editor should be collapsed by default');
+  await page.click('#cancelSessionGoal');
+  await page.waitForSelector('#sessionGoalDialog', { state: 'hidden', timeout: 5000 });
+}
+
 function assertStableBox(before, after, label, tolerance = 1) {
   for (const key of ['x', 'y', 'width', 'height']) {
     if (Math.abs(before[key] - after[key]) > tolerance) {
@@ -197,6 +211,7 @@ async function checkRunSettingsPanel(page, viewportName) {
   await assertVisibleBox(page, '.codex-config-card', 'codex config card');
   await assertVisibleBox(page, '#runSettingsState', 'run settings summary');
   await assertVisibleBox(page, '#defaultModelInput', 'default model input');
+  await page.locator('#defaultSandboxSelect').evaluate((node) => node.scrollIntoView({ block: 'center' }));
   await assertVisibleBox(page, '#defaultSandboxSelect', 'default sandbox select');
   const dims = await page.evaluate(() => ({
     scrollWidth: document.documentElement.scrollWidth,
@@ -273,6 +288,7 @@ async function run() {
       await checkRunSettingsPanel(page, viewport.name);
       await checkLongTitleMenu(page, viewport.name);
       await checkSkillDialog(page);
+      await checkGoalDialog(page);
       await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-app.png`), fullPage: true });
 
       await setFixture(page);

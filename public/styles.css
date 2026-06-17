@@ -2102,6 +2102,68 @@ button:disabled {
   overflow: auto;
 }
 
+.goal-summary-card,
+.session-goal-manual {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.goal-summary-card strong {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.35;
+}
+
+.goal-summary-card p,
+.goal-ai-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.goal-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.goal-summary-grid span {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  background: var(--surface);
+}
+
+.goal-summary-grid b {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-goal-manual summary {
+  cursor: pointer;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.session-goal-manual[open] summary {
+  margin-bottom: 2px;
+}
+
 .session-goal-dialog textarea {
   resize: vertical;
 }

@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=122">
+    <link rel="stylesheet" href="/styles.css?v=123">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -463,46 +463,51 @@
           <h2>任务面板</h2>
           <button class="icon-button" type="button" id="cancelSessionGoal" aria-label="关闭任务面板">×</button>
         </div>
-        <label>
-          目标
-          <textarea name="objective" rows="3" placeholder="这轮会话要达成什么结果"></textarea>
-        </label>
-        <div class="field-grid">
+        <div id="sessionGoalSummary" class="goal-summary-card"></div>
+        <button class="primary-wide" type="button" id="syncSessionGoal">让 Codex 生成/更新</button>
+        <p class="goal-ai-note">Codex 会根据当前会话上下文生成目标、计划、结论和风险。生成后你可以按结果保存到本面板。</p>
+        <details class="session-goal-manual">
+          <summary>手动编辑</summary>
           <label>
-            状态
-            <select name="status">
-              <option value="active">进行中</option>
-              <option value="paused">暂存</option>
-              <option value="complete">完成</option>
-            </select>
+            目标
+            <textarea name="objective" rows="3" placeholder="这轮会话要达成什么结果"></textarea>
+          </label>
+          <div class="field-grid">
+            <label>
+              状态
+              <select name="status">
+                <option value="active">进行中</option>
+                <option value="paused">暂存</option>
+                <option value="complete">完成</option>
+              </select>
+            </label>
+            <label>
+              当前阶段
+              <input name="phase" placeholder="例如 调试 / 等待确认 / 收尾">
+            </label>
+          </div>
+          <label>
+            计划
+            <textarea name="planText" rows="5" placeholder="每行一项；可用 [todo] / [doing] / [done] / [blocked] 开头"></textarea>
           </label>
           <label>
-            当前阶段
-            <input name="phase" placeholder="例如 调试 / 等待确认 / 收尾">
+            最近结论
+            <textarea name="conclusion" rows="3" placeholder="Codex 最近一次明确结论或当前结果"></textarea>
           </label>
-        </div>
-        <label>
-          计划
-          <textarea name="planText" rows="5" placeholder="每行一项；可用 [todo] / [doing] / [done] / [blocked] 开头"></textarea>
-        </label>
-        <label>
-          最近结论
-          <textarea name="conclusion" rows="3" placeholder="Codex 最近一次明确结论或当前结果"></textarea>
-        </label>
-        <div class="field-grid">
-          <label>
-            风险/待确认
-            <textarea name="risksText" rows="4" placeholder="每行一个风险、阻塞或需要用户确认的问题"></textarea>
-          </label>
-          <label>
-            备注
-            <textarea name="notes" rows="4" placeholder="约束、上下文、验收标准等"></textarea>
-          </label>
-        </div>
+          <div class="field-grid">
+            <label>
+              风险/待确认
+              <textarea name="risksText" rows="4" placeholder="每行一个风险、阻塞或需要用户确认的问题"></textarea>
+            </label>
+            <label>
+              备注
+              <textarea name="notes" rows="4" placeholder="约束、上下文、验收标准等"></textarea>
+            </label>
+          </div>
+        </details>
         <div id="sessionGoalState" class="settings-state-row">目标只保存在本应用，用于查看和快速插入。</div>
         <div class="session-goal-actions">
           <button class="ghost-button inline" type="button" id="insertSessionGoal">插入上下文</button>
-          <button class="ghost-button inline" type="button" id="syncSessionGoal">生成更新指令</button>
           <button class="ghost-button inline danger" type="button" id="clearSessionGoal">清空</button>
           <button type="submit" id="saveSessionGoal">保存</button>
         </div>
@@ -637,6 +642,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=141" type="module"></script>
+    <script src="/app.js?v=142" type="module"></script>
   </body>
 </html>
