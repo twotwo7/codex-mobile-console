@@ -72,7 +72,7 @@ async function setFixture(page) {
               <div class="message-images"><button type="button"><img alt="sample" src="${sampleImage()}"></button></div>
             </article>
             <article class="message assistant">
-              <div class="message-head"><span>ASSISTANT</span><span>6/7 22:31</span></div>
+              <div class="message-head"><span>ASSISTANT</span><span>6/7 22:31</span><div class="message-menu open"><button class="message-menu-button" type="button">⋯</button><div class="message-menu-popover"><button>应用到任务面板</button><button>复制</button></div></div></div>
               <div class="message-summary">输出 · Markdown 示例</div>
               <div class="message-text"><h3>结论</h3><p><strong>建议</strong>优先处理布局。</p><div class="message-table-wrap"><table><thead><tr><th>方案</th><th>建议</th></tr></thead><tbody><tr><td>Playwright</td><td>立刻加</td></tr></tbody></table></div></div>
             </article>

@@ -4,7 +4,7 @@ import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
-import { createMessageView } from './message-view.js?v=12';
+import { createMessageView } from './message-view.js?v=13';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
@@ -70,7 +70,8 @@ const state = {
   skillsLoadedAt: 0,
   skillDialogMode: 'quick',
   installPromptEvent: null,
-  installStatus: ''
+  installStatus: '',
+  pendingGoalSyncSessionId: storageGet('cmc.pendingGoalSyncSessionId', '')
 };
 
 let sessionState;
@@ -87,8 +88,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '142';
-const SW_CACHE_VERSION = 'codex-console-v159';
+const APP_ASSET_VERSION = '143';
+const SW_CACHE_VERSION = 'codex-console-v160';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -329,6 +330,8 @@ const promptActions = createPromptActions({
 });
 
 const messageView = createMessageView({
+  applyGoalFromMessage,
+  canApplyGoal: (message) => Boolean(extractGoalJson(message?.text || '')),
   getMessageCollapsed,
   openImageViewer,
   retryMessage: promptActions.retryMessage,
@@ -2564,6 +2567,7 @@ function goalSyncPromptText(goal = {}) {
   return [
     '请根据当前会话上下文，帮我生成或更新任务面板。',
     '你需要先理解我当前要完成什么、已经做到哪里、下一步该做什么。',
+    '控制台会自动识别这个 JSON，并一键或自动应用到任务面板。',
     '只输出一个 JSON 对象，不要输出 Markdown 代码块，不要添加解释文字。',
     '字段要求：',
     '{',
@@ -2579,6 +2583,34 @@ function goalSyncPromptText(goal = {}) {
     '当前已有任务面板如下，请在此基础上更新：',
     goalPromptText(goal)
   ].join('\n');
+}
+
+function extractGoalJson(text = '') {
+  const value = String(text || '').trim();
+  if (!value || !value.includes('{') || !value.includes('}')) return null;
+  if (!/"(?:objective|status|phase|plan|conclusion|risks|notes)"\s*:/.test(value)) return null;
+  const candidates = [];
+  const fence = value.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fence?.[1]) candidates.push(fence[1].trim());
+  candidates.push(value);
+  const firstBrace = value.indexOf('{');
+  const lastBrace = value.lastIndexOf('}');
+  if (firstBrace >= 0 && lastBrace > firstBrace) candidates.push(value.slice(firstBrace, lastBrace + 1));
+
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
+      const goal = normalizeGoal(parsed);
+      const hasUsefulContent = Boolean(
+        goal.objective || goal.phase || goal.conclusion || goal.notes || goal.plan.length || goal.risks.length
+      );
+      if (hasUsefulContent) return goal;
+    } catch {
+      // Try the next shape; assistant messages may include fenced or prefixed JSON.
+    }
+  }
+  return null;
 }
 
 function renderSessionGoalSummary(goal = {}) {
@@ -2624,14 +2656,7 @@ async function saveSessionGoal(event, overrideGoal = null) {
   const formGoal = overrideGoal || goalFromForm();
   el.sessionGoalState.textContent = '保存中...';
   try {
-    const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ goal: formGoal })
-    });
-    if (data.session) mergeSessionSnapshot(data.session);
-    saveSessionCache();
-    renderSessions();
-    renderActive({ messages: false });
+    await saveGoalForSession(sessionId, formGoal);
     renderSessionGoalSummary(formGoal);
     el.sessionGoalState.textContent = '已保存。';
     if (!overrideGoal) closeModal(el.sessionGoalDialog);
@@ -2640,12 +2665,84 @@ async function saveSessionGoal(event, overrideGoal = null) {
   }
 }
 
+async function saveGoalForSession(sessionId, goal) {
+  const formGoal = normalizeGoal(goal);
+  const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ goal: formGoal })
+  });
+  if (data.session) mergeSessionSnapshot(data.session);
+  saveSessionCache();
+  renderSessions();
+  renderActive({ messages: false });
+  return data.session || null;
+}
+
+async function applyGoalFromMessage(message, options = {}) {
+  const sessionId = options.sessionId || state.activeId || '';
+  const goal = extractGoalJson(message?.text || '');
+  if (!sessionId || !goal) {
+    if (!options.silent) alert('这条消息没有识别到可应用的任务面板 JSON。');
+    return false;
+  }
+  try {
+    await saveGoalForSession(sessionId, goal);
+    if (el.sessionGoalDialog?.open && (el.sessionGoalForm?.dataset.sessionId || state.activeId) === sessionId) {
+      renderSessionGoalSummary(goal);
+      if (el.sessionGoalState) el.sessionGoalState.textContent = '已从 Codex 结果应用。';
+    }
+    if (!options.silent) {
+      upsertMessage(sessionId, {
+        at: new Date().toISOString(),
+        role: 'system',
+        text: '任务面板已根据这条 Codex 结果更新。'
+      });
+    }
+    return true;
+  } catch (error) {
+    if (!options.silent) alert(error.message || '应用任务面板失败');
+    return false;
+  }
+}
+
+function maybeAutoApplyGoalResult(sessionId, message) {
+  if (!state.pendingGoalSyncSessionId || state.pendingGoalSyncSessionId !== sessionId) return;
+  if (message?.role !== 'assistant') return;
+  const text = String(message.text || '');
+  const goal = extractGoalJson(message.text || '');
+  if (!goal && /"(?:objective|status|phase|plan|conclusion|risks|notes)"\s*:/.test(text)) return;
+  state.pendingGoalSyncSessionId = '';
+  storageSet('cmc.pendingGoalSyncSessionId', '');
+  if (!goal) {
+    upsertMessage(sessionId, {
+      at: new Date().toISOString(),
+      role: 'system',
+      text: '没有识别到可自动应用的任务面板 JSON；可以让 Codex 重新生成，或从消息菜单手动应用。'
+    });
+    return;
+  }
+  applyGoalFromMessage(message, { sessionId, silent: true }).then((applied) => {
+    if (!applied) return;
+    upsertMessage(sessionId, {
+      at: new Date().toISOString(),
+      role: 'system',
+      text: '任务面板已自动更新。'
+    });
+  });
+}
+
 function insertCurrentSessionGoal() {
   insertPromptText(goalPromptText(goalFromForm()));
   closeModal(el.sessionGoalDialog);
 }
 
 function insertGoalSyncPrompt() {
+  const sessionId = state.activeId || '';
+  if (sessionId) {
+    state.pendingGoalSyncSessionId = sessionId;
+    storageSet('cmc.pendingGoalSyncSessionId', sessionId);
+  }
+  if (el.sessionGoalState) el.sessionGoalState.textContent = '已发送给 Codex，返回 JSON 后会自动更新任务面板。';
   promptActions.sendPrompt(goalSyncPromptText(goalFromForm()), { keepInput: true });
   closeModal(el.sessionGoalDialog);
 }
@@ -2734,6 +2831,7 @@ function upsertMessage(sessionId, message) {
 
   const sessionChanged = applySessionStatusFromMessage(sessionId, renderedMessage, messages);
   if (sessionChanged) renderSessions();
+  maybeAutoApplyGoalResult(sessionId, renderedMessage);
 
   if (sessionId === state.activeId) {
     const stickToBottom = isNewMessage ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
@@ -2782,6 +2880,7 @@ function updateMessage(sessionId, message) {
   messageScheduler.scheduleSave(sessionId);
   const sessionChanged = applySessionStatusFromMessage(sessionId, updatedMessage, messages);
   if (sessionChanged) renderSessions();
+  maybeAutoApplyGoalResult(sessionId, updatedMessage);
   if (sessionId === state.activeId) {
     if (state.messageDisplayMode === 'brief') {
       messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });

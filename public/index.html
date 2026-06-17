@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=123">
+    <link rel="stylesheet" href="/styles.css?v=124">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -465,7 +465,7 @@
         </div>
         <div id="sessionGoalSummary" class="goal-summary-card"></div>
         <button class="primary-wide" type="button" id="syncSessionGoal">让 Codex 生成/更新</button>
-        <p class="goal-ai-note">Codex 会根据当前会话上下文生成目标、计划、结论和风险。生成后你可以按结果保存到本面板。</p>
+        <p class="goal-ai-note">Codex 返回 JSON 后会自动更新本面板；也可以在消息菜单里手动应用。</p>
         <details class="session-goal-manual">
           <summary>手动编辑</summary>
           <label>
@@ -642,6 +642,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=142" type="module"></script>
+    <script src="/app.js?v=143" type="module"></script>
   </body>
 </html>
