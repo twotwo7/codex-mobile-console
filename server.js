@@ -174,6 +174,64 @@ function normalizeSessionConfig(value = {}, current = {}) {
   };
 }
 
+function parseTopLevelTomlConfig(text = '') {
+  const result = {};
+  for (const rawLine of String(text || '').split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    if (line.startsWith('[')) break;
+    const match = line.match(/^([A-Za-z0-9_.-]+)\s*=\s*(.+)$/);
+    if (!match) continue;
+    const key = match[1];
+    let value = match[2].trim();
+    const commentIndex = value.search(/\s+#/);
+    if (commentIndex >= 0) value = value.slice(0, commentIndex).trim();
+    const quoted = value.match(/^"([\s\S]*)"$/) || value.match(/^'([\s\S]*)'$/);
+    result[key] = quoted ? quoted[1] : value;
+  }
+  return result;
+}
+
+async function codexConfigSummary() {
+  const configPath = path.join(CODEX_HOME, 'config.toml');
+  let topLevel = {};
+  let exists = false;
+  try {
+    topLevel = parseTopLevelTomlConfig(await readFile(configPath, 'utf8'));
+    exists = true;
+  } catch {
+    topLevel = {};
+  }
+
+  let profiles = [];
+  try {
+    const entries = await readdir(CODEX_HOME, { withFileTypes: true });
+    profiles = entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith('.config.toml'))
+      .map((entry) => entry.name.replace(/\.config\.toml$/, ''))
+      .sort((a, b) => a.localeCompare(b))
+      .slice(0, 30);
+  } catch {
+    profiles = [];
+  }
+
+  return {
+    codexHome: CODEX_HOME,
+    configPath,
+    exists,
+    profiles,
+    values: {
+      model: topLevel.model || '',
+      modelProvider: topLevel.model_provider || '',
+      reasoningEffort: topLevel.model_reasoning_effort || '',
+      approvalPolicy: topLevel.approval_policy || '',
+      sandboxMode: topLevel.sandbox_mode || '',
+      disableResponseStorage: topLevel.disable_response_storage || '',
+      preferredAuthMethod: topLevel.preferred_auth_method || ''
+    }
+  };
+}
+
 function normalizeSessionGoal(value = {}, current = {}) {
   const objective = cleanShortString(value.objective ?? current.objective ?? '', 500);
   const notes = String(value.notes ?? current.notes ?? '').trim().slice(0, 4000);
@@ -3052,6 +3110,10 @@ async function handleApi(req, res, url) {
     const mode = ['all', 'orphanUploads', 'runtime'].includes(body.mode) ? body.mode : 'all';
     const result = await cleanupStorage(mode, { manual: true });
     return json(res, 200, { ok: true, result, storage: await storageStats() });
+  }
+
+  if (url.pathname === '/api/codex/config' && req.method === 'GET') {
+    return json(res, 200, await codexConfigSummary());
   }
 
   if (url.pathname === '/api/skills' && req.method === 'GET') {

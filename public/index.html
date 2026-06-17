@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=121">
+    <link rel="stylesheet" href="/styles.css?v=122">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -96,15 +96,25 @@
               </label>
             </section>
             <section class="settings-page" data-settings-page="run">
-              <p class="settings-page-note">新建会话默认项。</p>
+              <p class="settings-page-note">这些配置只作为新建会话的默认覆盖项；留空表示继续使用本机 Codex 配置。</p>
+              <div class="codex-config-card">
+                <div class="storage-head">
+                  <strong>本机 Codex 配置</strong>
+                  <button id="refreshCodexConfigButton" class="ghost-button inline" type="button">刷新</button>
+                </div>
+                <div id="codexConfigSummary" class="codex-config-summary">加载中...</div>
+              </div>
+              <div id="runSettingsState" class="settings-state-row">提权默认关闭</div>
               <div class="field-grid">
                 <label>
                   默认模型
-                  <input id="defaultModelInput" name="defaultModel" placeholder="留空使用 Codex 配置">
+                  <input id="defaultModelInput" name="defaultModel" placeholder="留空跟随本机 Codex 模型">
+                  <small>只在想强制新会话使用某个模型时填写，例如 gpt-5.5。</small>
                 </label>
                 <label>
                   默认 Profile
                   <input id="defaultProfileInput" name="defaultProfile" placeholder="例如 work">
+                  <small>读取 $CODEX_HOME/&lt;profile&gt;.config.toml；留空不指定 profile。</small>
                 </label>
               </div>
               <div class="field-grid">
@@ -115,6 +125,7 @@
                     <option value="read-only">read-only</option>
                     <option value="danger-full-access">danger-full-access</option>
                   </select>
+                  <small>read-only 只能读；workspace-write 可写当前项目；danger-full-access 不限制文件系统。</small>
                 </label>
                 <label>
                   默认审批
@@ -124,6 +135,7 @@
                     <option value="untrusted">untrusted</option>
                     <option value="on-failure">on-failure</option>
                   </select>
+                  <small>on-request 由 Codex 判断；never 不弹审批；untrusted 更保守；on-failure 已不推荐。</small>
                 </label>
               </div>
               <label>
@@ -135,32 +147,34 @@
                   <option value="medium">medium</option>
                   <option value="high">high</option>
                 </select>
+                <small>留空跟随本机配置；越高通常更慢但推理更充分。</small>
               </label>
               <label>
                 默认额外可写目录
-                <textarea id="defaultAddDirsInput" rows="2" placeholder="每行一个目录"></textarea>
+                <textarea id="defaultAddDirsInput" rows="2" placeholder="/root/data/disk/Projects&#10;/root/Projects/shared"></textarea>
+                <small>每行一个目录；只在沙箱不是 danger-full-access 时有明显意义。</small>
               </label>
               <label>
                 默认配置覆盖
-                <textarea id="defaultConfigOverridesInput" rows="3" placeholder='每行一个 key=value，例如 approval_policy="never"'></textarea>
+                <textarea id="defaultConfigOverridesInput" rows="3" placeholder='model_reasoning_effort="high"&#10;shell_environment_policy.inherit=all'></textarea>
+                <small>等同 codex -c key=value；值按 TOML 解析，写错可能导致启动失败。</small>
               </label>
               <label class="settings-checkbox">
                 <input id="elevatedRun" type="checkbox">
-                <span>提权执行</span>
+                <span>提权执行 <small>发送时默认绕过审批和沙箱，权限很大。</small></span>
               </label>
               <label class="settings-checkbox">
                 <input id="defaultStrictConfigToggle" type="checkbox">
-                <span>严格检查 config.toml</span>
+                <span>严格检查 config.toml <small>配置里有未知字段时直接失败，适合排查配置问题。</small></span>
               </label>
               <label class="settings-checkbox">
                 <input id="defaultIgnoreUserConfigToggle" type="checkbox">
-                <span>忽略用户 config.toml</span>
+                <span>忽略用户 config.toml <small>不读取本机 Codex 配置；会让上面的本机默认值失效。</small></span>
               </label>
               <label class="settings-checkbox">
                 <input id="defaultIgnoreRulesToggle" type="checkbox">
-                <span>忽略 execpolicy rules</span>
+                <span>忽略 execpolicy rules <small>不加载用户或项目规则文件，可能降低命令约束。</small></span>
               </label>
-              <div id="runSettingsState" class="settings-state-row">提权默认关闭</div>
             </section>
             <section class="settings-page storage-panel" data-settings-page="storage">
               <p class="settings-page-note">上传附件、运行缓存和磁盘状态。</p>
@@ -623,6 +637,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=139" type="module"></script>
+    <script src="/app.js?v=141" type="module"></script>
   </body>
 </html>

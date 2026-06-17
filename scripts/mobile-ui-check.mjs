@@ -28,7 +28,7 @@ async function setFixture(page) {
       <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-        <link rel="stylesheet" href="${APP_URL}/styles.css?v=121">
+        <link rel="stylesheet" href="${APP_URL}/styles.css?v=122">
       </head>
       <body>
         <main class="workspace">
@@ -186,6 +186,31 @@ async function checkDrawerSwitchStability(page, viewportName) {
   await waitForDrawerSettled(page, false);
 }
 
+async function checkRunSettingsPanel(page, viewportName) {
+  await page.click('#openDrawer');
+  await page.waitForSelector('#sessionDrawer.open', { timeout: 5000 });
+  await waitForDrawerSettled(page, true);
+  await page.click('#drawerSettingsButton');
+  await page.waitForSelector('#drawerSettingsPanel.active', { timeout: 5000 });
+  await page.click('[data-settings-tab="run"]');
+  await page.waitForSelector('[data-settings-page="run"].active', { timeout: 5000 });
+  await assertVisibleBox(page, '.codex-config-card', 'codex config card');
+  await assertVisibleBox(page, '#runSettingsState', 'run settings summary');
+  await assertVisibleBox(page, '#defaultModelInput', 'default model input');
+  await assertVisibleBox(page, '#defaultSandboxSelect', 'default sandbox select');
+  const dims = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth
+  }));
+  if (dims.scrollWidth > dims.clientWidth + 1) {
+    throw new Error(`run settings overflow: ${JSON.stringify(dims)}`);
+  }
+  await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-run-settings.png`), fullPage: false });
+  await page.click('#closeDrawer');
+  await page.waitForSelector('#sessionDrawer:not(.open)', { timeout: 5000 });
+  await waitForDrawerSettled(page, false);
+}
+
 async function checkLongTitleMenu(page, viewportName) {
   await page.evaluate(() => {
     document.querySelector('#activeTitle').textContent = '这是一个非常非常长的会话标题用于验证手机端标题省略和箭头固定可见';
@@ -245,6 +270,7 @@ async function run() {
       const page = await context.newPage();
       await loginSmoke(page);
       await checkDrawerSwitchStability(page, viewport.name);
+      await checkRunSettingsPanel(page, viewport.name);
       await checkLongTitleMenu(page, viewport.name);
       await checkSkillDialog(page);
       await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-app.png`), fullPage: true });

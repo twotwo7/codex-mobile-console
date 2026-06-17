@@ -87,8 +87,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '139';
-const SW_CACHE_VERSION = 'codex-console-v156';
+const APP_ASSET_VERSION = '141';
+const SW_CACHE_VERSION = 'codex-console-v158';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -207,6 +207,8 @@ const el = {
   defaultStrictConfigToggle: document.querySelector('#defaultStrictConfigToggle'),
   defaultIgnoreUserConfigToggle: document.querySelector('#defaultIgnoreUserConfigToggle'),
   defaultIgnoreRulesToggle: document.querySelector('#defaultIgnoreRulesToggle'),
+  refreshCodexConfigButton: document.querySelector('#refreshCodexConfigButton'),
+  codexConfigSummary: document.querySelector('#codexConfigSummary'),
   stopButton: document.querySelector('#stopButton'),
   sendButton: document.querySelector('#sendButton'),
   skillButton: document.querySelector('#skillButton'),
@@ -2413,15 +2415,64 @@ async function addImageFiles(fileList) {
 
 function updateRunSettingsState() {
   const config = normalizeRunConfig(state.defaultRunConfig);
+  const inherited = [];
+  if (!config.model) inherited.push('模型');
+  if (!config.reasoningEffort) inherited.push('推理强度');
   const parts = [
     el.elevatedRun.checked ? '提权默认开启' : '提权默认关闭',
-    config.model ? `模型 ${config.model}` : '模型跟随 Codex',
-    config.profile ? `Profile ${config.profile}` : '',
-    config.reasoningEffort ? `推理 ${config.reasoningEffort}` : '',
+    config.model ? `模型覆盖 ${config.model}` : '模型跟随本机 Codex',
+    config.profile ? `Profile ${config.profile}` : '不指定 Profile',
+    config.reasoningEffort ? `推理覆盖 ${config.reasoningEffort}` : '',
+    `沙箱 ${config.sandbox}`,
+    `审批 ${config.approval}`,
     config.addDirs.length ? `额外目录 ${config.addDirs.length}` : '',
-    config.configOverrides.length ? `覆盖 ${config.configOverrides.length}` : ''
+    config.configOverrides.length ? `-c 覆盖 ${config.configOverrides.length}` : '',
+    config.strictConfig ? '严格配置' : '',
+    config.ignoreUserConfig ? '忽略本机配置' : '',
+    config.ignoreRules ? '忽略规则' : ''
   ].filter(Boolean);
-  el.runSettingsState.textContent = parts.join(' · ');
+  el.runSettingsState.innerHTML = `
+    <strong>新建会话默认：</strong>${escapeHtml(parts.join(' · '))}
+    ${inherited.length ? `<br><span>空值会继承：${escapeHtml(inherited.join('、'))}。</span>` : ''}
+  `;
+}
+
+function renderCodexConfigSummary(data = null) {
+  if (!el.codexConfigSummary) return;
+  if (!data) {
+    el.codexConfigSummary.textContent = '加载中...';
+    return;
+  }
+  const values = data.values || {};
+  const rows = [
+    ['模型', values.model || '未设置'],
+    ['Provider', values.modelProvider || '未设置'],
+    ['推理', values.reasoningEffort || '未设置'],
+    ['审批', values.approvalPolicy || '未设置'],
+    ['沙箱', values.sandboxMode || '未设置'],
+    ['响应存储', values.disableResponseStorage === '' ? '未设置' : values.disableResponseStorage === 'true' ? '关闭' : '开启'],
+    ['Profile', data.profiles?.length ? data.profiles.join(', ') : '无']
+  ];
+  el.codexConfigSummary.innerHTML = `
+    <div class="codex-config-grid">
+      ${rows.map(([label, value]) => `
+        <span>${escapeHtml(label)} <strong>${escapeHtml(value)}</strong></span>
+      `).join('')}
+    </div>
+    <small>${data.exists ? `读取 ${escapeHtml(data.configPath || '')}` : '没有找到 config.toml，将使用 Codex 内置默认值。'}</small>
+  `;
+}
+
+async function loadCodexConfigSummary() {
+  if (!el.codexConfigSummary) return;
+  renderCodexConfigSummary(null);
+  try {
+    renderCodexConfigSummary(await api('/api/codex/config'));
+  } catch (error) {
+    el.codexConfigSummary.innerHTML = `
+      <small>${escapeHtml(error.status === 404 ? '服务端更新后会显示本机 Codex 配置；当前仍可编辑本应用默认覆盖项。' : error.message || '读取 Codex 配置失败')}</small>
+    `;
+  }
 }
 
 function normalizeGoal(goal = {}) {
@@ -3425,6 +3476,7 @@ el.refreshSkillsButton?.addEventListener('click', () => {
 el.drawerRefreshSkillsButton.addEventListener('click', () => {
   refreshSkillsInBackground();
 });
+el.refreshCodexConfigButton?.addEventListener('click', loadCodexConfigSummary);
 el.runtimeButton.addEventListener('click', () => {
   closeTopMenus();
   openRuntimeDialog();
@@ -3463,6 +3515,9 @@ function selectSettingsPage(page) {
     loadStorageStats().catch((error) => {
       el.storageStats.textContent = error.message || '加载失败';
     });
+  } else if (page === 'run') {
+    updateRunSettingsState();
+    loadCodexConfigSummary();
   }
 }
 
