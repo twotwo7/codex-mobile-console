@@ -239,7 +239,7 @@ async function checkLongTitleMenu(page, viewportName) {
   if (arrow.x <= title.x || arrow.x + arrow.width > actions.x - 2) {
     throw new Error(`title menu arrow is not stable: ${JSON.stringify({ title, arrow, actions })}`);
   }
-  if (filter.x <= arrow.x || filter.x + filter.width > actions.x - 2) {
+  if (filter.x <= title.x || filter.x + filter.width > actions.x - 2 || Math.abs(filter.x - arrow.x) < 20) {
     throw new Error(`view filter button is not stable: ${JSON.stringify({ arrow, filter, actions })}`);
   }
   if (titleRow.height > 28) {

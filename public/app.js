@@ -35,6 +35,7 @@ const state = {
   messages: new Map(),
   messagePages: new Map(),
   messageRenderLimits: new Map(),
+  briefRoundLimits: new Map(),
   messageCollapseStates: new Map(),
   lastSeq: new Map(),
   eventSource: null,
@@ -88,8 +89,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '143';
-const SW_CACHE_VERSION = 'codex-console-v160';
+const APP_ASSET_VERSION = '144';
+const SW_CACHE_VERSION = 'codex-console-v161';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -602,6 +603,10 @@ function renderedMessageLimit() {
   return isMobileViewport() ? MOBILE_MAX_RENDERED_MESSAGES : DESKTOP_MAX_RENDERED_MESSAGES;
 }
 
+function defaultBriefRoundLimit() {
+  return isMobileViewport() ? 5 : 8;
+}
+
 function sessionRenderedMessageLimit(sessionId = state.activeId) {
   return Math.min(maxHistoryLimit(), Math.max(renderedMessageLimit(), Number(state.messageRenderLimits.get(sessionId) || 0)));
 }
@@ -610,6 +615,16 @@ function expandRenderedMessageLimit(sessionId, count) {
   if (!sessionId || !Number.isFinite(count) || count <= 0) return;
   const current = sessionRenderedMessageLimit(sessionId);
   state.messageRenderLimits.set(sessionId, Math.min(maxHistoryLimit(), current + count));
+}
+
+function sessionBriefRoundLimit(sessionId = state.activeId) {
+  return Math.max(defaultBriefRoundLimit(), Number(state.briefRoundLimits.get(sessionId) || 0));
+}
+
+function expandBriefRoundLimit(sessionId, count = 1) {
+  if (!sessionId || !Number.isFinite(count) || count <= 0) return;
+  const current = sessionBriefRoundLimit(sessionId);
+  state.briefRoundLimits.set(sessionId, current + count);
 }
 
 function setMessagePage(sessionId, page, options = {}) {
@@ -668,6 +683,8 @@ function cleanupIdleResources() {
     state.messages.delete(id);
     state.lastSeq.delete(id);
     state.messagePages.delete(id);
+    state.messageRenderLimits.delete(id);
+    state.briefRoundLimits.delete(id);
     state.messageCollapseStates.delete(id);
   }
 }
@@ -1324,7 +1341,7 @@ function renderMessages(sessionId, options = {}) {
 function renderOlderMessagesControl(sessionId) {
   if (state.showStarredOnly) return null;
   const page = state.messagePages.get(sessionId);
-  if (!page?.hasMore) return null;
+  if (!page?.hasMore && !hasHiddenBriefRounds(sessionId)) return null;
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'older-messages-button';
@@ -1351,15 +1368,29 @@ function closeImageViewer() {
 function displayMessages(sessionId) {
   const messages = loadMessages(sessionId);
   const filtered = state.showStarredOnly ? messages.filter((message) => message.starred === true) : messages;
+  if (!state.showStarredOnly && state.messageDisplayMode === 'brief') {
+    return buildBriefDisplayMessages(filtered, sessionId);
+  }
   const maxRendered = sessionRenderedMessageLimit(sessionId);
   const visible = state.showStarredOnly ? filtered : filtered.slice(-maxRendered);
-  if (!state.showStarredOnly && state.messageDisplayMode === 'brief') {
-    return buildBriefDisplayMessages(visible, sessionId);
-  }
   return mergeDisplayMessages(visible);
 }
 
 function buildBriefDisplayMessages(messages, sessionId) {
+  const rounds = buildBriefRounds(messages);
+  const visibleRounds = rounds.slice(-sessionBriefRoundLimit(sessionId));
+  const runningRoundIndex = isSessionRunning(getActiveSession()) && state.activeId === sessionId ? visibleRounds.length - 1 : -1;
+  const out = [];
+  for (let index = 0; index < visibleRounds.length; index += 1) {
+    const round = visibleRounds[index];
+    if (round.user) out.push(round.user);
+    if (round.conclusion) out.push(round.conclusion);
+    if (index === runningRoundIndex) out.push(briefProgressMessage(round, sessionId, index));
+  }
+  return mergeDisplayMessages(out);
+}
+
+function buildBriefRounds(messages) {
   const rounds = [];
   let current = null;
 
@@ -1395,16 +1426,13 @@ function buildBriefDisplayMessages(messages, sessionId) {
     if (isConclusionMessage(message)) current.conclusion = message;
   }
   pushCurrent();
+  return rounds;
+}
 
-  const runningRoundIndex = isSessionRunning(getActiveSession()) && state.activeId === sessionId ? rounds.length - 1 : -1;
-  const out = [];
-  for (let index = 0; index < rounds.length; index += 1) {
-    const round = rounds[index];
-    if (round.user) out.push(round.user);
-    if (round.conclusion) out.push(round.conclusion);
-    if (index === runningRoundIndex) out.push(briefProgressMessage(round, sessionId, index));
-  }
-  return mergeDisplayMessages(out);
+function hasHiddenBriefRounds(sessionId) {
+  if (state.messageDisplayMode !== 'brief') return false;
+  const rounds = buildBriefRounds(loadMessages(sessionId));
+  return rounds.length > sessionBriefRoundLimit(sessionId);
 }
 
 function isCodexOutputMessage(message) {
@@ -2995,7 +3023,13 @@ async function loadSession(id, options = {}) {
 async function loadOlderMessages(sessionId) {
   const session = state.sessions.find((item) => item.id === sessionId);
   const page = state.messagePages.get(sessionId);
-  if (!session || !page?.hasMore || page.loading || state.loadingOlder) return;
+  if (!session || page?.loading || state.loadingOlder) return;
+  if (state.messageDisplayMode === 'brief' && hasHiddenBriefRounds(sessionId)) {
+    expandBriefRoundLimit(sessionId, 1);
+    renderActive({ stickToBottom: false, restoreAnchor: firstVisibleMessageAnchor() });
+    return;
+  }
+  if (!page?.hasMore) return;
   const loaded = loadMessages(sessionId).length;
   const remaining = Math.max(0, maxHistoryLimit() - loaded);
   if (remaining <= 0) {
@@ -3015,6 +3049,7 @@ async function loadOlderMessages(sessionId) {
     state.messages.set(sessionId, trimMessagesForStorage(merged));
     state.lastSeq.set(sessionId, lastRealSeq(merged));
     expandRenderedMessageLimit(sessionId, (data.messages || []).length);
+    if (state.messageDisplayMode === 'brief') expandBriefRoundLimit(sessionId, 1);
     setMessagePage(sessionId, {
       ...data,
       hasMore: data.hasMoreBefore === true && merged.length < maxHistoryLimit()
