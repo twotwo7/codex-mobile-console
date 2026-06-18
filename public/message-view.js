@@ -506,19 +506,26 @@ function renderCodeBlock(code, language) {
   copy.className = 'code-copy-button';
   copy.setAttribute('aria-label', '复制代码');
   copy.title = '复制代码';
+  const hint = document.createElement('span');
+  hint.className = 'code-copy-hint';
+  hint.textContent = '已复制';
+  hint.setAttribute('role', 'status');
+  hint.setAttribute('aria-live', 'polite');
   copy.addEventListener('click', async () => {
     await copyMessageText(code);
     copy.classList.add('copied');
+    hint.classList.add('show');
     copy.setAttribute('aria-label', '已复制');
     copy.title = '已复制';
     setTimeout(() => {
       copy.classList.remove('copied');
+      hint.classList.remove('show');
       copy.setAttribute('aria-label', '复制代码');
       copy.title = '复制代码';
     }, 1200);
   });
   pre.append(node);
-  wrap.append(pre, copy);
+  wrap.append(pre, copy, hint);
   return wrap;
 }
 

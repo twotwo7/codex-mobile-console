@@ -1336,6 +1336,29 @@ button:disabled {
   border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
 }
 
+.code-copy-hint {
+  position: absolute;
+  top: 7px;
+  right: 34px;
+  padding: 2px 7px;
+  border: 1px solid color-mix(in srgb, var(--accent) 20%, var(--line));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: nowrap;
+  opacity: 0;
+  transform: translateY(4px);
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.16s ease;
+}
+
+.code-copy-hint.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
 .message-table-wrap {
   max-width: 100%;
   overflow-x: auto;
