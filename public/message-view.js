@@ -495,12 +495,31 @@ function parseBareLink(value, start) {
 }
 
 function renderCodeBlock(code, language) {
+  const wrap = document.createElement('div');
+  wrap.className = 'code-block-wrap';
   const pre = document.createElement('pre');
   const node = document.createElement('code');
   if (language) node.dataset.lang = language;
   node.textContent = code;
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'code-copy-button';
+  copy.setAttribute('aria-label', '复制代码');
+  copy.title = '复制代码';
+  copy.addEventListener('click', async () => {
+    await copyMessageText(code);
+    copy.classList.add('copied');
+    copy.setAttribute('aria-label', '已复制');
+    copy.title = '已复制';
+    setTimeout(() => {
+      copy.classList.remove('copied');
+      copy.setAttribute('aria-label', '复制代码');
+      copy.title = '复制代码';
+    }, 1200);
+  });
   pre.append(node);
-  return pre;
+  wrap.append(pre, copy);
+  return wrap;
 }
 
 function renderTable(lines) {

@@ -83,7 +83,7 @@ async function setFixture(page) {
                 <button class="message-toggle" type="button">▸</button>
               </div>
               <div class="message-summary">工具组 3 · $ npm test</div>
-              <div class="message-text"><pre><code>$ npm test\\n[completed]</code></pre></div>
+              <div class="message-text"><div class="code-block-wrap"><pre><code>$ npm test\\n[completed]</code></pre><button class="code-copy-button" type="button" aria-label="复制代码"></button></div></div>
             </article>
             <div class="queue-panel">
               <div class="queue-head"><strong>待执行 2 条</strong><div class="queue-head-actions"><span>已选 2 条，至少 2 条可合并</span><button class="queue-merge-button" type="button">合并选中</button></div></div>
