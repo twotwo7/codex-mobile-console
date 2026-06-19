@@ -2155,7 +2155,7 @@ button:disabled {
 }
 
 .session-goal-dialog {
-  width: min(720px, calc(100% - 22px));
+  width: min(680px, calc(100% - 18px));
 }
 
 .task-detail-dialog {
@@ -2171,17 +2171,38 @@ button:disabled {
 .goal-summary-card,
 .session-goal-manual {
   display: grid;
-  gap: 8px;
-  padding: 10px;
+  gap: 10px;
+  padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
 }
 
-.goal-summary-card strong {
+.goal-summary-card {
+  background: color-mix(in srgb, var(--surface-2) 82%, var(--accent) 6%);
+}
+
+.goal-hero {
+  display: grid;
+  gap: 5px;
+}
+
+.goal-hero span,
+.goal-section > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+
+.goal-hero strong {
   color: var(--text);
-  font-size: 15px;
-  line-height: 1.35;
+  font-size: 17px;
+  line-height: 1.38;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .goal-summary-card p,
@@ -2192,31 +2213,125 @@ button:disabled {
   line-height: 1.45;
 }
 
-.goal-summary-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.goal-chip-row {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
-.goal-summary-grid span {
-  min-width: 0;
-  padding: 6px 7px;
+.goal-chip {
+  max-width: 100%;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
   border: 1px solid var(--line);
-  border-radius: 6px;
-  color: var(--muted);
+  border-radius: 999px;
+  color: var(--text);
   font-size: 11px;
+  font-weight: 800;
   background: var(--surface);
 }
 
-.goal-summary-grid b {
-  display: block;
-  margin-top: 2px;
-  overflow: hidden;
+.goal-chip.active {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
+  color: var(--accent);
+}
+
+.goal-chip.paused {
+  color: var(--muted);
+}
+
+.goal-chip.complete {
+  border-color: color-mix(in srgb, var(--accent-2) 42%, var(--line));
+  color: var(--accent-2);
+}
+
+.goal-section {
+  display: grid;
+  gap: 7px;
+  padding-top: 2px;
+}
+
+.goal-plan-list,
+.goal-risk-list {
+  display: grid;
+  gap: 6px;
+}
+
+.goal-plan-item {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 7px;
+  align-items: start;
+  padding: 7px;
+  border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+}
+
+.goal-plan-item em {
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.goal-plan-item.doing em {
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  color: var(--accent);
+}
+
+.goal-plan-item.done em {
+  background: color-mix(in srgb, var(--accent-2) 14%, var(--surface-2));
+  color: var(--accent-2);
+}
+
+.goal-plan-item.blocked em {
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface-2));
+  color: var(--danger);
+}
+
+.goal-plan-item p,
+.goal-risk-list p {
   color: var(--text);
-  font-size: 12px;
-  font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.goal-plan-item p {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.goal-risk-list p {
+  padding: 7px;
+  border-left: 3px solid color-mix(in srgb, var(--danger) 42%, var(--line));
+  border-radius: 6px;
+  background: var(--surface);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.goal-empty,
+.goal-more {
+  color: var(--muted) !important;
+  font-size: 11px !important;
+}
+
+.goal-section > p {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .session-goal-manual summary {
@@ -2235,24 +2350,24 @@ button:disabled {
 }
 
 .session-goal-dialog textarea[name="objective"] {
-  min-height: 76px;
+  min-height: 64px;
 }
 
 .session-goal-dialog textarea[name="planText"],
 .session-goal-dialog textarea[name="notes"],
 .session-goal-dialog textarea[name="risksText"] {
-  min-height: 108px;
-  max-height: min(34svh, 300px);
+  min-height: 92px;
+  max-height: min(30svh, 260px);
 }
 
 .session-goal-dialog textarea[name="conclusion"] {
-  min-height: 84px;
-  max-height: min(28svh, 240px);
+  min-height: 76px;
+  max-height: min(24svh, 220px);
 }
 
 .session-goal-actions {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: 1fr 1fr 1.2fr;
   gap: 8px;
 }
 

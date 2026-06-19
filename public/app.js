@@ -89,8 +89,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '146';
-const SW_CACHE_VERSION = 'codex-console-v163';
+const APP_ASSET_VERSION = '147';
+const SW_CACHE_VERSION = 'codex-console-v164';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -2644,18 +2644,47 @@ function extractGoalJson(text = '') {
 function renderSessionGoalSummary(goal = {}) {
   if (!el.sessionGoalSummary) return;
   const value = normalizeGoal(goal);
-  const planText = value.plan.length
-    ? `${value.plan.filter((item) => item.status === 'done').length}/${value.plan.length} 已完成`
-    : '暂无计划';
+  const doneCount = value.plan.filter((item) => item.status === 'done').length;
+  const planItems = value.plan.slice(0, 2);
+  const hiddenPlanCount = Math.max(0, value.plan.length - planItems.length);
+  const riskItems = value.risks.slice(0, 1);
+  const hiddenRiskCount = Math.max(0, value.risks.length - riskItems.length);
   el.sessionGoalSummary.innerHTML = `
-    <strong>${escapeHtml(value.objective || '还没有任务目标')}</strong>
-    <div class="goal-summary-grid">
-      <span>状态 <b>${escapeHtml(goalStatusText(value.status))}</b></span>
-      <span>阶段 <b>${escapeHtml(value.phase || '未填写')}</b></span>
-      <span>计划 <b>${escapeHtml(planText)}</b></span>
-      <span>风险 <b>${value.risks.length}</b></span>
+    <section class="goal-hero">
+      <span>当前目标</span>
+      <strong>${escapeHtml(value.objective || '还没有任务目标')}</strong>
+    </section>
+    <div class="goal-chip-row">
+      <span class="goal-chip ${escapeHtml(value.status)}">${escapeHtml(goalStatusText(value.status))}</span>
+      <span class="goal-chip">${escapeHtml(value.phase || '未填写阶段')}</span>
+      <span class="goal-chip">${value.plan.length ? `${doneCount}/${value.plan.length} 完成` : '暂无计划'}</span>
+      <span class="goal-chip">${value.risks.length ? `${value.risks.length} 个风险` : '无风险记录'}</span>
     </div>
-    <p>${escapeHtml(value.conclusion || value.notes || '建议直接让 Codex 根据当前对话生成任务面板。')}</p>
+    <section class="goal-section">
+      <span>下一步</span>
+      <div class="goal-plan-list">
+        ${planItems.length ? planItems.map((item) => `
+          <div class="goal-plan-item ${escapeHtml(item.status)}">
+            <em>${escapeHtml(planStatusText(item.status))}</em>
+            <p>${escapeHtml(item.text)}</p>
+          </div>
+        `).join('') : '<p class="goal-empty">暂无计划项。</p>'}
+        ${hiddenPlanCount ? `<p class="goal-more">还有 ${hiddenPlanCount} 项，展开手动编辑查看。</p>` : ''}
+      </div>
+    </section>
+    <section class="goal-section">
+      <span>最近结论</span>
+      <p>${escapeHtml(value.conclusion || value.notes || '建议直接让 Codex 根据当前对话生成任务面板。')}</p>
+    </section>
+    ${riskItems.length ? `
+      <section class="goal-section">
+        <span>风险/待确认</span>
+        <div class="goal-risk-list">
+          ${riskItems.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}
+          ${hiddenRiskCount ? `<p class="goal-more">还有 ${hiddenRiskCount} 项。</p>` : ''}
+        </div>
+      </section>
+    ` : ''}
   `;
 }
 
