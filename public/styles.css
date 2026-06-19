@@ -2155,7 +2155,7 @@ button:disabled {
 }
 
 .session-goal-dialog {
-  width: min(680px, calc(100% - 18px));
+  width: min(640px, calc(100% - 18px));
 }
 
 .task-detail-dialog {
@@ -2163,45 +2163,58 @@ button:disabled {
 }
 
 .session-goal-dialog form {
-  gap: 10px;
+  gap: 9px;
   max-height: min(82svh, 760px);
   overflow: auto;
 }
 
-.goal-summary-card,
-.session-goal-manual {
+.session-goal-dialog .dialog-head h2 {
+  font-size: 28px;
+  line-height: 1.1;
+}
+
+.goal-ai-button {
+  min-height: 40px;
+  border-radius: 8px;
+}
+
+.goal-summary-card {
   display: grid;
-  gap: 10px;
+  gap: 12px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
-}
-
-.goal-summary-card {
-  background: color-mix(in srgb, var(--surface-2) 82%, var(--accent) 6%);
   max-height: min(50svh, 520px);
   overflow: auto;
   overscroll-behavior: contain;
 }
 
-.goal-hero {
+.session-goal-manual {
   display: grid;
-  gap: 5px;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
 }
 
-.goal-hero span,
-.goal-section > span {
+.goal-hero {
+  display: grid;
+  gap: 6px;
+}
+
+.goal-section-label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 800;
   letter-spacing: 0;
 }
 
 .goal-hero strong {
   color: var(--text);
-  font-size: 17px;
-  line-height: 1.38;
+  font-size: 18px;
+  line-height: 1.42;
 }
 
 .goal-summary-card p,
@@ -2214,86 +2227,92 @@ button:disabled {
 
 .goal-chip-row {
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 6px;
+  gap: 5px 8px;
+  padding-bottom: 2px;
+  color: var(--muted);
+  font-size: 12px;
 }
 
-.goal-chip {
-  max-width: 100%;
-  min-height: 24px;
+.goal-chip-row span:not(.goal-status-dot) {
   display: inline-flex;
   align-items: center;
-  padding: 0 8px;
-  border: 1px solid var(--line);
+}
+
+.goal-chip-row span:not(.goal-status-dot):not(:last-child)::after {
+  content: '·';
+  margin-left: 8px;
+  color: var(--soft);
+}
+
+.goal-status-dot {
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 800;
-  background: var(--surface);
+  background: var(--muted);
 }
 
-.goal-chip.active {
-  border-color: color-mix(in srgb, var(--accent) 36%, var(--line));
-  color: var(--accent);
+.goal-status-dot.active {
+  background: var(--accent);
 }
 
-.goal-chip.paused {
-  color: var(--muted);
+.goal-status-dot.complete {
+  background: var(--accent-2);
 }
 
-.goal-chip.complete {
-  border-color: color-mix(in srgb, var(--accent-2) 42%, var(--line));
-  color: var(--accent-2);
+.goal-status-dot.paused {
+  background: var(--soft);
 }
 
 .goal-section {
   display: grid;
-  gap: 7px;
-  padding-top: 2px;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 72%, transparent);
 }
 
 .goal-plan-list,
 .goal-risk-list {
   display: grid;
-  gap: 6px;
+  gap: 8px;
 }
 
 .goal-plan-item {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr);
-  gap: 7px;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 9px;
   align-items: start;
-  padding: 7px;
-  border: 1px solid color-mix(in srgb, var(--line) 74%, transparent);
-  border-radius: 7px;
-  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  padding: 0;
+  background: transparent;
 }
 
 .goal-plan-item em {
-  min-height: 20px;
+  min-height: 19px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 999px;
-  background: var(--surface-2);
+  border-radius: 5px;
+  background: var(--surface);
   color: var(--muted);
   font-size: 10px;
   font-style: normal;
   font-weight: 900;
+  line-height: 1;
 }
 
 .goal-plan-item.doing em {
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface-2));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
   color: var(--accent);
 }
 
 .goal-plan-item.done em {
-  background: color-mix(in srgb, var(--accent-2) 14%, var(--surface-2));
+  background: color-mix(in srgb, var(--accent-2) 10%, var(--surface));
   color: var(--accent-2);
 }
 
 .goal-plan-item.blocked em {
-  background: color-mix(in srgb, var(--danger) 12%, var(--surface-2));
+  background: color-mix(in srgb, var(--danger) 10%, var(--surface));
   color: var(--danger);
 }
 
@@ -2307,10 +2326,8 @@ button:disabled {
 }
 
 .goal-risk-list p {
-  padding: 7px;
-  border-left: 3px solid color-mix(in srgb, var(--danger) 42%, var(--line));
-  border-radius: 6px;
-  background: var(--surface);
+  padding-left: 9px;
+  border-left: 2px solid color-mix(in srgb, var(--danger) 36%, var(--line));
   overflow-wrap: anywhere;
 }
 

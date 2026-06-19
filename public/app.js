@@ -89,8 +89,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '148';
-const SW_CACHE_VERSION = 'codex-console-v165';
+const APP_ASSET_VERSION = '149';
+const SW_CACHE_VERSION = 'codex-console-v166';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -2647,17 +2647,18 @@ function renderSessionGoalSummary(goal = {}) {
   const doneCount = value.plan.filter((item) => item.status === 'done').length;
   el.sessionGoalSummary.innerHTML = `
     <section class="goal-hero">
-      <span>当前目标</span>
+      <span class="goal-section-label">当前目标</span>
       <strong>${escapeHtml(value.objective || '还没有任务目标')}</strong>
     </section>
     <div class="goal-chip-row">
-      <span class="goal-chip ${escapeHtml(value.status)}">${escapeHtml(goalStatusText(value.status))}</span>
-      <span class="goal-chip">${escapeHtml(value.phase || '未填写阶段')}</span>
-      <span class="goal-chip">${value.plan.length ? `${doneCount}/${value.plan.length} 完成` : '暂无计划'}</span>
-      <span class="goal-chip">${value.risks.length ? `${value.risks.length} 个风险` : '无风险记录'}</span>
+      <span class="goal-status-dot ${escapeHtml(value.status)}" aria-hidden="true"></span>
+      <span>${escapeHtml(goalStatusText(value.status))}</span>
+      <span>${escapeHtml(value.phase || '未填写阶段')}</span>
+      <span>${value.plan.length ? `${doneCount}/${value.plan.length} 完成` : '暂无计划'}</span>
+      <span>${value.risks.length ? `${value.risks.length} 风险` : '无风险'}</span>
     </div>
     <section class="goal-section">
-      <span>下一步</span>
+      <span class="goal-section-label">计划</span>
       <div class="goal-plan-list">
         ${value.plan.length ? value.plan.map((item) => `
           <div class="goal-plan-item ${escapeHtml(item.status)}">
@@ -2668,12 +2669,12 @@ function renderSessionGoalSummary(goal = {}) {
       </div>
     </section>
     <section class="goal-section">
-      <span>最近结论</span>
+      <span class="goal-section-label">最近结论</span>
       <p>${escapeHtml(value.conclusion || value.notes || '建议直接让 Codex 根据当前对话生成任务面板。')}</p>
     </section>
     ${value.risks.length ? `
       <section class="goal-section">
-        <span>风险/待确认</span>
+        <span class="goal-section-label">风险/待确认</span>
         <div class="goal-risk-list">
           ${value.risks.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}
         </div>

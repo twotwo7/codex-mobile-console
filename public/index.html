@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=128">
+    <link rel="stylesheet" href="/styles.css?v=129">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -463,7 +463,7 @@
           <h2>任务面板</h2>
           <button class="icon-button" type="button" id="cancelSessionGoal" aria-label="关闭任务面板">×</button>
         </div>
-        <button class="primary-wide" type="button" id="syncSessionGoal">让 Codex 生成/更新</button>
+        <button class="primary-wide goal-ai-button" type="button" id="syncSessionGoal">让 Codex 生成/更新</button>
         <p class="goal-ai-note">Codex 返回 JSON 后会自动更新本面板；也可以在消息菜单里手动应用。</p>
         <div id="sessionGoalSummary" class="goal-summary-card"></div>
         <details class="session-goal-manual">
@@ -642,6 +642,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=148" type="module"></script>
+    <script src="/app.js?v=149" type="module"></script>
   </body>
 </html>
