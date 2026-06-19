@@ -89,8 +89,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '147';
-const SW_CACHE_VERSION = 'codex-console-v164';
+const APP_ASSET_VERSION = '148';
+const SW_CACHE_VERSION = 'codex-console-v165';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -2645,10 +2645,6 @@ function renderSessionGoalSummary(goal = {}) {
   if (!el.sessionGoalSummary) return;
   const value = normalizeGoal(goal);
   const doneCount = value.plan.filter((item) => item.status === 'done').length;
-  const planItems = value.plan.slice(0, 2);
-  const hiddenPlanCount = Math.max(0, value.plan.length - planItems.length);
-  const riskItems = value.risks.slice(0, 1);
-  const hiddenRiskCount = Math.max(0, value.risks.length - riskItems.length);
   el.sessionGoalSummary.innerHTML = `
     <section class="goal-hero">
       <span>当前目标</span>
@@ -2663,25 +2659,23 @@ function renderSessionGoalSummary(goal = {}) {
     <section class="goal-section">
       <span>下一步</span>
       <div class="goal-plan-list">
-        ${planItems.length ? planItems.map((item) => `
+        ${value.plan.length ? value.plan.map((item) => `
           <div class="goal-plan-item ${escapeHtml(item.status)}">
             <em>${escapeHtml(planStatusText(item.status))}</em>
             <p>${escapeHtml(item.text)}</p>
           </div>
         `).join('') : '<p class="goal-empty">暂无计划项。</p>'}
-        ${hiddenPlanCount ? `<p class="goal-more">还有 ${hiddenPlanCount} 项，展开手动编辑查看。</p>` : ''}
       </div>
     </section>
     <section class="goal-section">
       <span>最近结论</span>
       <p>${escapeHtml(value.conclusion || value.notes || '建议直接让 Codex 根据当前对话生成任务面板。')}</p>
     </section>
-    ${riskItems.length ? `
+    ${value.risks.length ? `
       <section class="goal-section">
         <span>风险/待确认</span>
         <div class="goal-risk-list">
-          ${riskItems.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}
-          ${hiddenRiskCount ? `<p class="goal-more">还有 ${hiddenRiskCount} 项。</p>` : ''}
+          ${value.risks.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}
         </div>
       </section>
     ` : ''}

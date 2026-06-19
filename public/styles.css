@@ -2180,6 +2180,9 @@ button:disabled {
 
 .goal-summary-card {
   background: color-mix(in srgb, var(--surface-2) 82%, var(--accent) 6%);
+  max-height: min(50svh, 520px);
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .goal-hero {
@@ -2199,10 +2202,6 @@ button:disabled {
   color: var(--text);
   font-size: 17px;
   line-height: 1.38;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 
 .goal-summary-card p,
@@ -2304,10 +2303,7 @@ button:disabled {
 }
 
 .goal-plan-item p {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .goal-risk-list p {
@@ -2315,23 +2311,16 @@ button:disabled {
   border-left: 3px solid color-mix(in srgb, var(--danger) 42%, var(--line));
   border-radius: 6px;
   background: var(--surface);
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
-.goal-empty,
-.goal-more {
+.goal-empty {
   color: var(--muted) !important;
   font-size: 11px !important;
 }
 
 .goal-section > p {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .session-goal-manual summary {

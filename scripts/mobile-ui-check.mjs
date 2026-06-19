@@ -10,6 +10,20 @@ const viewports = [
   { name: 'mobile-430', width: 430, height: 932 }
 ];
 
+async function api(page, pathName, options = {}) {
+  return page.evaluate(async ({ pathName, options }) => {
+    const res = await fetch(pathName, {
+      credentials: 'same-origin',
+      headers: { 'content-type': 'application/json', ...(options.headers || {}) },
+      ...options
+    });
+    const text = await res.text();
+    const data = text ? JSON.parse(text) : {};
+    if (!res.ok) throw new Error(data.error || data.message || `HTTP ${res.status}`);
+    return data;
+  }, { pathName, options });
+}
+
 async function loginSmoke(page) {
   await page.goto(APP_URL, { waitUntil: 'networkidle' });
   const loginVisible = await page.locator('#loginView:not([hidden])').count();
@@ -20,6 +34,35 @@ async function loginSmoke(page) {
   }
   await page.waitForSelector('#appView:not([hidden])', { timeout: 10000 });
   await page.waitForSelector('#messagePane', { timeout: 5000 });
+}
+
+async function waitForActiveSession(page, sessionId) {
+  await page.waitForFunction((sessionId) => {
+    return localStorage.getItem('cmc.activeId') === sessionId
+      && document.querySelector('#promptInput')?.disabled === false
+      && document.querySelector('#activeTitle')?.textContent !== 'Codex Console';
+  }, sessionId, { timeout: 10000 });
+}
+
+async function ensureGoalCheckSession(page) {
+  const sessions = await api(page, '/api/sessions').catch(() => ({ sessions: [] }));
+  const existing = (sessions.sessions || []).find((session) => !session.trashedAt && !session.id?.startsWith?.('codex:'));
+  if (existing?.id) {
+    await page.evaluate((id) => localStorage.setItem('cmc.activeId', id), existing.id);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForSelector('#appView:not([hidden])', { timeout: 10000 });
+    await waitForActiveSession(page, existing.id);
+    return { id: existing.id, temporary: false };
+  }
+  const created = await api(page, '/api/sessions', {
+    method: 'POST',
+    body: JSON.stringify({ title: 'UI check task panel', cwd: '/root/Projects' })
+  });
+  await page.evaluate((id) => localStorage.setItem('cmc.activeId', id), created.session.id);
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#appView:not([hidden])', { timeout: 10000 });
+  await waitForActiveSession(page, created.session.id);
+  return { id: created.session.id, temporary: true };
 }
 
 async function setFixture(page) {
@@ -140,9 +183,10 @@ async function checkSkillDialog(page) {
 }
 
 async function checkGoalDialog(page) {
+  const checkSession = await ensureGoalCheckSession(page);
   await page.click('#topMoreButton');
   await page.waitForSelector('#topMoreMenu:not([hidden])', { timeout: 5000 });
-  await page.click('#sessionGoalButton');
+  await page.locator('#sessionGoalButton').evaluate((button) => button.click());
   await page.waitForSelector('#sessionGoalDialog[open]', { timeout: 5000 });
   await assertVisibleBox(page, '#sessionGoalDialog', 'goal dialog');
   await assertVisibleBox(page, '.goal-summary-card', 'goal summary card');
@@ -151,6 +195,12 @@ async function checkGoalDialog(page) {
   if (manualOpen) throw new Error('manual goal editor should be collapsed by default');
   await page.click('#cancelSessionGoal');
   await page.waitForSelector('#sessionGoalDialog', { state: 'hidden', timeout: 5000 });
+  if (checkSession.temporary) {
+    await api(page, `/api/sessions/${encodeURIComponent(checkSession.id)}`, {
+      method: 'DELETE',
+      body: JSON.stringify({ permanent: false })
+    }).catch(() => {});
+  }
 }
 
 function assertStableBox(before, after, label, tolerance = 1) {
