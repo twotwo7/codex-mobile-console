@@ -93,8 +93,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '151';
-const SW_CACHE_VERSION = 'codex-console-v168';
+const APP_ASSET_VERSION = '152';
+const SW_CACHE_VERSION = 'codex-console-v169';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1522,7 +1522,61 @@ function shareImageSource(image) {
   return `/api/uploads/${encodeURIComponent(fileName)}`;
 }
 
-function wrapCanvasRichText(ctx, text, maxWidth) {
+function splitShareTableRow(line) {
+  return String(line || '')
+    .trim()
+    .replace(/^\|/, '')
+    .replace(/\|$/, '')
+    .split('|')
+    .map((cell) => cell.trim());
+}
+
+function isShareTableRow(line) {
+  return String(line || '').includes('|');
+}
+
+function isShareTableSeparator(line) {
+  const cells = splitShareTableRow(line);
+  return cells.length >= 2 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+}
+
+function isShareTableStart(lines, index) {
+  return isShareTableRow(lines[index]) && isShareTableSeparator(lines[index + 1]);
+}
+
+function parseShareBlocks(text) {
+  const blocks = [];
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  for (let index = 0; index < lines.length;) {
+    if (!lines[index].trim()) {
+      index += 1;
+      continue;
+    }
+
+    if (isShareTableStart(lines, index)) {
+      const header = splitShareTableRow(lines[index]);
+      index += 2;
+      const rows = [];
+      while (index < lines.length && isShareTableRow(lines[index]) && lines[index].trim()) {
+        const cells = splitShareTableRow(lines[index]);
+        rows.push(cells);
+        index += 1;
+      }
+      blocks.push({ type: 'table', header, rows });
+      continue;
+    }
+
+    const paragraphLines = [];
+    while (index < lines.length && lines[index].trim() && !isShareTableStart(lines, index)) {
+      paragraphLines.push(lines[index]);
+      index += 1;
+    }
+    if (paragraphLines.length) blocks.push({ type: 'paragraph', text: paragraphLines.join('\n') });
+  }
+  return blocks.length ? blocks : [{ type: 'paragraph', text: '(空消息)' }];
+}
+
+function wrapCanvasRichText(ctx, text, maxWidth, size = 26) {
   const lines = [];
   const paragraphs = String(text || '').split('\n');
   for (const paragraph of paragraphs) {
@@ -1533,7 +1587,7 @@ function wrapCanvasRichText(ctx, text, maxWidth) {
     let line = [];
     let lineWidth = 0;
     for (const token of parseShareMarkdownInline(paragraph)) {
-      ctx.font = shareTokenFont(token);
+      ctx.font = shareTokenFont(token, size);
       for (const char of [...token.text]) {
         const width = ctx.measureText(char).width;
         if (line.length && lineWidth + width > maxWidth) {
@@ -1552,15 +1606,24 @@ function wrapCanvasRichText(ctx, text, maxWidth) {
   return lines;
 }
 
-function drawCanvasRichLine(ctx, tokens, x, y) {
+function measureShareInlineWidth(ctx, text, size = 26) {
+  let width = 0;
+  for (const token of parseShareMarkdownInline(text)) {
+    ctx.font = shareTokenFont(token, size);
+    width += ctx.measureText(token.text).width;
+  }
+  return width;
+}
+
+function drawCanvasRichLine(ctx, tokens, x, y, size = 26) {
   let cursor = x;
   for (const token of tokens || []) {
-    ctx.font = shareTokenFont(token);
+    ctx.font = shareTokenFont(token, size);
     ctx.fillStyle = token.kind === 'link' ? '#0b6bcb' : token.kind === 'code' ? '#1f2328' : '#22272e';
     if (token.kind === 'code') {
       const width = ctx.measureText(token.text).width;
       ctx.fillStyle = '#eee8dc';
-      roundRectPath(ctx, cursor - 3, y - 25, width + 6, 31, 5);
+      roundRectPath(ctx, cursor - 3, y - size + 1, width + 6, size + 5, 5);
       ctx.fill();
       ctx.fillStyle = '#1f2328';
     }
@@ -1594,12 +1657,99 @@ function loadShareImage(src) {
   });
 }
 
+function estimateShareTableWidth(ctx, table) {
+  const cellPad = 18;
+  const minColumn = 108;
+  const maxColumn = 320;
+  const columns = Math.max(table.header.length, ...table.rows.map((row) => row.length), 1);
+  let total = 0;
+  for (let column = 0; column < columns; column += 1) {
+    const values = [table.header[column] || '', ...table.rows.map((row) => row[column] || '')];
+    const contentWidth = Math.max(...values.map((cell) => measureShareInlineWidth(ctx, cell, 22)), 0);
+    total += Math.max(minColumn, Math.min(maxColumn, Math.ceil(contentWidth + cellPad * 2)));
+  }
+  return total;
+}
+
+function estimateShareRequiredWidth(ctx, messages, margin) {
+  let required = 900;
+  for (const message of messages) {
+    const blocks = parseShareBlocks(shareText(message) || '(空消息)');
+    for (const block of blocks) {
+      if (block.type !== 'table') continue;
+      required = Math.max(required, estimateShareTableWidth(ctx, block) + margin * 2 + 44);
+    }
+  }
+  return Math.min(1600, required);
+}
+
+function layoutShareTable(ctx, table, maxWidth) {
+  const cellPadX = 14;
+  const cellPadY = 11;
+  const lineHeight = 30;
+  const minColumn = 108;
+  const maxColumn = 320;
+  const columns = Math.max(table.header.length, ...table.rows.map((row) => row.length), 1);
+  const widths = [];
+  for (let column = 0; column < columns; column += 1) {
+    const values = [table.header[column] || '', ...table.rows.map((row) => row[column] || '')];
+    const contentWidth = Math.max(...values.map((cell) => measureShareInlineWidth(ctx, cell, 22)), 0);
+    widths.push(Math.max(minColumn, Math.min(maxColumn, Math.ceil(contentWidth + cellPadX * 2))));
+  }
+
+  const naturalWidth = widths.reduce((sum, width) => sum + width, 0);
+  if (naturalWidth > maxWidth) {
+    const scale = maxWidth / naturalWidth;
+    for (let index = 0; index < widths.length; index += 1) {
+      widths[index] = Math.max(88, Math.floor(widths[index] * scale));
+    }
+  }
+
+  const tableWidth = widths.reduce((sum, width) => sum + width, 0);
+  const layoutRow = (cells, header = false) => {
+    const cellLayouts = [];
+    let rowHeight = 0;
+    for (let column = 0; column < columns; column += 1) {
+      const lines = wrapCanvasRichText(ctx, cells[column] || '', Math.max(40, widths[column] - cellPadX * 2), 22).slice(0, 12);
+      cellLayouts.push(lines);
+      rowHeight = Math.max(rowHeight, Math.max(1, lines.length) * lineHeight + cellPadY * 2);
+    }
+    return { cells: cellLayouts, header, height: rowHeight };
+  };
+
+  const rows = [layoutRow(table.header, true), ...table.rows.slice(0, 40).map((row) => layoutRow(row, false))];
+  return {
+    type: 'table',
+    widths,
+    rows,
+    width: tableWidth,
+    height: rows.reduce((sum, row) => sum + row.height, 0)
+  };
+}
+
+function layoutShareBlocks(ctx, blocks, maxWidth) {
+  const layouts = [];
+  let height = 0;
+  for (const block of blocks) {
+    if (block.type === 'table') {
+      const table = layoutShareTable(ctx, block, maxWidth);
+      layouts.push(table);
+      height += table.height + 18;
+      continue;
+    }
+    const lines = wrapCanvasRichText(ctx, block.text, maxWidth).slice(0, 80);
+    layouts.push({ type: 'paragraph', lines, height: lines.length * 36 });
+    height += lines.length * 36 + 8;
+  }
+  return { blocks: layouts, height: Math.max(0, height - 8) };
+}
+
 async function buildShareLayout(messages, session) {
-  const width = 900;
   const margin = 38;
   const gap = 18;
-  const bubbleMax = width - margin * 2;
   const measure = document.createElement('canvas').getContext('2d');
+  const width = estimateShareRequiredWidth(measure, messages, margin);
+  const bubbleMax = width - margin * 2;
   measure.font = '28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   const items = [];
   let y = 132;
@@ -1607,7 +1757,7 @@ async function buildShareLayout(messages, session) {
   for (const message of messages) {
     const text = shareText(message) || '(空消息)';
     const textMax = bubbleMax - 44;
-    const lines = wrapCanvasRichText(measure, text, textMax).slice(0, 80);
+    const { blocks, height: textHeight } = layoutShareBlocks(measure, parseShareBlocks(text), textMax);
     const images = [];
     for (const image of (message.images || []).slice(0, 3)) {
       const loaded = await loadShareImage(shareImageSource(image));
@@ -1617,9 +1767,8 @@ async function buildShareLayout(messages, session) {
     const imageRows = images.length ? Math.ceil(images.length / 2) : 0;
     const imageHeight = imageRows ? imageRows * 150 + (imageRows - 1) * 10 + 16 : 0;
     const fileHeight = fileCount ? 34 : 0;
-    const textHeight = lines.length * 36;
     const height = 58 + textHeight + imageHeight + fileHeight + 24;
-    items.push({ message, lines, images, fileCount, x: margin, y, width: bubbleMax, height });
+    items.push({ message, blocks, images, fileCount, x: margin, y, width: bubbleMax, height });
     y += height + gap;
   }
 
@@ -1628,6 +1777,32 @@ async function buildShareLayout(messages, session) {
     throw new Error('截图太长了，请少选一些消息后再生成。');
   }
   return { width, height: totalHeight, items, session };
+}
+
+function drawShareTable(ctx, table, x, y) {
+  const lineHeight = 30;
+  const cellPadX = 14;
+  const cellPadY = 11;
+  let rowY = y;
+  ctx.lineWidth = 1;
+  ctx.strokeStyle = '#d4cec0';
+  for (const row of table.rows) {
+    let cellX = x;
+    for (let column = 0; column < table.widths.length; column += 1) {
+      const cellWidth = table.widths[column];
+      ctx.fillStyle = row.header ? '#eee8dc' : '#fffdf8';
+      ctx.fillRect(cellX, rowY, cellWidth, row.height);
+      ctx.strokeRect(cellX, rowY, cellWidth, row.height);
+      let textY = rowY + cellPadY + 22;
+      for (const line of row.cells[column] || []) {
+        const adjusted = line.map((token) => ({ ...token, bold: row.header || token.bold }));
+        drawCanvasRichLine(ctx, adjusted, cellX + cellPadX, textY, 22);
+        textY += lineHeight;
+      }
+      cellX += cellWidth;
+    }
+    rowY += row.height;
+  }
 }
 
 function drawShareImage(layout) {
@@ -1672,9 +1847,17 @@ function drawShareImage(layout) {
     ctx.fillStyle = '#22272e';
     ctx.font = '26px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     let textY = y + 78;
-    for (const line of item.lines) {
-      drawCanvasRichLine(ctx, line, x + 22, textY);
-      textY += 36;
+    for (const block of item.blocks) {
+      if (block.type === 'table') {
+        drawShareTable(ctx, block, x + 22, textY - 26);
+        textY += block.height + 18;
+        continue;
+      }
+      for (const line of block.lines) {
+        drawCanvasRichLine(ctx, line, x + 22, textY);
+        textY += 36;
+      }
+      textY += 8;
     }
 
     if (item.images.length) {
@@ -1729,6 +1912,7 @@ async function generateShareImage() {
   const img = document.createElement('img');
   img.src = state.shareImageUrl;
   img.alt = '分享截图预览';
+  img.style.width = `${layout.width}px`;
   el.sharePreviewBody.append(img);
   el.sharePreviewState.textContent = `${messages.length} 条消息 · ${formatBytes(blob.size)}`;
 }
