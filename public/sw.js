@@ -1,5 +1,5 @@
-const CACHE_NAME = 'codex-console-v171';
-const ASSETS = ['/', '/index.html', '/styles.css?v=133', '/app.js?v=154', '/performance-metrics.js?v=1', '/message-scheduler.js?v=2', '/browser-utils.js?v=1', '/connection-state.js?v=1', '/format-utils.js?v=1', '/frontend-events.js?v=1', '/message-utils.js?v=2', '/message-view.js?v=16', '/prompt-actions.js?v=9', '/queue-view.js?v=6', '/session-state.js?v=6', '/skill-view.js?v=3', '/topbar-view.js?v=6', '/manifest.json?v=3', '/icons/icon-192.png', '/icons/icon-512.png'];
+const CACHE_NAME = 'codex-console-v172';
+const ASSETS = ['/', '/index.html', '/styles.css?v=134', '/app.js?v=155', '/performance-metrics.js?v=1', '/message-scheduler.js?v=2', '/browser-utils.js?v=1', '/connection-state.js?v=1', '/format-utils.js?v=1', '/frontend-events.js?v=1', '/message-utils.js?v=2', '/message-view.js?v=16', '/prompt-actions.js?v=9', '/queue-view.js?v=6', '/session-state.js?v=7', '/skill-view.js?v=3', '/topbar-view.js?v=6', '/manifest.json?v=3', '/icons/icon-192.png', '/icons/icon-512.png'];
 const CACHEABLE_PATHS = new Set(['/', '/index.html', '/styles.css', '/app.js', '/performance-metrics.js', '/message-scheduler.js', '/browser-utils.js', '/connection-state.js', '/format-utils.js', '/frontend-events.js', '/message-utils.js', '/message-view.js', '/prompt-actions.js', '/queue-view.js', '/session-state.js', '/skill-view.js', '/topbar-view.js', '/manifest.json', '/icons/icon-192.png', '/icons/icon-512.png']);
 
 self.addEventListener('install', (event) => {

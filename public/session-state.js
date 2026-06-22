@@ -19,6 +19,7 @@ const SESSION_STATUS_KEYS = [
   'trashedAt',
   'createdAt',
   'updatedAt',
+  'activityAt',
   'lastSeq',
   'storedStatus',
   'isRunning',
@@ -132,7 +133,8 @@ export function createSessionStateController(options) {
       isRunning: nextRunning,
       canStop: status === 'running',
       queuedCount: message.queuedCount,
-      updatedAt: message.at
+      updatedAt: message.at,
+      activityAt: message.at
     });
   }
 

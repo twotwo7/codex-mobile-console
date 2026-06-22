@@ -8,7 +8,7 @@ import { createMessageView } from './message-view.js?v=16';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
-import { createSessionStateController } from './session-state.js?v=6';
+import { createSessionStateController } from './session-state.js?v=7';
 import { createSkillView } from './skill-view.js?v=3';
 import { createTopbarView } from './topbar-view.js?v=6';
 
@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '154';
-const SW_CACHE_VERSION = 'codex-console-v171';
+const APP_ASSET_VERSION = '155';
+const SW_CACHE_VERSION = 'codex-console-v172';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -668,7 +668,7 @@ function setMessagePage(sessionId, page, options = {}) {
     loading: false
   };
   if (page?.session) {
-    next.sessionUpdatedAt = page.session.updatedAt || '';
+    next.sessionUpdatedAt = page.session.activityAt || page.session.updatedAt || '';
     next.lastSeq = page.session.lastSeq || 0;
   } else {
     next.sessionUpdatedAt = current.sessionUpdatedAt || '';
@@ -679,12 +679,12 @@ function setMessagePage(sessionId, page, options = {}) {
 }
 
 function isMessageCacheFresh(sessionId, session) {
-  if (!session?.updatedAt) return false;
+  if (!(session?.activityAt || session?.updatedAt)) return false;
   const page = loadMessagePage(sessionId);
   const messages = state.messages.get(sessionId) || [];
   return Boolean(messages.length)
     && Boolean(page?.beforeSeq || messages.some((message) => message.orderSeq))
-    && page?.sessionUpdatedAt === session.updatedAt
+    && page?.sessionUpdatedAt === (session.activityAt || session.updatedAt)
     && Number(page?.offset || 0) >= Math.min(firstPageLimit(), messages.length);
 }
 
@@ -969,7 +969,7 @@ function renderSessions(options = {}) {
 
   const sessions = [...state.sessions]
     .filter((session) => state.sessionViewMode === 'trash' ? Boolean(session.trashedAt) : !session.trashedAt)
-    .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+    .sort((a, b) => String(b.activityAt || b.updatedAt || '').localeCompare(String(a.activityAt || a.updatedAt || '')));
   const limit = state.sessionViewMode === 'recent'
     ? 20
     : Math.max(SESSION_RENDER_STEP, state.sessionRenderLimit || SESSION_RENDER_STEP);
@@ -1165,7 +1165,7 @@ function renderSessionButton(session) {
     <span class="session-title-row">
       <i class="session-status-dot ${sessionStatusKind(session)}" aria-hidden="true"></i>
       <strong>${escapeHtml(session.title || '未命名会话')}</strong>
-      <time>${escapeHtml(formatTime(session.trashedAt || session.updatedAt))}</time>
+      <time>${escapeHtml(formatTime(session.trashedAt || session.activityAt || session.updatedAt))}</time>
     </span>
     <span class="session-meta-row">${escapeHtml(sessionStatusLabel(session))} · ${escapeHtml(formatSessionCwd(session.cwd || ''))}</span>
     ${sessionTagsHtml(session)}

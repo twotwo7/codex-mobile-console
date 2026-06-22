@@ -382,7 +382,6 @@ function applySmartTagsToState() {
   for (const session of webSessions) {
     ensureSessionHarness(session);
     session.tags = inferSessionTags(session);
-    session.updatedAt = nowIso();
     auditSession(session, 'tags.inferred', { summary: session.tags.join(', ') || 'none' });
   }
   state.codexSessionTags = {};
@@ -950,6 +949,16 @@ function safeCompare(a, b) {
   return timingSafeEqual(left, right);
 }
 
+function sessionActivityAt(session) {
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    const at = message?.at || message?.timestamp || message?.createdAt || message?.updatedAt || '';
+    if (at) return at;
+  }
+  return session?.activityAt || session?.updatedAt || session?.createdAt || '';
+}
+
 function publicSession(session) {
   ensureSessionHarness(session);
   const goal = normalizeSessionGoal(session.goal || {});
@@ -993,6 +1002,7 @@ function publicSession(session) {
     trashedAt: session.trashedAt || '',
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
+    activityAt: sessionActivityAt(session),
     lastSeq: session.lastSeq || 0,
     queuedCount: session.queue.length,
     queue: session.queue.map((item) => ({
@@ -1405,13 +1415,14 @@ function publicExternalSession(session) {
     trashedAt: state.hiddenCodexSessions?.[codexSessionId] || '',
     createdAt: session.createdAt || session.updatedAt,
     updatedAt: session.updatedAt,
+    activityAt: session.activityAt || session.updatedAt || session.createdAt || '',
     lastSeq: 0,
     messageCount: null
   };
 }
 
 function sortPublicSessions(sessions) {
-  return sessions.sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  return sessions.sort((a, b) => String(b.activityAt || b.updatedAt || '').localeCompare(String(a.activityAt || a.updatedAt || '')));
 }
 
 function textFromContent(content) {
@@ -3376,7 +3387,7 @@ async function handleApi(req, res, url) {
     if (hasConfigPatch) Object.assign(session, normalizeSessionConfig(body.config, session));
     if (hasGoalPatch) session.goal = normalizeSessionGoal(body.goal, session.goal || {});
     if (hasTagsPatch) session.tags = normalizeSessionTags(body.tags || []);
-    session.updatedAt = nowIso();
+    if (title || hasConfigPatch || hasGoalPatch) session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { session: publicSession(session) });
   }
