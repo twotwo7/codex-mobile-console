@@ -93,8 +93,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '152';
-const SW_CACHE_VERSION = 'codex-console-v169';
+const APP_ASSET_VERSION = '153';
+const SW_CACHE_VERSION = 'codex-console-v170';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1657,37 +1657,11 @@ function loadShareImage(src) {
   });
 }
 
-function estimateShareTableWidth(ctx, table) {
-  const cellPad = 18;
-  const minColumn = 108;
-  const maxColumn = 320;
-  const columns = Math.max(table.header.length, ...table.rows.map((row) => row.length), 1);
-  let total = 0;
-  for (let column = 0; column < columns; column += 1) {
-    const values = [table.header[column] || '', ...table.rows.map((row) => row[column] || '')];
-    const contentWidth = Math.max(...values.map((cell) => measureShareInlineWidth(ctx, cell, 22)), 0);
-    total += Math.max(minColumn, Math.min(maxColumn, Math.ceil(contentWidth + cellPad * 2)));
-  }
-  return total;
-}
-
-function estimateShareRequiredWidth(ctx, messages, margin) {
-  let required = 900;
-  for (const message of messages) {
-    const blocks = parseShareBlocks(shareText(message) || '(空消息)');
-    for (const block of blocks) {
-      if (block.type !== 'table') continue;
-      required = Math.max(required, estimateShareTableWidth(ctx, block) + margin * 2 + 44);
-    }
-  }
-  return Math.min(1600, required);
-}
-
 function layoutShareTable(ctx, table, maxWidth) {
   const cellPadX = 14;
   const cellPadY = 11;
   const lineHeight = 30;
-  const minColumn = 108;
+  const minColumn = 76;
   const maxColumn = 320;
   const columns = Math.max(table.header.length, ...table.rows.map((row) => row.length), 1);
   const widths = [];
@@ -1700,8 +1674,15 @@ function layoutShareTable(ctx, table, maxWidth) {
   const naturalWidth = widths.reduce((sum, width) => sum + width, 0);
   if (naturalWidth > maxWidth) {
     const scale = maxWidth / naturalWidth;
+    const floorWidth = Math.max(48, Math.floor(maxWidth / columns));
     for (let index = 0; index < widths.length; index += 1) {
-      widths[index] = Math.max(88, Math.floor(widths[index] * scale));
+      widths[index] = Math.max(floorWidth, Math.floor(widths[index] * scale));
+    }
+    let overflow = widths.reduce((sum, width) => sum + width, 0) - maxWidth;
+    for (let index = widths.length - 1; overflow > 0 && index >= 0; index -= 1) {
+      const shrink = Math.min(overflow, Math.max(0, widths[index] - 40));
+      widths[index] -= shrink;
+      overflow -= shrink;
     }
   }
 
@@ -1745,10 +1726,10 @@ function layoutShareBlocks(ctx, blocks, maxWidth) {
 }
 
 async function buildShareLayout(messages, session) {
+  const width = 900;
   const margin = 38;
   const gap = 18;
   const measure = document.createElement('canvas').getContext('2d');
-  const width = estimateShareRequiredWidth(measure, messages, margin);
   const bubbleMax = width - margin * 2;
   measure.font = '28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
   const items = [];
@@ -1912,7 +1893,6 @@ async function generateShareImage() {
   const img = document.createElement('img');
   img.src = state.shareImageUrl;
   img.alt = '分享截图预览';
-  img.style.width = `${layout.width}px`;
   el.sharePreviewBody.append(img);
   el.sharePreviewState.textContent = `${messages.length} 条消息 · ${formatBytes(blob.size)}`;
 }
