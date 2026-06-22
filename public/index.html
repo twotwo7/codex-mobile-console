@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=129">
+    <link rel="stylesheet" href="/styles.css?v=130">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -243,6 +243,7 @@
               <div class="top-more">
                 <button id="topMoreButton" class="top-more-button" type="button" aria-label="更多会话操作" aria-haspopup="menu" aria-expanded="false">▾</button>
                 <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
+                  <button id="shareCaptureButton" class="top-menu-item" type="button" role="menuitem">分享截图</button>
                   <button id="sessionGoalButton" class="top-menu-item" type="button" role="menuitem">任务面板</button>
                   <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
                 </div>
@@ -588,6 +589,19 @@
       <img id="imageViewerImg" alt="图片预览">
     </div>
 
+    <dialog id="sharePreviewDialog" class="session-dialog share-preview-dialog">
+      <div class="dialog-head">
+        <h2>分享截图</h2>
+        <button class="icon-button" type="button" id="closeSharePreview" aria-label="关闭分享预览">×</button>
+      </div>
+      <div id="sharePreviewBody" class="share-preview-body"></div>
+      <div id="sharePreviewState" class="settings-state-row">生成后可下载或复制图片。</div>
+      <div class="share-preview-actions">
+        <button class="ghost-button inline" type="button" id="copyShareImage">复制图片</button>
+        <button type="button" id="downloadShareImage">下载</button>
+      </div>
+    </dialog>
+
     <script>
       window.cmcLoginNow = async function cmcLoginNow(event) {
         if (event) event.preventDefault();
@@ -642,6 +656,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=149" type="module"></script>
+    <script src="/app.js?v=150" type="module"></script>
   </body>
 </html>

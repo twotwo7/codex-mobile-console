@@ -14,6 +14,8 @@ export function createMessageView(actions) {
     if (message.clientMessageId) article.dataset.clientMessageId = message.clientMessageId;
     if (message.pending) article.classList.add('pending');
     if (message.failed) article.classList.add('failed');
+    if (actions.isShareMode?.()) article.classList.add('share-pickable');
+    if (actions.isShareSelected?.(message)) article.classList.add('share-selected');
 
     const role = message.role || 'system';
     const collapsible = isCollapsibleMessage(message);
@@ -29,6 +31,16 @@ export function createMessageView(actions) {
       <div class="message-text"${deferredText ? '' : ' data-loaded="1"'}></div>
     `;
     if (!deferredText) renderMarkdownText(article.querySelector('.message-text'), message.text || '');
+
+    if (actions.isShareMode?.()) {
+      const shareToggle = document.createElement('button');
+      shareToggle.type = 'button';
+      shareToggle.className = 'message-share-select';
+      shareToggle.textContent = actions.isShareSelected?.(message) ? '✓' : '';
+      shareToggle.setAttribute('aria-label', actions.isShareSelected?.(message) ? '取消选择这条消息' : '选择这条消息');
+      shareToggle.addEventListener('click', () => actions.toggleShareSelected?.(message));
+      article.querySelector('.message-head').prepend(shareToggle);
+    }
 
     const delivery = deliveryLabel(message);
     if (delivery) {
@@ -64,6 +76,12 @@ export function createMessageView(actions) {
 
     if (message.images?.length) article.append(renderMessageImages(message.images));
     if (message.files?.length) article.append(renderMessageFiles(message.files));
+    if (actions.isShareMode?.()) {
+      article.addEventListener('click', (event) => {
+        if (event.target.closest('button, a, input, textarea, select')) return;
+        actions.toggleShareSelected?.(message);
+      });
+    }
     return article;
   }
 
@@ -172,6 +190,17 @@ export function createMessageView(actions) {
         actions.applyGoalFromMessage?.(message);
       });
       popover.append(applyGoal);
+    }
+
+    if (!actions.isShareMode?.()) {
+      const share = document.createElement('button');
+      share.type = 'button';
+      share.textContent = '加入分享';
+      share.addEventListener('click', () => {
+        popover.hidden = true;
+        actions.toggleShareSelected?.(message, { enterShareMode: true, selected: true });
+      });
+      popover.append(share);
     }
 
     const copy = document.createElement('button');

@@ -1923,6 +1923,97 @@ button:disabled {
   grid-row: 1;
 }
 
+.message.share-pickable {
+  cursor: pointer;
+}
+
+.message.share-selected {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.message-share-select {
+  width: 22px;
+  min-width: 22px;
+  min-height: 22px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--accent);
+  font-size: 14px;
+  line-height: 1;
+}
+
+.message.share-selected .message-share-select {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+}
+
+.share-bar {
+  display: grid;
+  grid-template-columns: auto repeat(4, max-content);
+  align-items: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--chrome);
+}
+
+.share-bar span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.share-bar button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.share-bar button[data-share-action="generate"] {
+  border-color: transparent;
+  background: var(--accent);
+  color: #08100f;
+}
+
+.share-preview-dialog {
+  width: min(720px, calc(100% - 18px));
+}
+
+.share-preview-body {
+  display: grid;
+  place-items: center;
+  min-height: 180px;
+  max-height: min(70svh, 720px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-2);
+}
+
+.share-preview-body img {
+  width: min(100%, 420px);
+  height: auto;
+  display: block;
+}
+
+.share-preview-loading {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.share-preview-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
 .queue-head,
 .queue-item {
   display: grid;
@@ -3244,6 +3335,20 @@ button:disabled {
 
   .message {
     max-width: 92%;
+  }
+
+  .share-bar {
+    grid-template-columns: auto repeat(2, minmax(0, 1fr));
+    gap: 6px;
+  }
+
+  .share-bar span {
+    grid-column: 1 / -1;
+  }
+
+  .share-bar button {
+    padding: 0 7px;
+    font-size: 11px;
   }
 
   .field-grid {

@@ -4,7 +4,7 @@ import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
-import { createMessageView } from './message-view.js?v=15';
+import { createMessageView } from './message-view.js?v=16';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
@@ -72,7 +72,11 @@ const state = {
   skillDialogMode: 'quick',
   installPromptEvent: null,
   installStatus: '',
-  pendingGoalSyncSessionId: storageGet('cmc.pendingGoalSyncSessionId', '')
+  pendingGoalSyncSessionId: storageGet('cmc.pendingGoalSyncSessionId', ''),
+  shareMode: false,
+  shareSelectedKeys: new Set(),
+  shareImageBlob: null,
+  shareImageUrl: ''
 };
 
 let sessionState;
@@ -89,8 +93,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '149';
-const SW_CACHE_VERSION = 'codex-console-v166';
+const APP_ASSET_VERSION = '150';
+const SW_CACHE_VERSION = 'codex-console-v167';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -187,6 +191,7 @@ const el = {
   topFilterMenu: document.querySelector('#topFilterMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
   messageDisplayButton: document.querySelector('#messageDisplayButton'),
+  shareCaptureButton: document.querySelector('#shareCaptureButton'),
   sessionGoalButton: document.querySelector('#sessionGoalButton'),
   collapseMessagesButton: document.querySelector('#collapseMessagesButton'),
   expandMessagesButton: document.querySelector('#expandMessagesButton'),
@@ -285,7 +290,13 @@ const el = {
   saveQueueEdit: document.querySelector('#saveQueueEdit'),
   imageViewer: document.querySelector('#imageViewer'),
   closeImageViewer: document.querySelector('#closeImageViewer'),
-  imageViewerImg: document.querySelector('#imageViewerImg')
+  imageViewerImg: document.querySelector('#imageViewerImg'),
+  sharePreviewDialog: document.querySelector('#sharePreviewDialog'),
+  closeSharePreview: document.querySelector('#closeSharePreview'),
+  sharePreviewBody: document.querySelector('#sharePreviewBody'),
+  sharePreviewState: document.querySelector('#sharePreviewState'),
+  copyShareImage: document.querySelector('#copyShareImage'),
+  downloadShareImage: document.querySelector('#downloadShareImage')
 };
 
 topbarView = createTopbarView({
@@ -334,9 +345,13 @@ const messageView = createMessageView({
   applyGoalFromMessage,
   canApplyGoal: (message) => Boolean(extractGoalJson(message?.text || '')),
   getMessageCollapsed,
+  getShareKey,
+  isShareMode: () => state.shareMode,
+  isShareSelected: (message) => state.shareSelectedKeys.has(getShareKey(message)),
   openImageViewer,
   retryMessage: promptActions.retryMessage,
   setMessageCollapsed,
+  toggleShareSelected,
   toggleStarred
 });
 
@@ -771,7 +786,11 @@ function setActiveSessionId(id = '') {
   const previous = state.activeId || '';
   state.activeId = id || '';
   storageSet('cmc.activeId', state.activeId);
-  if (previous !== state.activeId) recordFrontendEvent('session.switch', state.activeId || 'none');
+  if (previous !== state.activeId) {
+    state.shareMode = false;
+    state.shareSelectedKeys.clear();
+    recordFrontendEvent('session.switch', state.activeId || 'none');
+  }
   return state.activeId;
 }
 
@@ -1126,6 +1145,7 @@ function renderActive(options = {}) {
   renderActiveStatus(session);
 
   if (!session) {
+    updateShareBar();
     return;
   }
 
@@ -1141,6 +1161,7 @@ function renderActive(options = {}) {
     if (options.stickToBottom === true && shouldFollowNewMessage(session.id)) settleMessagesToBottom();
     syncStreamingMarkers();
   }
+  updateShareBar();
 }
 
 function setProgrammaticMessageScrollTop(value) {
@@ -1329,6 +1350,7 @@ function renderMessages(sessionId, options = {}) {
     } else {
       updateQueuePanel();
       updateRunIndicator();
+      updateShareBar();
       restoreScroll(true);
       performanceMetrics.record('messages_render', performance.now() - renderStartedAt, { count: messages.length });
       if (renderJobId === state.renderJobId) state.renderingMessages = false;
@@ -1336,6 +1358,314 @@ function renderMessages(sessionId, options = {}) {
     }
   };
   renderChunk();
+}
+
+function getShareKey(message) {
+  if (!message) return '';
+  if (message.id) return `id:${message.id}`;
+  if (message.clientMessageId) return `client:${message.clientMessageId}`;
+  if (message.seq) return `seq:${message.seq}`;
+  return `${message.role || ''}:${message.at || ''}:${String(message.text || '').slice(0, 80)}`;
+}
+
+function shareableMessages(sessionId = state.activeId) {
+  return displayMessages(sessionId).filter((message) => ['user', 'assistant', 'system'].includes(message.role || '') && !message.variant);
+}
+
+function allShareableMessages(sessionId = state.activeId) {
+  return loadMessages(sessionId)
+    .filter((message) => ['user', 'assistant', 'system'].includes(message.role || '') && !message.variant)
+    .sort(compareMessages);
+}
+
+function selectedShareMessages() {
+  const selected = new Set(state.shareSelectedKeys);
+  return allShareableMessages().filter((message) => selected.has(getShareKey(message)));
+}
+
+function setShareMode(enabled) {
+  state.shareMode = Boolean(enabled);
+  if (!state.shareMode) state.shareSelectedKeys.clear();
+  messageView.closeMessageMenus();
+  closeTopMenus();
+  renderActive();
+}
+
+function toggleShareSelected(message, options = {}) {
+  const key = getShareKey(message);
+  if (!key) return;
+  if (options.enterShareMode) state.shareMode = true;
+  const selected = options.selected ?? !state.shareSelectedKeys.has(key);
+  if (selected) state.shareSelectedKeys.add(key);
+  else state.shareSelectedKeys.delete(key);
+  renderActive({ stickToBottom: false });
+}
+
+function selectRecentShareMessages(count = 6) {
+  state.shareSelectedKeys.clear();
+  for (const message of allShareableMessages().slice(-count)) {
+    state.shareSelectedKeys.add(getShareKey(message));
+  }
+  renderActive({ stickToBottom: false });
+}
+
+function updateShareBar() {
+  el.shareBar?.remove();
+  el.shareBar = null;
+  if (!state.shareMode || !state.activeId || !el.promptForm) return;
+  const bar = document.createElement('div');
+  bar.className = 'share-bar';
+  const count = state.shareSelectedKeys.size;
+  bar.innerHTML = `
+    <span>已选 ${count} 条</span>
+    <button type="button" data-share-action="recent">最近6条</button>
+    <button type="button" data-share-action="clear">清空</button>
+    <button type="button" data-share-action="cancel">取消</button>
+    <button type="button" data-share-action="generate" ${count ? '' : 'disabled'}>生成长图</button>
+  `;
+  bar.querySelector('[data-share-action="recent"]').addEventListener('click', () => selectRecentShareMessages(6));
+  bar.querySelector('[data-share-action="clear"]').addEventListener('click', () => {
+    state.shareSelectedKeys.clear();
+    renderActive({ stickToBottom: false });
+  });
+  bar.querySelector('[data-share-action="cancel"]').addEventListener('click', () => setShareMode(false));
+  bar.querySelector('[data-share-action="generate"]').addEventListener('click', () => generateShareImage().catch((error) => {
+    alert(error.message || '生成分享截图失败');
+  }));
+  el.promptForm.before(bar);
+  el.shareBar = bar;
+}
+
+function shareRoleLabel(role = '') {
+  if (role === 'user') return '我';
+  if (role === 'assistant') return 'Codex';
+  if (role === 'tool') return '工具';
+  return '系统';
+}
+
+function shareText(message) {
+  return String(message?.text || '')
+    .replace(/```/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function shareImageSource(image) {
+  if (!image) return '';
+  const direct = image.url || image.dataUrl || image.data;
+  if (direct) return direct;
+  const fileName = image.fileName || String(image.path || '').split('/').pop();
+  if (!/^[a-f0-9-]+\.[a-z0-9]{1,12}$/i.test(fileName || '')) return '';
+  return `/api/uploads/${encodeURIComponent(fileName)}`;
+}
+
+function wrapCanvasText(ctx, text, maxWidth) {
+  const lines = [];
+  const paragraphs = String(text || '').split('\n');
+  for (const paragraph of paragraphs) {
+    if (!paragraph) {
+      lines.push('');
+      continue;
+    }
+    let line = '';
+    for (const char of [...paragraph]) {
+      const next = `${line}${char}`;
+      if (line && ctx.measureText(next).width > maxWidth) {
+        lines.push(line);
+        line = char;
+      } else {
+        line = next;
+      }
+    }
+    if (line) lines.push(line);
+  }
+  return lines;
+}
+
+function roundRectPath(ctx, x, y, width, height, radius) {
+  const r = Math.min(radius, width / 2, height / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + width, y, x + width, y + height, r);
+  ctx.arcTo(x + width, y + height, x, y + height, r);
+  ctx.arcTo(x, y + height, x, y, r);
+  ctx.arcTo(x, y, x + width, y, r);
+  ctx.closePath();
+}
+
+function loadShareImage(src) {
+  return new Promise((resolve) => {
+    if (!src) {
+      resolve(null);
+      return;
+    }
+    const image = new Image();
+    image.crossOrigin = 'anonymous';
+    image.onload = () => resolve(image);
+    image.onerror = () => resolve(null);
+    image.src = src;
+  });
+}
+
+async function buildShareLayout(messages, session) {
+  const width = 900;
+  const margin = 38;
+  const gap = 18;
+  const bubbleMax = width - margin * 2;
+  const measure = document.createElement('canvas').getContext('2d');
+  measure.font = '28px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  const items = [];
+  let y = 132;
+
+  for (const message of messages) {
+    const text = shareText(message) || '(空消息)';
+    const textMax = bubbleMax - 44;
+    const lines = wrapCanvasText(measure, text, textMax).slice(0, 80);
+    const images = [];
+    for (const image of (message.images || []).slice(0, 3)) {
+      const loaded = await loadShareImage(shareImageSource(image));
+      images.push({ loaded, name: image.name || '图片' });
+    }
+    const fileCount = (message.files || []).length;
+    const imageRows = images.length ? Math.ceil(images.length / 2) : 0;
+    const imageHeight = imageRows ? imageRows * 150 + (imageRows - 1) * 10 + 16 : 0;
+    const fileHeight = fileCount ? 34 : 0;
+    const textHeight = lines.length * 36;
+    const height = 58 + textHeight + imageHeight + fileHeight + 24;
+    items.push({ message, lines, images, fileCount, x: margin, y, width: bubbleMax, height });
+    y += height + gap;
+  }
+
+  const totalHeight = y + 56;
+  if (totalHeight > 14000) {
+    throw new Error('截图太长了，请少选一些消息后再生成。');
+  }
+  return { width, height: totalHeight, items, session };
+}
+
+function drawShareImage(layout) {
+  const ratio = Math.min(2, window.devicePixelRatio || 1);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.floor(layout.width * ratio);
+  canvas.height = Math.floor(layout.height * ratio);
+  canvas.style.width = `${layout.width}px`;
+  canvas.style.height = `${layout.height}px`;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(ratio, ratio);
+  ctx.fillStyle = '#f4f1e9';
+  ctx.fillRect(0, 0, layout.width, layout.height);
+
+  ctx.fillStyle = '#1f2328';
+  ctx.font = '700 32px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.fillText(layout.session?.title || 'Codex 会话', 38, 58);
+  ctx.fillStyle = '#6f767d';
+  ctx.font = '22px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+  ctx.fillText(formatTime(new Date().toISOString()), 38, 92);
+
+  for (const item of layout.items) {
+    const isUser = item.message.role === 'user';
+    const isSystem = item.message.role === 'system';
+    const x = item.x;
+    const y = item.y;
+    ctx.fillStyle = isUser ? '#dcf7f2' : isSystem ? '#f1efe7' : '#ffffff';
+    ctx.strokeStyle = isUser ? '#8fd7ca' : '#ded8ca';
+    ctx.lineWidth = 2;
+    roundRectPath(ctx, x, y, item.width, item.height, 18);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.fillStyle = isUser ? '#0b766e' : '#59636e';
+    ctx.font = '700 20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    ctx.fillText(shareRoleLabel(item.message.role), x + 22, y + 34);
+    ctx.fillStyle = '#8a9299';
+    ctx.font = '18px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    const time = formatTime(item.message.at);
+    if (time) ctx.fillText(time, x + item.width - ctx.measureText(time).width - 22, y + 34);
+
+    ctx.fillStyle = '#22272e';
+    ctx.font = '26px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+    let textY = y + 78;
+    for (const line of item.lines) {
+      ctx.fillText(line || ' ', x + 22, textY);
+      textY += 36;
+    }
+
+    if (item.images.length) {
+      let imgX = x + 22;
+      let imgY = textY + 10;
+      for (const image of item.images) {
+        ctx.fillStyle = '#ece7dc';
+        roundRectPath(ctx, imgX, imgY, 190, 140, 12);
+        ctx.fill();
+        if (image.loaded) {
+          const scale = Math.min(190 / image.loaded.width, 140 / image.loaded.height);
+          const drawW = image.loaded.width * scale;
+          const drawH = image.loaded.height * scale;
+          ctx.drawImage(image.loaded, imgX + (190 - drawW) / 2, imgY + (140 - drawH) / 2, drawW, drawH);
+        } else {
+          ctx.fillStyle = '#7d858c';
+          ctx.font = '20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+          ctx.fillText('图片', imgX + 72, imgY + 78);
+        }
+        imgX += 204;
+        if (imgX + 190 > x + item.width - 22) {
+          imgX = x + 22;
+          imgY += 150;
+        }
+      }
+      textY += Math.ceil(item.images.length / 2) * 150 + 16;
+    }
+
+    if (item.fileCount) {
+      ctx.fillStyle = '#6f767d';
+      ctx.font = '20px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+      ctx.fillText(`附件 ${item.fileCount} 个`, x + 22, textY + 32);
+    }
+  }
+  return canvas;
+}
+
+async function generateShareImage() {
+  const messages = selectedShareMessages();
+  if (!messages.length) throw new Error('先选择要分享的消息。');
+  el.sharePreviewState.textContent = '正在生成...';
+  el.sharePreviewBody.innerHTML = '<div class="share-preview-loading">正在生成长图...</div>';
+  openModal(el.sharePreviewDialog);
+  const layout = await buildShareLayout(messages, getActiveSession());
+  const canvas = drawShareImage(layout);
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png', 0.95));
+  if (!blob) throw new Error('生成图片失败');
+  if (state.shareImageUrl) URL.revokeObjectURL(state.shareImageUrl);
+  state.shareImageBlob = blob;
+  state.shareImageUrl = URL.createObjectURL(blob);
+  el.sharePreviewBody.innerHTML = '';
+  const img = document.createElement('img');
+  img.src = state.shareImageUrl;
+  img.alt = '分享截图预览';
+  el.sharePreviewBody.append(img);
+  el.sharePreviewState.textContent = `${messages.length} 条消息 · ${formatBytes(blob.size)}`;
+}
+
+async function copyShareImage() {
+  if (!state.shareImageBlob) return;
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+    el.sharePreviewState.textContent = '当前浏览器不支持复制图片，请下载后分享。';
+    return;
+  }
+  await navigator.clipboard.write([new ClipboardItem({ 'image/png': state.shareImageBlob })]);
+  el.sharePreviewState.textContent = '已复制图片。';
+}
+
+function downloadShareImage() {
+  if (!state.shareImageUrl) return;
+  const link = document.createElement('a');
+  link.href = state.shareImageUrl;
+  link.download = `codex-share-${Date.now()}.png`;
+  link.click();
+}
+
+function closeSharePreview() {
+  closeModal(el.sharePreviewDialog);
 }
 
 function renderOlderMessagesControl(sessionId) {
@@ -3491,6 +3821,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') closeAttachmentMenu();
   if (event.key === 'Escape' && !el.sessionActionSheet?.hidden) closeSessionActionSheet();
   if (event.key === 'Escape' && !el.imageViewer.hidden) closeImageViewer();
+  if (event.key === 'Escape' && el.sharePreviewDialog?.open) closeSharePreview();
 });
 
 el.stopButton.addEventListener('click', stopCurrentRun);
@@ -3526,6 +3857,17 @@ el.messageDisplayButton.addEventListener('click', () => {
   closeTopFilterMenu();
   updateMessageDisplayButton();
   renderActive({ stickToBottom: shouldFollowNewMessage(state.activeId) });
+});
+
+el.shareCaptureButton?.addEventListener('click', () => {
+  closeTopMoreMenu();
+  if (!allShareableMessages().length) {
+    alert('当前会话还没有可分享的消息。');
+    return;
+  }
+  state.shareMode = true;
+  if (!state.shareSelectedKeys.size) selectRecentShareMessages(4);
+  else renderActive({ stickToBottom: false });
 });
 
 el.sessionGoalButton?.addEventListener('click', () => {
@@ -3736,6 +4078,14 @@ el.cleanupRuntimeButton.addEventListener('click', () => runStorageCleanup('runti
 el.closeImageViewer.addEventListener('click', closeImageViewer);
 el.imageViewer.addEventListener('click', (event) => {
   if (event.target === el.imageViewer) closeImageViewer();
+});
+el.closeSharePreview?.addEventListener('click', closeSharePreview);
+el.copyShareImage?.addEventListener('click', () => copyShareImage().catch((error) => {
+  el.sharePreviewState.textContent = error.message || '复制失败';
+}));
+el.downloadShareImage?.addEventListener('click', downloadShareImage);
+el.sharePreviewDialog?.addEventListener('close', () => {
+  el.sharePreviewBody.innerHTML = '';
 });
 el.cancelNewSession.addEventListener('click', () => closeModal(el.dialog));
 el.browseCwdButton.addEventListener('click', () => openDirectoryBrowser(el.cwdInput.value));
