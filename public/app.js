@@ -8,7 +8,7 @@ import { createMessageView } from './message-view.js?v=16';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
-import { createSessionStateController } from './session-state.js?v=5';
+import { createSessionStateController } from './session-state.js?v=6';
 import { createSkillView } from './skill-view.js?v=3';
 import { createTopbarView } from './topbar-view.js?v=6';
 
@@ -20,7 +20,7 @@ const storedExpandedCwds = (() => {
 const state = {
   sessions: [],
   activeId: storageGet('cmc.activeId'),
-  sessionViewMode: storageGet('cmc.sessionViewMode', 'recent'),
+  sessionViewMode: storageGet('cmc.sessionViewMode', 'recent') === 'flat' ? 'recent' : storageGet('cmc.sessionViewMode', 'recent'),
   theme: storageGet('cmc.theme', 'graphite'),
   autoFollowBottom: storageGet('cmc.autoFollowBottom', '1') === '1',
   elevated: storageGet('cmc.elevated') === '1',
@@ -32,6 +32,7 @@ const state = {
   sending: false,
   directoryPath: '/root/Projects',
   expandedCwds: new Set(storedExpandedCwds),
+  expandedTags: new Set(storageJsonGet('cmc.expandedTags', [])),
   messages: new Map(),
   messagePages: new Map(),
   messageRenderLimits: new Map(),
@@ -93,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '153';
-const SW_CACHE_VERSION = 'codex-console-v170';
+const APP_ASSET_VERSION = '154';
+const SW_CACHE_VERSION = 'codex-console-v171';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -175,6 +176,7 @@ const el = {
   closeTaskDetailDialog: document.querySelector('#closeTaskDetailDialog'),
   taskDetailBody: document.querySelector('#taskDetailBody'),
   newSessionButton: document.querySelector('#newSessionButton'),
+  smartTagSessionsButton: document.querySelector('#smartTagSessionsButton'),
   skillManagerButton: document.querySelector('#skillManagerButton'),
   logoutButton: document.querySelector('#logoutButton'),
   activeTitle: document.querySelector('#activeTitle'),
@@ -556,6 +558,10 @@ function saveExpandedCwds() {
   storageJsonSet('cmc.expandedCwds', [...state.expandedCwds]);
 }
 
+function saveExpandedTags() {
+  storageJsonSet('cmc.expandedTags', [...state.expandedTags]);
+}
+
 function loadCachedSessions() {
   const sessions = storageJsonGet('cmc.sessions', []);
   state.sessions = Array.isArray(sessions) ? sessions : [];
@@ -895,7 +901,8 @@ function syncSessionViewControls() {
 }
 
 function setSessionViewMode(mode) {
-  if (!['recent', 'flat', 'cwd', 'trash'].includes(mode)) return;
+  if (mode === 'flat') mode = 'recent';
+  if (!['recent', 'tag', 'cwd', 'trash'].includes(mode)) return;
   state.sessionViewMode = mode;
   storageSet('cmc.sessionViewMode', state.sessionViewMode);
   resetSessionRenderLimit();
@@ -1014,6 +1021,54 @@ function renderSessions(options = {}) {
     return;
   }
 
+  if (state.sessionViewMode === 'tag') {
+    const groups = new Map();
+    for (const session of visible) {
+      const tags = Array.isArray(session.tags) && session.tags.length ? session.tags : ['未分类'];
+      for (const tag of tags) {
+        if (!groups.has(tag)) groups.set(tag, []);
+        groups.get(tag).push(session);
+      }
+    }
+    const sortedGroups = [...groups.entries()].sort((a, b) => {
+      if (a[0] === '未分类') return 1;
+      if (b[0] === '未分类') return -1;
+      return b[1].length - a[1].length || a[0].localeCompare(b[0]);
+    });
+    for (const [tag, group] of sortedGroups) {
+      const section = document.createElement('section');
+      section.className = 'session-group tag-group';
+      const expanded = state.expandedTags.has(tag);
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'session-group-toggle';
+      button.setAttribute('aria-expanded', String(expanded));
+      button.innerHTML = `
+        <span>#${escapeHtml(tag)}</span>
+        <strong>${expanded ? '收起' : '展开'} · ${group.length}</strong>
+      `;
+      button.addEventListener('click', () => {
+        if (state.expandedTags.has(tag)) state.expandedTags.delete(tag);
+        else state.expandedTags.add(tag);
+        saveExpandedTags();
+        renderSessions();
+      });
+      section.append(button);
+      if (expanded) {
+        const seen = new Set();
+        for (const session of group) {
+          if (seen.has(session.id)) continue;
+          seen.add(session.id);
+          section.append(renderSessionButton(session));
+        }
+      }
+      fragment.append(section);
+    }
+    appendSessionListMore(fragment, sessions.length, visible.length);
+    el.sessionList.append(fragment);
+    return;
+  }
+
   for (const session of visible) fragment.append(renderSessionButton(session));
   appendSessionListMore(fragment, sessions.length, visible.length);
   el.sessionList.append(fragment);
@@ -1052,6 +1107,12 @@ function formatSessionCwd(cwd = '') {
   return cwd.replace(/^\/root\/Projects\/?/, '~/Projects/');
 }
 
+function sessionTagsHtml(session) {
+  const tags = Array.isArray(session.tags) ? session.tags.slice(0, 3) : [];
+  if (!tags.length) return '';
+  return `<span class="session-tags">${tags.map((tag) => `<em>#${escapeHtml(tag)}</em>`).join('')}</span>`;
+}
+
 function closeSessionActionSheet() {
   state.sessionActionId = '';
   if (el.sessionActionSheet) el.sessionActionSheet.hidden = true;
@@ -1084,6 +1145,7 @@ function openSessionActionSheet(session) {
     appendSessionActionButton('任务详情', () => openTaskDetailDialog(session));
     appendSessionActionButton('任务面板', () => openSessionGoalDialog(session));
     appendSessionActionButton('重命名', () => renameSession(session));
+    appendSessionActionButton('编辑标签', () => editSessionTags(session));
     if (session.source !== 'codex') appendSessionActionButton('配置', () => openSessionConfigDialog(session));
     appendSessionActionButton('Fork', () => forkSession(session));
     appendSessionActionButton('删除', () => deleteSession(session), { danger: true });
@@ -1106,6 +1168,7 @@ function renderSessionButton(session) {
       <time>${escapeHtml(formatTime(session.trashedAt || session.updatedAt))}</time>
     </span>
     <span class="session-meta-row">${escapeHtml(sessionStatusLabel(session))} · ${escapeHtml(formatSessionCwd(session.cwd || ''))}</span>
+    ${sessionTagsHtml(session)}
   `;
   if (!session.trashedAt) button.addEventListener('click', () => selectSession(session.id));
 
@@ -3858,6 +3921,53 @@ async function forkSession(session) {
   }
 }
 
+function parseSessionTagsInput(value) {
+  return [...new Set(String(value || '')
+    .split(/[,\s，、]+/)
+    .map((tag) => tag.trim().replace(/^#/, '').slice(0, 18))
+    .filter(Boolean))]
+    .slice(0, 8);
+}
+
+async function editSessionTags(session) {
+  if (!session?.id) return;
+  const current = (session.tags || []).join(' ');
+  const value = prompt('编辑标签，多个标签用空格或逗号分隔。', current);
+  if (value === null) return;
+  try {
+    const data = await api(`/api/sessions/${encodeURIComponent(session.id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ tags: parseSessionTagsInput(value) })
+    });
+    if (data.session) mergeSessionSnapshot(data.session);
+    renderSessions({ force: true });
+    renderActive({ messages: false });
+  } catch (error) {
+    alert(error.message || '标签保存失败');
+  }
+}
+
+async function inferSessionTags() {
+  if (!confirm('根据会话标题、目录、状态和任务信息自动生成一波分类标签？已有标签会尽量保留。')) return;
+  try {
+    setBadge('打标签中', 'busy');
+    const data = await api('/api/sessions/tags/infer', { method: 'POST' });
+    if (Array.isArray(data.sessions)) {
+      state.sessions = data.sessions;
+      saveSessionCache();
+    }
+    state.sessionViewMode = 'tag';
+    storageSet('cmc.sessionViewMode', state.sessionViewMode);
+    syncSessionViewControls();
+    renderSessions({ force: true });
+    renderActive({ messages: false });
+    setBadge(`已标记 ${data.count || state.sessions.length} 个`, 'ok');
+  } catch (error) {
+    alert(error.message || '智能打标签失败');
+    setBadge('打标签失败', 'error');
+  }
+}
+
 async function deleteSession(session) {
   const permanent = Boolean(session.trashedAt);
   const deletesCodex = permanent && Boolean(session.codexSessionId);
@@ -4123,6 +4233,8 @@ el.shareCaptureButton?.addEventListener('click', async () => {
   if (!state.shareSelectedKeys.size) selectRecentShareMessages(4);
   else renderActive({ stickToBottom: false });
 });
+
+el.smartTagSessionsButton?.addEventListener('click', inferSessionTags);
 
 el.sessionGoalButton?.addEventListener('click', () => {
   closeTopMoreMenu();

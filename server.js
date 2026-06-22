@@ -103,12 +103,14 @@ async function init() {
     state.sessions ||= {};
     state.hiddenCodexSessions ||= {};
     state.codexSessionTitles ||= {};
+    state.codexSessionTags ||= {};
     state.starredMessages ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.nextSeq ||= 1;
   } else {
     state.hiddenCodexSessions ||= {};
     state.codexSessionTitles ||= {};
+    state.codexSessionTags ||= {};
     state.starredMessages ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     await saveState();
@@ -318,9 +320,60 @@ function ensureSessionHarness(session) {
   session.queue ||= [];
   session.runs = Array.isArray(session.runs) ? session.runs : [];
   session.audit = Array.isArray(session.audit) ? session.audit : [];
+  session.tags = normalizeSessionTags(session.tags || []);
   if (session.runs.length > MAX_SESSION_RUNS) session.runs = session.runs.slice(-MAX_SESSION_RUNS);
   if (session.audit.length > MAX_AUDIT_EVENTS) session.audit = session.audit.slice(-MAX_AUDIT_EVENTS);
   return session;
+}
+
+function normalizeSessionTags(tags = []) {
+  const source = Array.isArray(tags) ? tags : String(tags || '').split(/[,\s，、]+/);
+  const seen = new Set();
+  const normalized = [];
+  for (const raw of source) {
+    const tag = String(raw || '').trim().replace(/^#/, '').slice(0, 18);
+    if (!tag || seen.has(tag)) continue;
+    seen.add(tag);
+    normalized.push(tag);
+    if (normalized.length >= 8) break;
+  }
+  return normalized;
+}
+
+function inferSessionTags(session) {
+  const tags = new Set(normalizeSessionTags(session.tags || []));
+  const title = String(session.title || '').toLowerCase();
+  const cwd = String(session.cwd || '');
+  const base = path.basename(cwd).trim();
+  if (base && base !== 'Projects') tags.add(base.slice(0, 18));
+  if (session.source === 'codex') tags.add('全局Codex');
+  if (session.trashedAt) tags.add('回收站');
+  if (isSessionRunningForStatus(session)) tags.add('运行中');
+  if ((session.queue || []).length) tags.add('有队列');
+  if ((session.statusSummary?.status || session.status) === 'error') tags.add('异常');
+  if (session.goal?.status === 'active') tags.add('进行中');
+  if (session.goal?.status === 'paused') tags.add('暂存');
+  if (session.goal?.status === 'complete') tags.add('已完成');
+  const text = `${title} ${cwd.toLowerCase()} ${String(session.goal?.objective || '').toLowerCase()}`;
+  const keywordMap = [
+    ['UI', ['ui', '界面', '样式', '前端', 'mobile', '手机']],
+    ['性能', ['性能', '卡', '慢', 'perf', 'performance']],
+    ['发布', ['发布', '部署', 'github', 'tag', 'release']],
+    ['修复', ['bug', '修复', '报错', '失败', 'error']],
+    ['图片', ['图片', '截图', 'image', 'photo']],
+    ['设置', ['设置', '配置', 'config']],
+    ['队列', ['队列', 'queue']],
+    ['Skills', ['skill', 'skills']]
+  ];
+  for (const [tag, words] of keywordMap) {
+    if (words.some((word) => text.includes(word))) tags.add(tag);
+  }
+  return normalizeSessionTags([...tags]);
+}
+
+function isSessionRunningForStatus(session) {
+  const summary = deriveSessionStatusSummary(session);
+  return summary.running === true || ['running', 'stopping'].includes(session.status);
 }
 
 function runAttachments(images = [], files = []) {
@@ -905,6 +958,7 @@ function publicSession(session) {
     ignoreUserConfig: session.ignoreUserConfig === true,
     ignoreRules: session.ignoreRules === true,
     goal,
+    tags: normalizeSessionTags(session.tags || []),
     codexSessionId: session.codexSessionId || '',
     status: effectiveStatus,
     statusSummary,
@@ -1308,6 +1362,7 @@ function sessionView(session) {
 function publicExternalSession(session) {
   const codexSessionId = session.codexSessionId;
   state.codexSessionGoals ||= {};
+  state.codexSessionTags ||= {};
   return {
     id: `codex:${codexSessionId}`,
     source: 'codex',
@@ -1324,6 +1379,7 @@ function publicExternalSession(session) {
     ignoreUserConfig: false,
     ignoreRules: false,
     goal: normalizeSessionGoal(state.codexSessionGoals[codexSessionId] || {}),
+    tags: normalizeSessionTags(state.codexSessionTags[codexSessionId] || []),
     codexSessionId,
     status: 'external',
     trashedAt: state.hiddenCodexSessions?.[codexSessionId] || '',
@@ -2524,6 +2580,7 @@ async function importCodexSession(codexSessionId, options = {}) {
     sandbox: 'workspace-write',
     approval: 'on-request',
     goal: normalizeSessionGoal(state.codexSessionGoals?.[codexSessionId] || {}),
+    tags: normalizeSessionTags(state.codexSessionTags?.[codexSessionId] || []),
     codexSessionId,
     status: 'idle',
     createdAt: now,
@@ -3040,9 +3097,10 @@ async function serveStatic(req, res, pathname) {
   try {
     await stat(fullPath);
     const ext = path.extname(fullPath);
+    const cacheControl = ext === '.html' ? 'no-store' : pathname === '/sw.js' ? 'no-cache' : 'public, max-age=3600';
     res.writeHead(200, {
       'content-type': contentTypes[ext] || 'application/octet-stream',
-      'cache-control': ext === '.html' ? 'no-store' : 'public, max-age=3600'
+      'cache-control': cacheControl
     });
     createReadStream(fullPath).pipe(res);
   } catch {
@@ -3220,6 +3278,7 @@ async function handleApi(req, res, url) {
       cwd,
       ...sessionConfig,
       goal: normalizeSessionGoal(body.goal || {}),
+      tags: normalizeSessionTags(body.tags || []),
       codexSessionId: '',
       status: 'idle',
       createdAt: nowIso(),
@@ -3235,14 +3294,39 @@ async function handleApi(req, res, url) {
     return json(res, 201, { session: publicSession(state.sessions[id]) });
   }
 
+  if (url.pathname === '/api/sessions/tags/infer' && req.method === 'POST') {
+    const webSessions = Object.values(state.sessions || {});
+    for (const session of webSessions) {
+      ensureSessionHarness(session);
+      session.tags = inferSessionTags(session);
+      session.updatedAt = nowIso();
+      auditSession(session, 'tags.inferred', { summary: session.tags.join(', ') || 'none' });
+    }
+    const codexSessions = await listCodexSessions();
+    state.codexSessionTags ||= {};
+    for (const session of codexSessions) {
+      const codexSessionId = session.codexSessionId;
+      if (!codexSessionId) continue;
+      session.tags = inferSessionTags(session);
+      state.codexSessionTags[codexSessionId] = session.tags;
+    }
+    scheduleSave();
+    return json(res, 200, {
+      ok: true,
+      count: webSessions.length + codexSessions.length,
+      sessions: sortPublicSessions([...webSessions.map(publicSession), ...codexSessions])
+    });
+  }
+
   const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);
   if (sessionMatch && req.method === 'PATCH') {
     const sessionId = decodeURIComponent(sessionMatch[1]);
     const body = await readJson(req);
     const hasConfigPatch = body.config && typeof body.config === 'object';
     const hasGoalPatch = body.goal && typeof body.goal === 'object';
+    const hasTagsPatch = body.tags !== undefined;
     const title = body.title === undefined ? '' : String(body.title || '').trim().slice(0, 80);
-    if (!hasConfigPatch && !hasGoalPatch && !title) return json(res, 400, { error: 'empty_patch' });
+    if (!hasConfigPatch && !hasGoalPatch && !hasTagsPatch && !title) return json(res, 400, { error: 'empty_patch' });
 
     if (sessionId.startsWith('codex:')) {
       if (hasConfigPatch) return json(res, 400, { error: 'external_session_config_readonly' });
@@ -3261,6 +3345,10 @@ async function handleApi(req, res, url) {
         state.codexSessionGoals ||= {};
         state.codexSessionGoals[codexSessionId] = normalizeSessionGoal(body.goal, state.codexSessionGoals[codexSessionId] || {});
       }
+      if (hasTagsPatch) {
+        state.codexSessionTags ||= {};
+        state.codexSessionTags[codexSessionId] = normalizeSessionTags(body.tags || []);
+      }
       scheduleSave();
       const external = await findCodexSession(codexSessionId);
       return json(res, 200, {
@@ -3273,6 +3361,7 @@ async function handleApi(req, res, url) {
     if (title) session.title = title;
     if (hasConfigPatch) Object.assign(session, normalizeSessionConfig(body.config, session));
     if (hasGoalPatch) session.goal = normalizeSessionGoal(body.goal, session.goal || {});
+    if (hasTagsPatch) session.tags = normalizeSessionTags(body.tags || []);
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { session: publicSession(session) });
@@ -3352,6 +3441,7 @@ async function handleApi(req, res, url) {
     session.ignoreUserConfig = sourceSession?.ignoreUserConfig === true || session.ignoreUserConfig === true;
     session.ignoreRules = sourceSession?.ignoreRules === true || session.ignoreRules === true;
     session.goal = normalizeSessionGoal(sourceSession?.goal || {}, session.goal || {});
+    session.tags = normalizeSessionTags(sourceSession?.tags || session.tags || []);
     session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 201, { ok: true, forked, session: publicSession(session) });
@@ -3389,6 +3479,7 @@ async function handleApi(req, res, url) {
         deletedCodex = await deleteCodexSessionFile(codexSessionId);
         delete state.hiddenCodexSessions?.[codexSessionId];
         if (state.codexSessionTitles) delete state.codexSessionTitles[codexSessionId];
+        if (state.codexSessionTags) delete state.codexSessionTags[codexSessionId];
       } else {
         state.hiddenCodexSessions ||= {};
         state.hiddenCodexSessions[codexSessionId] = nowIso();
@@ -3416,6 +3507,7 @@ async function handleApi(req, res, url) {
     if (body.deleteCodex === true && session.codexSessionId) {
       deletedCodex = await deleteCodexSessionFile(session.codexSessionId);
       if (state.codexSessionTitles) delete state.codexSessionTitles[session.codexSessionId];
+      if (state.codexSessionTags) delete state.codexSessionTags[session.codexSessionId];
     }
     delete state.sessions[sessionId];
     await cleanupStorage('orphanUploads', { manual: true });

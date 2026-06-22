@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=132">
+    <link rel="stylesheet" href="/styles.css?v=133">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -47,17 +47,20 @@
           <div class="drawer-session-controls">
             <div class="segmented-control drawer-view-row" role="radiogroup" aria-label="会话视图">
               <button type="button" data-session-view="recent">最近</button>
-              <button type="button" data-session-view="flat">平铺</button>
+              <button type="button" data-session-view="tag">标签</button>
               <button type="button" data-session-view="cwd">目录</button>
               <button type="button" data-session-view="trash">回收站</button>
               <select id="sessionViewMode" name="sessionViewMode" class="visually-hidden" tabindex="-1" aria-hidden="true">
                 <option value="recent">最近</option>
-                <option value="flat">平铺</option>
+                <option value="tag">标签</option>
                 <option value="cwd">按目录</option>
                 <option value="trash">回收站</option>
               </select>
             </div>
-            <button id="newSessionButton" class="drawer-add-button" type="button" aria-label="新建会话" title="新建会话">+</button>
+            <div class="drawer-session-tools">
+              <button id="smartTagSessionsButton" class="drawer-add-button" type="button" aria-label="智能分类标签" title="智能分类标签">#</button>
+              <button id="newSessionButton" class="drawer-add-button" type="button" aria-label="新建会话" title="新建会话">+</button>
+            </div>
           </div>
           <div id="sessionList" class="session-list"></div>
         </section>
@@ -656,6 +659,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=153" type="module"></script>
+    <script src="/app.js?v=154" type="module"></script>
   </body>
 </html>

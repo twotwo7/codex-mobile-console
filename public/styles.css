@@ -340,9 +340,15 @@ button:disabled {
 
 .drawer-session-controls {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
   align-items: stretch;
+}
+
+.drawer-session-tools {
+  display: grid;
+  grid-template-columns: repeat(2, 34px);
+  gap: 6px;
 }
 
 .drawer-add-button {
@@ -611,6 +617,28 @@ button:disabled {
   color: var(--soft);
   font-size: 12px;
   font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-tags {
+  display: flex;
+  min-width: 0;
+  gap: 4px;
+  overflow: hidden;
+}
+
+.session-tags em {
+  max-width: 72px;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1.2;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
