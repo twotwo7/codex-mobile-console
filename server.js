@@ -37,6 +37,7 @@ const DEFAULT_STORAGE_SETTINGS = {
 const MAX_SESSION_RUNS = 200;
 const MAX_RUN_EVENTS = 80;
 const MAX_AUDIT_EVENTS = 200;
+const SMART_TAG_RULE_VERSION = 4;
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -116,6 +117,7 @@ async function init() {
     await saveState();
   }
   for (const session of Object.values(state.sessions || {})) ensureSessionHarness(session);
+  retagSessionsIfNeeded();
   const restartMarker = await consumeRestartMarker();
   reconcileRunningSessions(restartMarker);
   pruneAuthSessions();
@@ -341,39 +343,57 @@ function normalizeSessionTags(tags = []) {
 }
 
 function inferSessionTags(session) {
-  const tags = new Set(normalizeSessionTags(session.tags || []));
+  const tags = new Set();
   const title = String(session.title || '').toLowerCase();
   const cwd = String(session.cwd || '');
   const base = path.basename(cwd).trim();
-  if (base && base !== 'Projects') tags.add(base.slice(0, 18));
-  if (session.source === 'codex') tags.add('全局Codex');
-  if (session.trashedAt) tags.add('回收站');
-  if (isSessionRunningForStatus(session)) tags.add('运行中');
-  if ((session.queue || []).length) tags.add('有队列');
-  if ((session.statusSummary?.status || session.status) === 'error') tags.add('异常');
-  if (session.goal?.status === 'active') tags.add('进行中');
-  if (session.goal?.status === 'paused') tags.add('暂存');
-  if (session.goal?.status === 'complete') tags.add('已完成');
-  const text = `${title} ${cwd.toLowerCase()} ${String(session.goal?.objective || '').toLowerCase()}`;
+  const goal = session.goal || {};
+  const text = [
+    title,
+    cwd.toLowerCase(),
+    String(goal.objective || '').toLowerCase(),
+    String(goal.phase || '').toLowerCase(),
+    String(goal.conclusion || '').toLowerCase(),
+    String(goal.notes || '').toLowerCase()
+  ].join(' ');
   const keywordMap = [
-    ['UI', ['ui', '界面', '样式', '前端', 'mobile', '手机']],
-    ['性能', ['性能', '卡', '慢', 'perf', 'performance']],
-    ['发布', ['发布', '部署', 'github', 'tag', 'release']],
-    ['修复', ['bug', '修复', '报错', '失败', 'error']],
-    ['图片', ['图片', '截图', 'image', 'photo']],
-    ['设置', ['设置', '配置', 'config']],
-    ['队列', ['队列', 'queue']],
-    ['Skills', ['skill', 'skills']]
+    ['购物', ['购物', '买', '价格', '京东', '淘宝', '苏宁', '商品', '品牌', '好物', '调研', '冰箱', '手机', '笔记本', '电脑', '数码', '烘干机', '洗衣', '家电']],
+    ['学习网站', ['学习', '课程', '教程', '知识库', '文档站', '教育', '笔记', 'academy', 'wiki']],
+    ['开发平台', ['codex', 'console', '平台', '控制台', '开发平台', '开发工具', 'github', 'api', '插件', 'skill', 'skills']],
+    ['服务器维护', ['服务器', '部署', '域名', 'https', 'caddy', 'nginx', 'systemd', '端口', '服务', '重启', '运维', 'ssh']],
+    ['娱乐网站', ['娱乐', '视频', 'youtube', '游戏', '旅行', '旅游', '活动', '世界杯', '音乐', '影视', '上饶', '北海']],
+    ['工作项目', ['客户', '业务', '项目', 'crm', '后台', '管理', '报表', '任务面板']],
+    ['个人工具', ['工具', '效率', '自动化', '脚本', '快捷', '本机']],
+    ['内容创作', ['图片', '截图', '分享', 'markdown', '表格', '文案', '生成', '编辑']],
+    ['问题排查', ['bug', '修复', '报错', '失败', '卡死', '卡顿', '性能', '重试', '恢复']],
+    ['系统设置', ['设置', '配置', 'config', 'profile', 'model', 'sandbox', 'approval']]
   ];
   for (const [tag, words] of keywordMap) {
     if (words.some((word) => text.includes(word))) tags.add(tag);
   }
+  if (!tags.size && /\/root\/Projects/i.test(cwd)) tags.add('开发平台');
+  if (!tags.size && session.source === 'codex') tags.add('开发平台');
+  if (!tags.size) tags.add('其他');
   return normalizeSessionTags([...tags]);
 }
 
-function isSessionRunningForStatus(session) {
-  const summary = deriveSessionStatusSummary(session);
-  return summary.running === true || ['running', 'stopping'].includes(session.status);
+function applySmartTagsToState() {
+  const webSessions = Object.values(state.sessions || {});
+  for (const session of webSessions) {
+    ensureSessionHarness(session);
+    session.tags = inferSessionTags(session);
+    session.updatedAt = nowIso();
+    auditSession(session, 'tags.inferred', { summary: session.tags.join(', ') || 'none' });
+  }
+  state.codexSessionTags = {};
+  state.smartTagRuleVersion = SMART_TAG_RULE_VERSION;
+  return webSessions.length;
+}
+
+function retagSessionsIfNeeded() {
+  if (Number(state.smartTagRuleVersion || 0) >= SMART_TAG_RULE_VERSION) return;
+  applySmartTagsToState();
+  scheduleSave();
 }
 
 function runAttachments(images = [], files = []) {
@@ -3295,13 +3315,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === '/api/sessions/tags/infer' && req.method === 'POST') {
-    const webSessions = Object.values(state.sessions || {});
-    for (const session of webSessions) {
-      ensureSessionHarness(session);
-      session.tags = inferSessionTags(session);
-      session.updatedAt = nowIso();
-      auditSession(session, 'tags.inferred', { summary: session.tags.join(', ') || 'none' });
-    }
+    const webCount = applySmartTagsToState();
     const codexSessions = await listCodexSessions();
     state.codexSessionTags ||= {};
     for (const session of codexSessions) {
@@ -3313,8 +3327,8 @@ async function handleApi(req, res, url) {
     scheduleSave();
     return json(res, 200, {
       ok: true,
-      count: webSessions.length + codexSessions.length,
-      sessions: sortPublicSessions([...webSessions.map(publicSession), ...codexSessions])
+      count: webCount + codexSessions.length,
+      sessions: sortPublicSessions([...Object.values(state.sessions || {}).map(publicSession), ...codexSessions])
     });
   }
 
