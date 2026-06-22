@@ -93,8 +93,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '150';
-const SW_CACHE_VERSION = 'codex-console-v167';
+const APP_ASSET_VERSION = '151';
+const SW_CACHE_VERSION = 'codex-console-v168';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1445,9 +1445,72 @@ function shareRoleLabel(role = '') {
 
 function shareText(message) {
   return String(message?.text || '')
-    .replace(/```/g, '')
+    .replace(/```[\w-]*\n?/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+function shareTokenFont(token, size = 26) {
+  const weight = token.bold ? 700 : 400;
+  return `${weight} ${size}px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif`;
+}
+
+function parseShareMarkdownInline(text) {
+  const tokens = [];
+  const value = String(text || '');
+  let index = 0;
+  const pushText = (textPart, extra = {}) => {
+    if (!textPart) return;
+    const previous = tokens.at(-1);
+    if (previous && previous.kind === (extra.kind || 'text') && previous.bold === Boolean(extra.bold)) {
+      previous.text += textPart;
+      return;
+    }
+    tokens.push({ kind: extra.kind || 'text', text: textPart, bold: Boolean(extra.bold) });
+  };
+
+  while (index < value.length) {
+    if (value.startsWith('**', index)) {
+      const end = value.indexOf('**', index + 2);
+      if (end > index + 2) {
+        pushText(value.slice(index + 2, end), { bold: true });
+        index = end + 2;
+        continue;
+      }
+    }
+
+    if (value[index] === '`') {
+      const end = value.indexOf('`', index + 1);
+      if (end > index + 1) {
+        pushText(value.slice(index + 1, end), { kind: 'code' });
+        index = end + 1;
+        continue;
+      }
+    }
+
+    if (value[index] === '[') {
+      const labelEnd = value.indexOf(']', index + 1);
+      if (labelEnd > index + 1 && value[labelEnd + 1] === '(') {
+        const hrefEnd = value.indexOf(')', labelEnd + 2);
+        if (hrefEnd > labelEnd + 2) {
+          pushText(value.slice(index + 1, labelEnd), { kind: 'link' });
+          index = hrefEnd + 1;
+          continue;
+        }
+      }
+    }
+
+    const bareLink = value.slice(index).match(/^https?:\/\/[^\s)）]+/i);
+    if (bareLink) {
+      pushText(bareLink[0], { kind: 'link' });
+      index += bareLink[0].length;
+      continue;
+    }
+
+    pushText(value[index]);
+    index += 1;
+  }
+  return tokens;
 }
 
 function shareImageSource(image) {
@@ -1459,27 +1522,51 @@ function shareImageSource(image) {
   return `/api/uploads/${encodeURIComponent(fileName)}`;
 }
 
-function wrapCanvasText(ctx, text, maxWidth) {
+function wrapCanvasRichText(ctx, text, maxWidth) {
   const lines = [];
   const paragraphs = String(text || '').split('\n');
   for (const paragraph of paragraphs) {
     if (!paragraph) {
-      lines.push('');
+      lines.push([]);
       continue;
     }
-    let line = '';
-    for (const char of [...paragraph]) {
-      const next = `${line}${char}`;
-      if (line && ctx.measureText(next).width > maxWidth) {
-        lines.push(line);
-        line = char;
-      } else {
-        line = next;
+    let line = [];
+    let lineWidth = 0;
+    for (const token of parseShareMarkdownInline(paragraph)) {
+      ctx.font = shareTokenFont(token);
+      for (const char of [...token.text]) {
+        const width = ctx.measureText(char).width;
+        if (line.length && lineWidth + width > maxWidth) {
+          lines.push(line);
+          line = [];
+          lineWidth = 0;
+        }
+        const previous = line.at(-1);
+        if (previous && previous.kind === token.kind && previous.bold === token.bold) previous.text += char;
+        else line.push({ ...token, text: char });
+        lineWidth += width;
       }
     }
-    if (line) lines.push(line);
+    if (line.length) lines.push(line);
   }
   return lines;
+}
+
+function drawCanvasRichLine(ctx, tokens, x, y) {
+  let cursor = x;
+  for (const token of tokens || []) {
+    ctx.font = shareTokenFont(token);
+    ctx.fillStyle = token.kind === 'link' ? '#0b6bcb' : token.kind === 'code' ? '#1f2328' : '#22272e';
+    if (token.kind === 'code') {
+      const width = ctx.measureText(token.text).width;
+      ctx.fillStyle = '#eee8dc';
+      roundRectPath(ctx, cursor - 3, y - 25, width + 6, 31, 5);
+      ctx.fill();
+      ctx.fillStyle = '#1f2328';
+    }
+    ctx.fillText(token.text, cursor, y);
+    cursor += ctx.measureText(token.text).width;
+  }
 }
 
 function roundRectPath(ctx, x, y, width, height, radius) {
@@ -1520,7 +1607,7 @@ async function buildShareLayout(messages, session) {
   for (const message of messages) {
     const text = shareText(message) || '(空消息)';
     const textMax = bubbleMax - 44;
-    const lines = wrapCanvasText(measure, text, textMax).slice(0, 80);
+    const lines = wrapCanvasRichText(measure, text, textMax).slice(0, 80);
     const images = [];
     for (const image of (message.images || []).slice(0, 3)) {
       const loaded = await loadShareImage(shareImageSource(image));
@@ -1586,7 +1673,7 @@ function drawShareImage(layout) {
     ctx.font = '26px system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     let textY = y + 78;
     for (const line of item.lines) {
-      ctx.fillText(line || ' ', x + 22, textY);
+      drawCanvasRichLine(ctx, line, x + 22, textY);
       textY += 36;
     }
 
@@ -3859,8 +3946,11 @@ el.messageDisplayButton.addEventListener('click', () => {
   renderActive({ stickToBottom: shouldFollowNewMessage(state.activeId) });
 });
 
-el.shareCaptureButton?.addEventListener('click', () => {
+el.shareCaptureButton?.addEventListener('click', async () => {
   closeTopMoreMenu();
+  if (!allShareableMessages().length && state.activeId) {
+    await loadSession(state.activeId, { full: true, showLoading: false });
+  }
   if (!allShareableMessages().length) {
     alert('当前会话还没有可分享的消息。');
     return;
