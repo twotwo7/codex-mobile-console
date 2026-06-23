@@ -79,6 +79,7 @@ let skillRegistry = {
 let skillScanPromise = null;
 let skillMaintenanceTimer = null;
 let skillRegistryFileMtimeMs = 0;
+let codexUpgradeTask = null;
 
 async function exists(file) {
   try {
@@ -342,6 +343,81 @@ function normalizeSessionTags(tags = []) {
   return normalized;
 }
 
+function snapshotSessionTags() {
+  const web = {};
+  const codex = {};
+  for (const [id, session] of Object.entries(state.sessions || {})) {
+    web[id] = normalizeSessionTags(session.tags || []);
+  }
+  for (const [id, tags] of Object.entries(state.codexSessionTags || {})) {
+    codex[id] = normalizeSessionTags(tags || []);
+  }
+  state.lastTagSnapshot = {
+    version: 1,
+    createdAt: nowIso(),
+    web,
+    codex
+  };
+}
+
+function tagSummaryFromSessions(sessions = []) {
+  const tags = new Map();
+  for (const session of sessions) {
+    for (const tag of normalizeSessionTags(session.tags || [])) {
+      const item = tags.get(tag) || {
+        tag,
+        count: 0,
+        webCount: 0,
+        codexCount: 0,
+        latestActivityAt: ''
+      };
+      item.count += 1;
+      if (session.source === 'codex') item.codexCount += 1;
+      else item.webCount += 1;
+      const activityAt = session.activityAt || session.updatedAt || session.createdAt || '';
+      if (String(activityAt) > String(item.latestActivityAt)) item.latestActivityAt = activityAt;
+      tags.set(tag, item);
+    }
+  }
+  return [...tags.values()].sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'zh-Hans-CN'));
+}
+
+async function allPublicSessionsForTags() {
+  const webSessions = Object.values(state.sessions || {}).map(publicSession);
+  const codexSessions = await listCodexSessions();
+  return sortPublicSessions([...webSessions, ...codexSessions]);
+}
+
+async function tagManagementSummary() {
+  const sessions = await allPublicSessionsForTags();
+  return {
+    tags: tagSummaryFromSessions(sessions),
+    sessions,
+    lastSnapshotAt: state.lastTagSnapshot?.createdAt || '',
+    smartTagRuleVersion: SMART_TAG_RULE_VERSION
+  };
+}
+
+function applyTagTransform(transform) {
+  let changed = 0;
+  for (const session of Object.values(state.sessions || {})) {
+    ensureSessionHarness(session);
+    const next = normalizeSessionTags(transform(session.tags || []));
+    if (JSON.stringify(next) === JSON.stringify(normalizeSessionTags(session.tags || []))) continue;
+    session.tags = next;
+    auditSession(session, 'tags.updated', { summary: session.tags.join(', ') || 'none' });
+    changed += 1;
+  }
+  state.codexSessionTags ||= {};
+  for (const [codexSessionId, tags] of Object.entries(state.codexSessionTags)) {
+    const next = normalizeSessionTags(transform(tags || []));
+    if (JSON.stringify(next) === JSON.stringify(normalizeSessionTags(tags || []))) continue;
+    state.codexSessionTags[codexSessionId] = next;
+    changed += 1;
+  }
+  return changed;
+}
+
 function inferSessionTags(session) {
   const tags = new Set();
   const title = String(session.title || '').toLowerCase();
@@ -378,6 +454,7 @@ function inferSessionTags(session) {
 }
 
 function applySmartTagsToState() {
+  snapshotSessionTags();
   const webSessions = Object.values(state.sessions || {});
   for (const session of webSessions) {
     ensureSessionHarness(session);
@@ -1785,6 +1862,175 @@ async function serviceRuntimeInfo() {
     codexBin: CODEX_BIN,
     disk
   };
+}
+
+function runCommand(command, args = [], options = {}) {
+  const timeoutMs = Number(options.timeoutMs || 8000);
+  return new Promise((resolve) => {
+    const child = spawn(command, args, {
+      cwd: options.cwd || __dirname,
+      env: {
+        ...process.env,
+        PATH: process.env.PATH || `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${CODEX_BIN_DIR}`
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({
+        ok: result.code === 0,
+        code: result.code,
+        signal: result.signal || '',
+        stdout: stdout.trim(),
+        stderr: stderr.trim()
+      });
+    };
+    const timer = setTimeout(() => {
+      child.kill('SIGTERM');
+      finish({ code: 124, signal: 'timeout' });
+    }, timeoutMs);
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk.toString();
+      if (stdout.length > 20000) stdout = stdout.slice(-20000);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk.toString();
+      if (stderr.length > 20000) stderr = stderr.slice(-20000);
+    });
+    child.on('error', (error) => {
+      stderr += error.message || String(error);
+      finish({ code: 127 });
+    });
+    child.on('close', (code, signal) => finish({ code, signal }));
+  });
+}
+
+async function restartMarkerInfo() {
+  try {
+    return JSON.parse(await readFile(RESTART_MARKER_FILE, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+async function codexVersionInfo(options = {}) {
+  const includeLatest = options.latest !== false;
+  const currentResult = await runCommand(CODEX_BIN, ['--version'], { timeoutMs: 6000 });
+  const currentText = currentResult.stdout || currentResult.stderr || '';
+  const currentVersion = (currentText.match(/(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/) || [])[1] || '';
+  const latestResult = includeLatest
+    ? await runCommand('npm', ['view', '@openai/codex', 'version'], { timeoutMs: 10000 })
+    : null;
+  const latestVersion = latestResult ? (latestResult.stdout.match(/(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)/) || [])[1] || '' : '';
+  return {
+    codexBin: CODEX_BIN,
+    node: CODEX_NODE,
+    currentVersion,
+    currentText,
+    currentOk: currentResult.ok,
+    currentError: currentResult.ok ? '' : currentResult.stderr || currentResult.stdout || 'codex_version_failed',
+    latestVersion,
+    latestOk: latestResult ? latestResult.ok : false,
+    latestError: latestResult && !latestResult.ok ? latestResult.stderr || latestResult.stdout || 'npm_view_failed' : '',
+    updateAvailable: Boolean(currentVersion && latestVersion && currentVersion !== latestVersion),
+    checkedAt: nowIso(),
+    upgradeTask: codexUpgradeTask
+  };
+}
+
+async function systemHealth() {
+  const [service, storage, codex, restartMarker] = await Promise.all([
+    serviceRuntimeInfo(),
+    storageStats(),
+    codexVersionInfo({ latest: false }),
+    restartMarkerInfo()
+  ]);
+  const sessions = Object.values(state.sessions || {});
+  const staleRecovered = sessions.filter((session) => reconcileSessionRunState(session, 'health-check')).length;
+  if (staleRecovered) scheduleSave();
+  const queuedMessages = sessions.reduce((sum, session) => sum + (session.queue?.length || 0), 0);
+  const failedRuns = sessions.reduce((sum, session) => sum + (session.runs || []).filter((run) => run.status === 'failed').length, 0);
+  const warnings = [];
+  if (running.size > 0) warnings.push(`${running.size} 个 Codex 任务运行中，升级或重启会等待或被阻止。`);
+  if (storage.disk && storage.disk.freeBytes / Math.max(1, storage.disk.totalBytes) < 0.1) warnings.push('磁盘剩余低于 10%，上传和状态保存可能失败。');
+  if (!codex.currentOk) warnings.push('Codex 命令不可用或版本读取失败。');
+  if (restartMarker) warnings.push('存在重启恢复标记，说明上次重启前有运行中任务。');
+  return {
+    ok: warnings.length === 0,
+    service,
+    storage,
+    codex,
+    restartMarker,
+    sessions: {
+      total: sessions.length,
+      running: running.size,
+      queuedMessages,
+      failedRuns,
+      staleRecovered
+    },
+    sseClients: service.sseClients,
+    upgradeTask: codexUpgradeTask,
+    warnings,
+    checkedAt: nowIso()
+  };
+}
+
+async function startCodexUpgrade() {
+  if (codexUpgradeTask?.status === 'running') return codexUpgradeTask;
+  if (running.size > 0) {
+    const error = new Error('sessions_running');
+    error.code = 'sessions_running';
+    throw error;
+  }
+  const before = await codexVersionInfo({ latest: false });
+  codexUpgradeTask = {
+    id: randomUUID(),
+    status: 'running',
+    startedAt: nowIso(),
+    finishedAt: '',
+    currentVersion: before.currentVersion || '',
+    target: 'latest',
+    code: null,
+    log: '',
+    restart: null
+  };
+  const task = codexUpgradeTask;
+  const child = spawn('npm', ['install', '-g', '@openai/codex@latest'], {
+    cwd: __dirname,
+    env: {
+      ...process.env,
+      PATH: process.env.PATH || `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${CODEX_BIN_DIR}`
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  const append = (chunk) => {
+    task.log += chunk.toString();
+    if (task.log.length > 20000) task.log = task.log.slice(-20000);
+  };
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
+  child.on('error', (error) => {
+    task.status = 'failed';
+    task.finishedAt = nowIso();
+    task.log += `\n${error.message || error}`;
+  });
+  child.on('close', async (code) => {
+    task.code = code;
+    task.finishedAt = nowIso();
+    if (code === 0) {
+      task.status = 'finished';
+      task.after = await codexVersionInfo({ latest: false }).catch(() => null);
+      task.restart = await requestServiceRestart('codex-upgrade').catch((error) => ({ error: error.message || String(error) }));
+    } else {
+      task.status = 'failed';
+    }
+  });
+  return task;
 }
 
 async function cleanupStorage(mode = 'all', options = {}) {
@@ -3205,6 +3451,26 @@ async function handleApi(req, res, url) {
     return json(res, 200, await codexConfigSummary());
   }
 
+  if (url.pathname === '/api/system/health' && req.method === 'GET') {
+    return json(res, 200, await systemHealth());
+  }
+
+  if (url.pathname === '/api/codex/upgrade-check' && req.method === 'GET') {
+    return json(res, 200, await codexVersionInfo({ latest: true }));
+  }
+
+  if (url.pathname === '/api/codex/upgrade' && req.method === 'POST') {
+    try {
+      const task = await startCodexUpgrade();
+      return json(res, 202, { ok: true, task });
+    } catch (error) {
+      if (error.code === 'sessions_running') {
+        return json(res, 409, { error: 'sessions_running', message: '有 Codex 任务正在运行，等待结束后再升级。', running: running.size });
+      }
+      return json(res, 500, { error: 'upgrade_failed', message: error.message || String(error) });
+    }
+  }
+
   if (url.pathname === '/api/skills' && req.method === 'GET') {
     await reloadSkillRegistryIfChanged();
     return json(res, 200, publicSkillRegistry());
@@ -3341,6 +3607,43 @@ async function handleApi(req, res, url) {
       count: webCount + codexSessions.length,
       sessions: sortPublicSessions([...Object.values(state.sessions || {}).map(publicSession), ...codexSessions])
     });
+  }
+
+  if (url.pathname === '/api/tags' && req.method === 'GET') {
+    return json(res, 200, await tagManagementSummary());
+  }
+
+  if (url.pathname === '/api/sessions/tags/undo' && req.method === 'POST') {
+    const snapshot = state.lastTagSnapshot;
+    if (!snapshot) return json(res, 404, { error: 'snapshot_not_found' });
+    for (const [id, tags] of Object.entries(snapshot.web || {})) {
+      if (state.sessions?.[id]) state.sessions[id].tags = normalizeSessionTags(tags || []);
+    }
+    state.codexSessionTags = {};
+    for (const [id, tags] of Object.entries(snapshot.codex || {})) {
+      state.codexSessionTags[id] = normalizeSessionTags(tags || []);
+    }
+    state.lastTagSnapshot = null;
+    scheduleSave();
+    return json(res, 200, { ok: true, restoredAt: nowIso(), ...(await tagManagementSummary()) });
+  }
+
+  if (url.pathname === '/api/tags/action' && req.method === 'POST') {
+    const body = await readJson(req);
+    const action = String(body.action || '');
+    const from = normalizeSessionTags([body.tag || body.from || ''])[0] || '';
+    const to = normalizeSessionTags([body.toTag || body.to || ''])[0] || '';
+    if (!['rename', 'merge', 'delete'].includes(action)) return json(res, 400, { error: 'invalid_action' });
+    if (!from) return json(res, 400, { error: 'missing_tag' });
+    if ((action === 'rename' || action === 'merge') && !to) return json(res, 400, { error: 'missing_target_tag' });
+    if ((action === 'rename' || action === 'merge') && from === to) return json(res, 400, { error: 'same_tag' });
+    snapshotSessionTags();
+    const changed = applyTagTransform((tags) => {
+      if (action === 'delete') return normalizeSessionTags(tags).filter((tag) => tag !== from);
+      return normalizeSessionTags(tags).map((tag) => tag === from ? to : tag);
+    });
+    scheduleSave();
+    return json(res, 200, { ok: true, changed, ...(await tagManagementSummary()) });
   }
 
   const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/);

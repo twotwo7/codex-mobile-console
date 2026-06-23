@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=134">
+    <link rel="stylesheet" href="/styles.css?v=135">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -77,6 +77,7 @@
             <button class="active" type="button" data-settings-tab="ui">界面</button>
             <button type="button" data-settings-tab="run">运行</button>
             <button type="button" data-settings-tab="storage">存储</button>
+            <button type="button" data-settings-tab="maintenance">维护</button>
           </div>
           <div class="settings-form">
             <section class="settings-page active" data-settings-page="ui">
@@ -208,6 +209,34 @@
                 <button id="saveStorageButton" type="button">保存</button>
                 <button id="cleanupUploadsButton" class="ghost-button inline" type="button">清理孤儿附件</button>
                 <button id="cleanupRuntimeButton" class="ghost-button inline" type="button">清理运行缓存</button>
+              </div>
+            </section>
+            <section class="settings-page maintenance-panel" data-settings-page="maintenance">
+              <p class="settings-page-note">系统健康、Codex 升级和标签维护。</p>
+              <div class="maintenance-card">
+                <div class="storage-head">
+                  <strong>系统健康</strong>
+                  <button id="refreshHealthButton" class="ghost-button inline" type="button">刷新</button>
+                </div>
+                <div id="systemHealthPanel" class="maintenance-grid">加载中...</div>
+              </div>
+              <div class="maintenance-card">
+                <div class="storage-head">
+                  <strong>Codex 升级</strong>
+                  <button id="checkCodexUpgradeButton" class="ghost-button inline" type="button">检查</button>
+                </div>
+                <div id="codexUpgradePanel" class="maintenance-copy">先检查当前版本和 npm 最新版本。</div>
+                <button id="upgradeCodexButton" class="ghost-button inline danger" type="button">安全升级到最新版</button>
+              </div>
+              <div class="maintenance-card">
+                <div class="storage-head">
+                  <strong>标签维护</strong>
+                  <button id="refreshTagsButton" class="ghost-button inline" type="button">刷新</button>
+                </div>
+                <div class="tag-maintenance-actions">
+                  <button id="undoSmartTagsButton" class="ghost-button inline" type="button">撤销上次智能分类</button>
+                </div>
+                <div id="tagManagementPanel" class="tag-management-list">加载中...</div>
               </div>
             </section>
           </div>
@@ -659,6 +688,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=155" type="module"></script>
+    <script src="/app.js?v=156" type="module"></script>
   </body>
 </html>

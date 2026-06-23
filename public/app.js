@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '155';
-const SW_CACHE_VERSION = 'codex-console-v172';
+const APP_ASSET_VERSION = '156';
+const SW_CACHE_VERSION = 'codex-console-v173';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -249,6 +249,14 @@ const el = {
   saveStorageButton: document.querySelector('#saveStorageButton'),
   cleanupUploadsButton: document.querySelector('#cleanupUploadsButton'),
   cleanupRuntimeButton: document.querySelector('#cleanupRuntimeButton'),
+  refreshHealthButton: document.querySelector('#refreshHealthButton'),
+  systemHealthPanel: document.querySelector('#systemHealthPanel'),
+  checkCodexUpgradeButton: document.querySelector('#checkCodexUpgradeButton'),
+  codexUpgradePanel: document.querySelector('#codexUpgradePanel'),
+  upgradeCodexButton: document.querySelector('#upgradeCodexButton'),
+  refreshTagsButton: document.querySelector('#refreshTagsButton'),
+  undoSmartTagsButton: document.querySelector('#undoSmartTagsButton'),
+  tagManagementPanel: document.querySelector('#tagManagementPanel'),
   commandDialog: document.querySelector('#commandDialog'),
   closeCommandDialog: document.querySelector('#closeCommandDialog'),
   commandList: document.querySelector('#commandList'),
@@ -2349,6 +2357,157 @@ async function runStorageCleanup(mode) {
   }
 }
 
+function renderSystemHealth(data = {}) {
+  if (!el.systemHealthPanel) return;
+  const service = data.service || {};
+  const storage = data.storage || {};
+  const sessions = data.sessions || {};
+  const disk = storage.disk;
+  const diskText = disk ? `${formatBytes(disk.freeBytes)} / ${formatBytes(disk.totalBytes)}` : '未知';
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  el.systemHealthPanel.innerHTML = `
+    <span>服务 <strong>${data.ok ? '正常' : '需关注'}</strong></span>
+    <span>运行 <strong>${sessions.running || 0}</strong></span>
+    <span>队列 <strong>${sessions.queuedMessages || 0}</strong></span>
+    <span>失败 Run <strong>${sessions.failedRuns || 0}</strong></span>
+    <span>SSE <strong>${service.sseClients || 0}</strong></span>
+    <span>内存 <strong>${escapeHtml(formatBytes(service.memory?.rssBytes || 0))}</strong></span>
+    <span>磁盘 <strong>${escapeHtml(diskText)}</strong></span>
+    <span>启动 <strong>${escapeHtml(formatDuration(service.uptimeMs || 0))}</strong></span>
+    ${warnings.length ? `<p>${warnings.map((item) => escapeHtml(item)).join('<br>')}</p>` : '<p>未发现需要立即处理的异常。</p>'}
+  `;
+}
+
+async function loadSystemHealth() {
+  if (!el.systemHealthPanel) return;
+  el.systemHealthPanel.textContent = '加载中...';
+  const data = await api('/api/system/health');
+  renderSystemHealth(data);
+  if (data.upgradeTask) renderCodexUpgrade({ upgradeTask: data.upgradeTask });
+}
+
+function renderCodexUpgrade(data = {}) {
+  if (!el.codexUpgradePanel) return;
+  const task = data.upgradeTask || data.task || null;
+  const current = data.currentVersion || task?.currentVersion || '';
+  const latest = data.latestVersion || task?.after?.currentVersion || '';
+  const updateText = data.updateAvailable ? '有新版' : current && latest ? '已是最新' : '待检查';
+  const taskText = task
+    ? `任务 ${task.status || '-'}${task.finishedAt ? ` · ${formatTime(task.finishedAt)}` : ''}`
+    : '没有升级任务';
+  el.codexUpgradePanel.innerHTML = `
+    <div class="maintenance-grid">
+      <span>当前 <strong>${escapeHtml(current || data.currentText || '未知')}</strong></span>
+      <span>最新 <strong>${escapeHtml(latest || '未知')}</strong></span>
+      <span>状态 <strong>${escapeHtml(updateText)}</strong></span>
+      <span>任务 <strong>${escapeHtml(taskText)}</strong></span>
+    </div>
+    <p>升级会修改全局 Codex CLI，可能影响所有会话的输出格式；运行中任务存在时会阻止升级。</p>
+    ${data.currentError ? `<p>${escapeHtml(data.currentError)}</p>` : ''}
+    ${data.latestError ? `<p>${escapeHtml(data.latestError)}</p>` : ''}
+  `;
+}
+
+async function checkCodexUpgrade() {
+  if (!el.codexUpgradePanel) return;
+  el.codexUpgradePanel.textContent = '检查中...';
+  const data = await api('/api/codex/upgrade-check');
+  renderCodexUpgrade(data);
+}
+
+async function upgradeCodex() {
+  if (!confirm('升级会修改全局 Codex CLI，并在完成后安全重启本服务。确认继续？')) return;
+  el.upgradeCodexButton.disabled = true;
+  try {
+    const data = await api('/api/codex/upgrade', { method: 'POST' });
+    renderCodexUpgrade(data);
+    setBadge('升级已开始', 'busy');
+  } finally {
+    el.upgradeCodexButton.disabled = false;
+  }
+}
+
+function applyTagManagementData(data = {}) {
+  if (Array.isArray(data.sessions)) {
+    state.sessions = data.sessions;
+    saveSessionCache();
+    renderSessions({ force: true });
+    renderActive({ messages: false });
+  }
+  renderTagManagement(data);
+}
+
+function renderTagManagement(data = {}) {
+  if (!el.tagManagementPanel) return;
+  const tags = Array.isArray(data.tags) ? data.tags : [];
+  el.undoSmartTagsButton.disabled = !data.lastSnapshotAt;
+  if (!tags.length) {
+    el.tagManagementPanel.innerHTML = '<p class="maintenance-empty">还没有标签。</p>';
+    return;
+  }
+  el.tagManagementPanel.innerHTML = tags.map((item) => `
+    <div class="tag-management-row">
+      <div>
+        <strong>#${escapeHtml(item.tag)}</strong>
+        <span>${item.count || 0} 个 · Web ${item.webCount || 0} · Codex ${item.codexCount || 0}</span>
+      </div>
+      <div>
+        <button class="ghost-button inline" type="button" data-tag-action="rename" data-tag="${escapeHtml(item.tag)}">改名</button>
+        <button class="ghost-button inline" type="button" data-tag-action="merge" data-tag="${escapeHtml(item.tag)}">合并</button>
+        <button class="ghost-button inline danger" type="button" data-tag-action="delete" data-tag="${escapeHtml(item.tag)}">删除</button>
+      </div>
+    </div>
+  `).join('');
+  for (const button of el.tagManagementPanel.querySelectorAll('[data-tag-action]')) {
+    button.addEventListener('click', () => runTagAction(button.dataset.action, button.dataset.tag));
+  }
+}
+
+async function loadTagManagement() {
+  if (!el.tagManagementPanel) return;
+  el.tagManagementPanel.textContent = '加载中...';
+  applyTagManagementData(await api('/api/tags'));
+}
+
+async function runTagAction(action, tag) {
+  const label = action === 'rename' ? '改名为' : action === 'merge' ? '合并到' : '删除';
+  let target = '';
+  if (action === 'rename' || action === 'merge') {
+    target = prompt(`把 #${tag} ${label}：`, '');
+    if (target === null) return;
+    target = parseSessionTagsInput(target)[0] || '';
+    if (!target) return alert('请输入有效标签。');
+  } else if (!confirm(`从所有会话中删除 #${tag}？`)) {
+    return;
+  }
+  const data = await api('/api/tags/action', {
+    method: 'POST',
+    body: JSON.stringify({ action, tag, toTag: target })
+  });
+  applyTagManagementData(data);
+  setBadge(`已更新 ${data.changed || 0} 个`, 'ok');
+}
+
+async function undoSmartTags() {
+  if (!confirm('撤销上次智能分类前的标签快照？')) return;
+  const data = await api('/api/sessions/tags/undo', { method: 'POST' });
+  applyTagManagementData(data);
+  setBadge('已撤销智能分类', 'ok');
+}
+
+async function loadMaintenancePage() {
+  const results = await Promise.allSettled([
+    loadSystemHealth(),
+    loadTagManagement()
+  ]);
+  if (results[0].status === 'rejected' && el.systemHealthPanel) {
+    el.systemHealthPanel.textContent = results[0].reason?.detail || results[0].reason?.message || '健康检查失败';
+  }
+  if (results[1].status === 'rejected' && el.tagManagementPanel) {
+    el.tagManagementPanel.textContent = results[1].reason?.detail || results[1].reason?.message || '标签加载失败';
+  }
+}
+
 function shortCommand(cmdline) {
   const text = (cmdline || []).join(' ').replace(/\s+/g, ' ').trim();
   return summarizeText(text || '-', 160);
@@ -4408,6 +4567,11 @@ function selectSettingsPage(page) {
   } else if (page === 'run') {
     updateRunSettingsState();
     loadCodexConfigSummary();
+  } else if (page === 'maintenance') {
+    loadMaintenancePage().catch((error) => {
+      if (el.systemHealthPanel) el.systemHealthPanel.textContent = error.message || '加载失败';
+      if (el.tagManagementPanel) el.tagManagementPanel.textContent = error.message || '加载失败';
+    });
   }
 }
 
@@ -4440,6 +4604,21 @@ el.cleanupUploadsButton.addEventListener('click', () => runStorageCleanup('orpha
 }));
 el.cleanupRuntimeButton.addEventListener('click', () => runStorageCleanup('runtime').catch((error) => {
   el.storageStats.textContent = error.message || '清理失败';
+}));
+el.refreshHealthButton?.addEventListener('click', () => loadSystemHealth().catch((error) => {
+  el.systemHealthPanel.textContent = error.detail || error.message || '刷新失败';
+}));
+el.checkCodexUpgradeButton?.addEventListener('click', () => checkCodexUpgrade().catch((error) => {
+  el.codexUpgradePanel.textContent = error.detail || error.message || '检查失败';
+}));
+el.upgradeCodexButton?.addEventListener('click', () => upgradeCodex().catch((error) => {
+  el.codexUpgradePanel.textContent = error.detail || error.message || '升级启动失败';
+}));
+el.refreshTagsButton?.addEventListener('click', () => loadTagManagement().catch((error) => {
+  el.tagManagementPanel.textContent = error.detail || error.message || '刷新失败';
+}));
+el.undoSmartTagsButton?.addEventListener('click', () => undoSmartTags().catch((error) => {
+  el.tagManagementPanel.textContent = error.detail || error.message || '撤销失败';
 }));
 el.closeImageViewer.addEventListener('click', closeImageViewer);
 el.imageViewer.addEventListener('click', (event) => {

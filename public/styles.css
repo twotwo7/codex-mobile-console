@@ -2824,7 +2824,7 @@ button:disabled {
 }
 
 .settings-tabs {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 .settings-page {
@@ -2982,6 +2982,114 @@ button:disabled {
   min-height: 38px;
   padding: 0 9px;
   font-size: 12px;
+}
+
+.maintenance-panel {
+  gap: 10px;
+}
+
+.maintenance-card {
+  display: grid;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+
+.maintenance-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.maintenance-grid span {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.maintenance-grid strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--text);
+  font-size: 12px;
+}
+
+.maintenance-grid p,
+.maintenance-copy p,
+.maintenance-empty {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.maintenance-copy {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tag-maintenance-actions {
+  display: flex;
+  justify-content: flex-start;
+}
+
+.tag-management-list {
+  display: grid;
+  gap: 7px;
+}
+
+.tag-management-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+
+.tag-management-row > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.tag-management-row strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tag-management-row span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.tag-management-row > div:last-child {
+  display: flex;
+  gap: 5px;
+}
+
+.tag-management-row button {
+  min-height: 28px;
+  padding: 0 7px;
+  font-size: 11px;
 }
 
 .settings-checkbox {
