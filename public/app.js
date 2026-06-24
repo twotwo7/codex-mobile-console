@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '156';
-const SW_CACHE_VERSION = 'codex-console-v173';
+const APP_ASSET_VERSION = '157';
+const SW_CACHE_VERSION = 'codex-console-v174';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -251,6 +251,10 @@ const el = {
   cleanupRuntimeButton: document.querySelector('#cleanupRuntimeButton'),
   refreshHealthButton: document.querySelector('#refreshHealthButton'),
   systemHealthPanel: document.querySelector('#systemHealthPanel'),
+  checkAppUpdateButton: document.querySelector('#checkAppUpdateButton'),
+  appUpdatePanel: document.querySelector('#appUpdatePanel'),
+  updateAppButton: document.querySelector('#updateAppButton'),
+  rollbackAppButton: document.querySelector('#rollbackAppButton'),
   checkCodexUpgradeButton: document.querySelector('#checkCodexUpgradeButton'),
   codexUpgradePanel: document.querySelector('#codexUpgradePanel'),
   upgradeCodexButton: document.querySelector('#upgradeCodexButton'),
@@ -2383,7 +2387,75 @@ async function loadSystemHealth() {
   el.systemHealthPanel.textContent = '加载中...';
   const data = await api('/api/system/health');
   renderSystemHealth(data);
+  if (data.app) renderAppUpdate(data.app);
   if (data.upgradeTask) renderCodexUpgrade({ upgradeTask: data.upgradeTask });
+}
+
+function renderAppUpdate(data = {}) {
+  if (!el.appUpdatePanel) return;
+  const git = data.git || {};
+  const latest = data.latest || {};
+  const task = data.updateTask || null;
+  const rollback = data.rollback || null;
+  const target = latest.target || task?.target || '';
+  const status = task
+    ? `${task.type === 'rollback' ? '回滚' : '升级'} ${task.status || '-'}${task.step ? ` · ${task.step}` : ''}`
+    : latest.updateAvailable ? '有更新' : latest.checkedAt ? '已是最新' : '未检查';
+  const warnings = [
+    git.dirty ? '本地有未提交改动，自动升级会被阻止。' : '',
+    ...(latest.warnings || []),
+    task?.error || ''
+  ].filter(Boolean);
+  el.rollbackAppButton.disabled = !rollback?.commit || task?.status === 'running';
+  el.updateAppButton.disabled = task?.status === 'running';
+  el.appUpdatePanel.innerHTML = `
+    <div class="maintenance-grid">
+      <span>版本 <strong>${escapeHtml(data.version || '-')}</strong></span>
+      <span>Commit <strong>${escapeHtml(git.shortCommit || '-')}</strong></span>
+      <span>分支 <strong>${escapeHtml(git.branch || '-')}</strong></span>
+      <span>状态 <strong>${escapeHtml(status)}</strong></span>
+      <span>目标 <strong>${escapeHtml(target || latest.latestTag || latest.latestRemoteCommit?.slice(0, 12) || '-')}</strong></span>
+      <span>回滚 <strong>${escapeHtml(rollback?.shortCommit || '-')}</strong></span>
+    </div>
+    <p>控制台升级只处理本应用代码；会阻止运行中的 Codex 任务和本地未提交改动。</p>
+    ${warnings.length ? `<p>${warnings.map((item) => escapeHtml(item)).join('<br>')}</p>` : ''}
+  `;
+}
+
+async function loadAppVersion() {
+  if (!el.appUpdatePanel) return;
+  el.appUpdatePanel.textContent = '读取中...';
+  renderAppUpdate(await api('/api/app/version'));
+}
+
+async function checkAppUpdate() {
+  if (!el.appUpdatePanel) return;
+  el.appUpdatePanel.textContent = '检查中...';
+  renderAppUpdate(await api('/api/app/update-check'));
+}
+
+async function updateApp() {
+  if (!confirm('将从 GitHub 拉取并升级本控制台。运行中的 Codex 任务或本地未提交改动会阻止升级。确认继续？')) return;
+  el.updateAppButton.disabled = true;
+  try {
+    const data = await api('/api/app/update', { method: 'POST' });
+    renderAppUpdate({ updateTask: data.task });
+    setBadge('控制台升级已开始', 'busy');
+  } finally {
+    el.updateAppButton.disabled = false;
+  }
+}
+
+async function rollbackApp() {
+  if (!confirm('回滚到上次升级前的控制台版本？运行中的 Codex 任务会阻止回滚。')) return;
+  el.rollbackAppButton.disabled = true;
+  try {
+    const data = await api('/api/app/rollback', { method: 'POST' });
+    renderAppUpdate({ updateTask: data.task });
+    setBadge('控制台回滚已开始', 'busy');
+  } finally {
+    el.rollbackAppButton.disabled = false;
+  }
 }
 
 function renderCodexUpgrade(data = {}) {
@@ -2498,13 +2570,17 @@ async function undoSmartTags() {
 async function loadMaintenancePage() {
   const results = await Promise.allSettled([
     loadSystemHealth(),
+    loadAppVersion(),
     loadTagManagement()
   ]);
   if (results[0].status === 'rejected' && el.systemHealthPanel) {
     el.systemHealthPanel.textContent = results[0].reason?.detail || results[0].reason?.message || '健康检查失败';
   }
-  if (results[1].status === 'rejected' && el.tagManagementPanel) {
-    el.tagManagementPanel.textContent = results[1].reason?.detail || results[1].reason?.message || '标签加载失败';
+  if (results[1].status === 'rejected' && el.appUpdatePanel) {
+    el.appUpdatePanel.textContent = results[1].reason?.detail || results[1].reason?.message || '版本读取失败';
+  }
+  if (results[2].status === 'rejected' && el.tagManagementPanel) {
+    el.tagManagementPanel.textContent = results[2].reason?.detail || results[2].reason?.message || '标签加载失败';
   }
 }
 
@@ -4607,6 +4683,15 @@ el.cleanupRuntimeButton.addEventListener('click', () => runStorageCleanup('runti
 }));
 el.refreshHealthButton?.addEventListener('click', () => loadSystemHealth().catch((error) => {
   el.systemHealthPanel.textContent = error.detail || error.message || '刷新失败';
+}));
+el.checkAppUpdateButton?.addEventListener('click', () => checkAppUpdate().catch((error) => {
+  el.appUpdatePanel.textContent = error.detail || error.message || '检查失败';
+}));
+el.updateAppButton?.addEventListener('click', () => updateApp().catch((error) => {
+  el.appUpdatePanel.textContent = error.detail || error.message || '升级启动失败';
+}));
+el.rollbackAppButton?.addEventListener('click', () => rollbackApp().catch((error) => {
+  el.appUpdatePanel.textContent = error.detail || error.message || '回滚启动失败';
 }));
 el.checkCodexUpgradeButton?.addEventListener('click', () => checkCodexUpgrade().catch((error) => {
   el.codexUpgradePanel.textContent = error.detail || error.message || '检查失败';

@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=135">
+    <link rel="stylesheet" href="/styles.css?v=136">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -212,13 +212,24 @@
               </div>
             </section>
             <section class="settings-page maintenance-panel" data-settings-page="maintenance">
-              <p class="settings-page-note">系统健康、Codex 升级和标签维护。</p>
+              <p class="settings-page-note">系统健康、控制台升级、Codex 升级和标签维护。</p>
               <div class="maintenance-card">
                 <div class="storage-head">
                   <strong>系统健康</strong>
                   <button id="refreshHealthButton" class="ghost-button inline" type="button">刷新</button>
                 </div>
                 <div id="systemHealthPanel" class="maintenance-grid">加载中...</div>
+              </div>
+              <div class="maintenance-card">
+                <div class="storage-head">
+                  <strong>控制台版本</strong>
+                  <button id="checkAppUpdateButton" class="ghost-button inline" type="button">检查</button>
+                </div>
+                <div id="appUpdatePanel" class="maintenance-copy">读取当前版本...</div>
+                <div class="maintenance-actions">
+                  <button id="updateAppButton" class="ghost-button inline danger" type="button">安全升级控制台</button>
+                  <button id="rollbackAppButton" class="ghost-button inline" type="button">回滚上个版本</button>
+                </div>
               </div>
               <div class="maintenance-card">
                 <div class="storage-head">
@@ -688,6 +699,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=156" type="module"></script>
+    <script src="/app.js?v=157" type="module"></script>
   </body>
 </html>

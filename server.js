@@ -80,6 +80,7 @@ let skillScanPromise = null;
 let skillMaintenanceTimer = null;
 let skillRegistryFileMtimeMs = 0;
 let codexUpgradeTask = null;
+let appUpdateTask = null;
 
 async function exists(file) {
   try {
@@ -1944,11 +1945,12 @@ async function codexVersionInfo(options = {}) {
 }
 
 async function systemHealth() {
-  const [service, storage, codex, restartMarker] = await Promise.all([
+  const [service, storage, codex, restartMarker, app] = await Promise.all([
     serviceRuntimeInfo(),
     storageStats(),
     codexVersionInfo({ latest: false }),
-    restartMarkerInfo()
+    restartMarkerInfo(),
+    appVersionInfo({ checkRemote: false })
   ]);
   const sessions = Object.values(state.sessions || {});
   const staleRecovered = sessions.filter((session) => reconcileSessionRunState(session, 'health-check')).length;
@@ -1965,6 +1967,7 @@ async function systemHealth() {
     service,
     storage,
     codex,
+    app,
     restartMarker,
     sessions: {
       total: sessions.length,
@@ -2030,6 +2033,277 @@ async function startCodexUpgrade() {
       task.status = 'failed';
     }
   });
+  return task;
+}
+
+function shortGitRef(value = '') {
+  return String(value || '').trim().slice(0, 12);
+}
+
+async function gitInfo() {
+  const [commit, branch, status, remote, tag] = await Promise.all([
+    runCommand('git', ['rev-parse', 'HEAD'], { timeoutMs: 6000 }),
+    runCommand('git', ['branch', '--show-current'], { timeoutMs: 6000 }),
+    runCommand('git', ['status', '--short'], { timeoutMs: 6000 }),
+    runCommand('git', ['remote', 'get-url', 'origin'], { timeoutMs: 6000 }),
+    runCommand('git', ['describe', '--tags', '--exact-match'], { timeoutMs: 6000 })
+  ]);
+  return {
+    ok: commit.ok,
+    commit: commit.stdout || '',
+    shortCommit: shortGitRef(commit.stdout),
+    branch: branch.stdout || '',
+    dirty: Boolean(status.stdout),
+    dirtySummary: status.stdout.split('\n').filter(Boolean).slice(0, 12),
+    remote: remote.stdout || '',
+    tag: tag.ok ? tag.stdout : '',
+    errors: [commit, branch, status, remote].filter((item) => !item.ok).map((item) => item.stderr || item.stdout).filter(Boolean)
+  };
+}
+
+async function appVersionInfo(options = {}) {
+  const [pkg, git, rollback] = await Promise.all([
+    packageMeta(),
+    gitInfo(),
+    Promise.resolve(state.appRollback || null)
+  ]);
+  let latest = null;
+  if (options.checkRemote) latest = await appUpdateCheck();
+  return {
+    name: pkg.name,
+    version: pkg.version,
+    git,
+    rollback,
+    updateTask: appUpdateTask,
+    latest,
+    checkedAt: nowIso()
+  };
+}
+
+function versionFromTag(tag = '') {
+  return String(tag || '').replace(/^v/i, '');
+}
+
+function isSemverTag(tag = '') {
+  return /^v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(String(tag || '').trim());
+}
+
+function compareSemver(a = '', b = '') {
+  const parse = (value) => versionFromTag(value).split(/[.-]/).slice(0, 3).map((part) => Number(part) || 0);
+  const left = parse(a);
+  const right = parse(b);
+  for (let index = 0; index < 3; index += 1) {
+    if (left[index] !== right[index]) return left[index] - right[index];
+  }
+  return 0;
+}
+
+async function appUpdateCheck() {
+  const [git, pkg] = await Promise.all([gitInfo(), packageMeta()]);
+  const result = {
+    ok: git.ok,
+    currentCommit: git.commit,
+    currentShortCommit: git.shortCommit,
+    currentBranch: git.branch,
+    currentTag: git.tag,
+    dirty: git.dirty,
+    remote: git.remote,
+    latestTag: '',
+    latestTagCommit: '',
+    latestRemoteCommit: '',
+    updateAvailable: false,
+    target: '',
+    mode: '',
+    warnings: [],
+    checkedAt: nowIso()
+  };
+  if (!git.ok) {
+    result.ok = false;
+    result.warnings.push('当前目录不是可用的 git 仓库，无法自动检测控制台更新。');
+    return result;
+  }
+  const fetch = await runCommand('git', ['fetch', '--tags', 'origin'], { timeoutMs: 30000 });
+  if (!fetch.ok) {
+    result.ok = false;
+    result.warnings.push(fetch.stderr || fetch.stdout || 'git fetch 失败。');
+    return result;
+  }
+  const tags = await runCommand('git', ['tag', '--list', 'v*', '--sort=-v:refname'], { timeoutMs: 8000 });
+  const latestTag = tags.stdout.split('\n').map((item) => item.trim()).filter(isSemverTag).sort((a, b) => -compareSemver(a, b))[0] || '';
+  result.latestTag = latestTag;
+  if (latestTag) {
+    const tagCommit = await runCommand('git', ['rev-list', '-n', '1', latestTag], { timeoutMs: 8000 });
+    result.latestTagCommit = tagCommit.stdout || '';
+  }
+  const branch = git.branch || 'main';
+  const remoteCommit = await runCommand('git', ['rev-parse', `origin/${branch}`], { timeoutMs: 8000 });
+  result.latestRemoteCommit = remoteCommit.stdout || '';
+  if (latestTag && result.latestTagCommit && result.latestTagCommit !== git.commit && compareSemver(latestTag, pkg.version) > 0) {
+    result.updateAvailable = true;
+    result.target = latestTag;
+    result.mode = 'tag';
+  } else if (result.latestRemoteCommit && result.latestRemoteCommit !== git.commit) {
+    result.updateAvailable = true;
+    result.target = `origin/${branch}`;
+    result.mode = 'branch';
+  }
+  if (git.dirty) result.warnings.push('本地工作区有未提交改动，自动升级会被阻止。');
+  return result;
+}
+
+async function runAppUpdateSteps(task, steps) {
+  for (const step of steps) {
+    task.step = step.label;
+    task.log += `\n$ ${step.label}`;
+    const result = await runCommand(step.command, step.args, { timeoutMs: step.timeoutMs || 60000 });
+    task.log += `\n${[result.stdout, result.stderr].filter(Boolean).join('\n')}`.slice(0, 12000);
+    if (!result.ok) {
+      const error = new Error(result.stderr || result.stdout || `${step.label} failed`);
+      error.code = 'step_failed';
+      throw error;
+    }
+  }
+}
+
+async function startAppUpdate(options = {}) {
+  if (appUpdateTask?.status === 'running') return appUpdateTask;
+  if (running.size > 0) {
+    const error = new Error('sessions_running');
+    error.code = 'sessions_running';
+    throw error;
+  }
+  const current = await gitInfo();
+  if (!current.ok) {
+    const error = new Error('git_unavailable');
+    error.code = 'git_unavailable';
+    throw error;
+  }
+  if (current.dirty) {
+    const error = new Error('dirty_worktree');
+    error.code = 'dirty_worktree';
+    error.detail = current.dirtySummary.join('\n');
+    throw error;
+  }
+  const check = await appUpdateCheck();
+  if (!check.ok) {
+    const error = new Error(check.warnings.join('\n') || 'update_check_failed');
+    error.code = 'update_check_failed';
+    throw error;
+  }
+  const target = String(options.target || check.target || '').trim();
+  const mode = ['tag', 'branch'].includes(options.mode) ? options.mode : check.mode || (target.startsWith('origin/') ? 'branch' : 'tag');
+  if (!target) {
+    const error = new Error('update_not_available');
+    error.code = 'update_not_available';
+    throw error;
+  }
+  state.appRollback = {
+    commit: current.commit,
+    shortCommit: current.shortCommit,
+    branch: current.branch,
+    version: (await packageMeta()).version,
+    createdAt: nowIso()
+  };
+  scheduleSave();
+  appUpdateTask = {
+    id: randomUUID(),
+    type: 'update',
+    status: 'running',
+    startedAt: nowIso(),
+    finishedAt: '',
+    fromCommit: current.commit,
+    fromShortCommit: current.shortCommit,
+    target,
+    mode,
+    step: 'starting',
+    code: null,
+    log: '',
+    restart: null
+  };
+  const task = appUpdateTask;
+  (async () => {
+    try {
+      const steps = [
+        { label: 'git fetch --tags origin', command: 'git', args: ['fetch', '--tags', 'origin'], timeoutMs: 30000 },
+        mode === 'branch'
+          ? { label: `git merge --ff-only ${target}`, command: 'git', args: ['merge', '--ff-only', target], timeoutMs: 30000 }
+          : { label: `git checkout ${target}`, command: 'git', args: ['checkout', target], timeoutMs: 30000 },
+        { label: 'npm install --omit=dev', command: 'npm', args: ['install', '--omit=dev'], timeoutMs: 120000 },
+        { label: 'node --check server.js', command: 'node', args: ['--check', 'server.js'], timeoutMs: 30000 },
+        { label: 'node --check public/app.js', command: 'node', args: ['--check', 'public/app.js'], timeoutMs: 30000 }
+      ];
+      await runAppUpdateSteps(task, steps);
+      const after = await gitInfo();
+      task.status = 'finished';
+      task.finishedAt = nowIso();
+      task.afterCommit = after.commit;
+      task.afterShortCommit = after.shortCommit;
+      task.restart = await requestServiceRestart('app-update');
+    } catch (error) {
+      task.status = 'failed';
+      task.finishedAt = nowIso();
+      task.error = error.message || String(error);
+    }
+  })();
+  return task;
+}
+
+async function startAppRollback() {
+  if (appUpdateTask?.status === 'running') return appUpdateTask;
+  if (running.size > 0) {
+    const error = new Error('sessions_running');
+    error.code = 'sessions_running';
+    throw error;
+  }
+  const rollback = state.appRollback;
+  if (!rollback?.commit) {
+    const error = new Error('rollback_not_found');
+    error.code = 'rollback_not_found';
+    throw error;
+  }
+  const current = await gitInfo();
+  if (current.dirty) {
+    const error = new Error('dirty_worktree');
+    error.code = 'dirty_worktree';
+    error.detail = current.dirtySummary.join('\n');
+    throw error;
+  }
+  appUpdateTask = {
+    id: randomUUID(),
+    type: 'rollback',
+    status: 'running',
+    startedAt: nowIso(),
+    finishedAt: '',
+    fromCommit: current.commit,
+    fromShortCommit: current.shortCommit,
+    target: rollback.commit,
+    mode: 'rollback',
+    step: 'starting',
+    code: null,
+    log: '',
+    restart: null
+  };
+  const task = appUpdateTask;
+  (async () => {
+    try {
+      await runAppUpdateSteps(task, [
+        { label: `git checkout ${rollback.commit}`, command: 'git', args: ['checkout', rollback.commit], timeoutMs: 30000 },
+        { label: 'npm install --omit=dev', command: 'npm', args: ['install', '--omit=dev'], timeoutMs: 120000 },
+        { label: 'node --check server.js', command: 'node', args: ['--check', 'server.js'], timeoutMs: 30000 },
+        { label: 'node --check public/app.js', command: 'node', args: ['--check', 'public/app.js'], timeoutMs: 30000 }
+      ]);
+      const after = await gitInfo();
+      task.status = 'finished';
+      task.finishedAt = nowIso();
+      task.afterCommit = after.commit;
+      task.afterShortCommit = after.shortCommit;
+      task.restart = await requestServiceRestart('app-rollback');
+    } catch (error) {
+      task.status = 'failed';
+      task.finishedAt = nowIso();
+      task.error = error.message || String(error);
+    }
+  })();
   return task;
 }
 
@@ -3453,6 +3727,39 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/system/health' && req.method === 'GET') {
     return json(res, 200, await systemHealth());
+  }
+
+  if (url.pathname === '/api/app/version' && req.method === 'GET') {
+    return json(res, 200, await appVersionInfo({ checkRemote: false }));
+  }
+
+  if (url.pathname === '/api/app/update-check' && req.method === 'GET') {
+    return json(res, 200, await appVersionInfo({ checkRemote: true }));
+  }
+
+  if (url.pathname === '/api/app/update' && req.method === 'POST') {
+    try {
+      const body = await readJson(req).catch(() => ({}));
+      const task = await startAppUpdate(body);
+      return json(res, 202, { ok: true, task });
+    } catch (error) {
+      if (error.code === 'sessions_running') return json(res, 409, { error: 'sessions_running', message: '有 Codex 任务正在运行，等待结束后再升级。', running: running.size });
+      if (error.code === 'dirty_worktree') return json(res, 409, { error: 'dirty_worktree', message: '本地有未提交改动，自动升级已阻止。', detail: error.detail || '' });
+      if (error.code === 'update_not_available') return json(res, 409, { error: 'update_not_available', message: '当前没有可升级版本。' });
+      return json(res, 500, { error: error.code || 'app_update_failed', message: error.message || String(error) });
+    }
+  }
+
+  if (url.pathname === '/api/app/rollback' && req.method === 'POST') {
+    try {
+      const task = await startAppRollback();
+      return json(res, 202, { ok: true, task });
+    } catch (error) {
+      if (error.code === 'sessions_running') return json(res, 409, { error: 'sessions_running', message: '有 Codex 任务正在运行，等待结束后再回滚。', running: running.size });
+      if (error.code === 'dirty_worktree') return json(res, 409, { error: 'dirty_worktree', message: '本地有未提交改动，自动回滚已阻止。', detail: error.detail || '' });
+      if (error.code === 'rollback_not_found') return json(res, 404, { error: 'rollback_not_found', message: '没有可用的上个版本回滚点。' });
+      return json(res, 500, { error: error.code || 'app_rollback_failed', message: error.message || String(error) });
+    }
   }
 
   if (url.pathname === '/api/codex/upgrade-check' && req.method === 'GET') {

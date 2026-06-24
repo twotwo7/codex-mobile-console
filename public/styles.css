@@ -3040,6 +3040,18 @@ button:disabled {
   font-size: 12px;
 }
 
+.maintenance-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.maintenance-actions button {
+  min-height: 34px;
+  padding: 0 8px;
+  font-size: 12px;
+}
+
 .tag-maintenance-actions {
   display: flex;
   justify-content: flex-start;
