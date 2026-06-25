@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '157';
-const SW_CACHE_VERSION = 'codex-console-v174';
+const APP_ASSET_VERSION = '158';
+const SW_CACHE_VERSION = 'codex-console-v175';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -109,6 +109,8 @@ const DEFAULT_RUN_CONFIG = {
   ignoreUserConfig: false,
   ignoreRules: false
 };
+
+const MODEL_OPTIONS = new Set(['', 'gpt-5.4', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-4.1']);
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -189,6 +191,7 @@ const el = {
   commandButton: document.querySelector('#commandButton'),
   topMoreButton: document.querySelector('#topMoreButton'),
   topMoreMenu: document.querySelector('#topMoreMenu'),
+  sessionConfigButton: document.querySelector('#sessionConfigButton'),
   topFilterButton: document.querySelector('#topFilterButton'),
   topFilterMenu: document.querySelector('#topFilterMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
@@ -206,7 +209,8 @@ const el = {
   fileInput: document.querySelector('#fileInput'),
   imagePreviewStrip: document.querySelector('#imagePreviewStrip'),
   elevatedRun: document.querySelector('#elevatedRun'),
-  defaultModelInput: document.querySelector('#defaultModelInput'),
+  defaultModelSelect: document.querySelector('#defaultModelSelect'),
+  defaultModelCustomInput: document.querySelector('#defaultModelCustomInput'),
   defaultProfileInput: document.querySelector('#defaultProfileInput'),
   defaultSandboxSelect: document.querySelector('#defaultSandboxSelect'),
   defaultApprovalSelect: document.querySelector('#defaultApprovalSelect'),
@@ -496,10 +500,50 @@ function normalizeRunConfig(value = {}) {
   };
 }
 
+function setModelControl(select, customInput, value = '') {
+  const model = String(value || '').trim();
+  if (!select) return;
+  if (MODEL_OPTIONS.has(model)) {
+    select.value = model;
+    if (customInput) customInput.value = '';
+  } else {
+    select.value = 'custom';
+    if (customInput) customInput.value = model;
+  }
+  syncModelCustomInput(select, customInput);
+}
+
+function readModelControl(select, customInput) {
+  if (!select) return '';
+  if (select.value === 'custom') return String(customInput?.value || '').trim();
+  return String(select.value || '').trim();
+}
+
+function syncModelCustomInput(select, customInput) {
+  if (!customInput) return;
+  const custom = select?.value === 'custom';
+  customInput.hidden = !custom;
+  customInput.disabled = !custom;
+  customInput.required = custom;
+}
+
+function bindModelControl(select, customInput, onChange) {
+  if (!select) return;
+  const handler = () => {
+    syncModelCustomInput(select, customInput);
+    if (onChange) onChange();
+  };
+  select.addEventListener('change', handler);
+  customInput?.addEventListener('input', () => {
+    if (onChange) onChange();
+  });
+  syncModelCustomInput(select, customInput);
+}
+
 function runConfigFromForm(form) {
   const data = new FormData(form);
   return normalizeRunConfig({
-    model: data.get('model'),
+    model: readModelControl(form.elements.model, form.elements.modelCustom),
     profile: data.get('profile'),
     sandbox: data.get('sandbox'),
     approval: data.get('approval'),
@@ -515,7 +559,7 @@ function runConfigFromForm(form) {
 function applyRunConfigToForm(form, config = {}) {
   const value = normalizeRunConfig(config);
   if (!form) return;
-  if (form.elements.model) form.elements.model.value = value.model;
+  setModelControl(form.elements.model, form.elements.modelCustom, value.model);
   if (form.elements.profile) form.elements.profile.value = value.profile;
   if (form.elements.sandbox) form.elements.sandbox.value = value.sandbox;
   if (form.elements.approval) form.elements.approval.value = value.approval;
@@ -529,7 +573,7 @@ function applyRunConfigToForm(form, config = {}) {
 
 function applyDefaultRunConfigToSettings() {
   const value = normalizeRunConfig(state.defaultRunConfig);
-  if (el.defaultModelInput) el.defaultModelInput.value = value.model;
+  setModelControl(el.defaultModelSelect, el.defaultModelCustomInput, value.model);
   if (el.defaultProfileInput) el.defaultProfileInput.value = value.profile;
   if (el.defaultSandboxSelect) el.defaultSandboxSelect.value = value.sandbox;
   if (el.defaultApprovalSelect) el.defaultApprovalSelect.value = value.approval;
@@ -543,7 +587,7 @@ function applyDefaultRunConfigToSettings() {
 
 function readDefaultRunConfigFromSettings() {
   return normalizeRunConfig({
-    model: el.defaultModelInput?.value,
+    model: readModelControl(el.defaultModelSelect, el.defaultModelCustomInput),
     profile: el.defaultProfileInput?.value,
     sandbox: el.defaultSandboxSelect?.value,
     approval: el.defaultApprovalSelect?.value,
@@ -4269,10 +4313,24 @@ async function renameSession(session) {
 
 function openSessionConfigDialog(session) {
   if (!session?.id || !el.sessionConfigDialog || !el.sessionConfigForm) return;
+  if (session.source === 'codex') {
+    alert('全局 Codex 历史会话不能在控制台里修改运行模型。请 Fork 成本应用会话后再配置。');
+    return;
+  }
   el.sessionConfigForm.dataset.sessionId = session.id;
   applyRunConfigToForm(el.sessionConfigForm, session);
   el.sessionConfigState.textContent = '保存后下一次发送生效。';
   openModal(el.sessionConfigDialog);
+}
+
+function openActiveSessionConfigDialog() {
+  closeTopMoreMenu();
+  const session = getActiveSession();
+  if (!session) {
+    alert('请先选择一个会话。');
+    return;
+  }
+  openSessionConfigDialog(session);
 }
 
 async function saveSessionConfig(event) {
@@ -4430,6 +4488,8 @@ el.topMoreButton.addEventListener('click', (event) => {
 el.topMoreMenu.addEventListener('click', (event) => {
   event.stopPropagation();
 });
+
+el.sessionConfigButton?.addEventListener('click', openActiveSessionConfigDialog);
 
 el.topFilterButton.addEventListener('click', (event) => {
   event.stopPropagation();
@@ -4655,7 +4715,6 @@ for (const tab of el.settingsTabs) {
   tab.addEventListener('click', () => selectSettingsPage(tab.dataset.settingsTab));
 }
 [
-  el.defaultModelInput,
   el.defaultProfileInput,
   el.defaultSandboxSelect,
   el.defaultApprovalSelect,
@@ -4669,6 +4728,9 @@ for (const tab of el.settingsTabs) {
   node.addEventListener('change', saveDefaultRunConfig);
   if (node.tagName === 'TEXTAREA' || node.tagName === 'INPUT') node.addEventListener('input', saveDefaultRunConfig);
 });
+bindModelControl(el.defaultModelSelect, el.defaultModelCustomInput, saveDefaultRunConfig);
+bindModelControl(el.newSessionForm?.elements.model, el.newSessionForm?.elements.modelCustom);
+bindModelControl(el.sessionConfigForm?.elements.model, el.sessionConfigForm?.elements.modelCustom);
 el.refreshStorageButton.addEventListener('click', () => loadStorageStats().catch((error) => {
   el.storageStats.textContent = error.message || '刷新失败';
 }));
