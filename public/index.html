@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=137">
+    <link rel="stylesheet" href="/styles.css?v=138">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -294,7 +294,7 @@
               <div class="top-more">
                 <button id="topMoreButton" class="top-more-button" type="button" aria-label="更多会话操作" aria-haspopup="menu" aria-expanded="false">▾</button>
                 <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
-                  <button id="sessionConfigButton" class="top-menu-item" type="button" role="menuitem">会话配置</button>
+                <button id="sessionConfigButton" class="top-menu-item" type="button" role="menuitem" onclick="window.cmcOpenActiveSessionConfig && window.cmcOpenActiveSessionConfig(event)">会话配置</button>
                   <button id="shareCaptureButton" class="top-menu-item" type="button" role="menuitem">分享截图</button>
                   <button id="sessionGoalButton" class="top-menu-item" type="button" role="menuitem">任务面板</button>
                   <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
@@ -724,6 +724,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=158" type="module"></script>
+    <script src="/app.js?v=159" type="module"></script>
   </body>
 </html>

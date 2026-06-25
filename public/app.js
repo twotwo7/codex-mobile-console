@@ -10,7 +10,7 @@ import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
 import { createSessionStateController } from './session-state.js?v=7';
 import { createSkillView } from './skill-view.js?v=3';
-import { createTopbarView } from './topbar-view.js?v=6';
+import { createTopbarView } from './topbar-view.js?v=7';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '158';
-const SW_CACHE_VERSION = 'codex-console-v175';
+const APP_ASSET_VERSION = '159';
+const SW_CACHE_VERSION = 'codex-console-v176';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -3210,18 +3210,22 @@ function closeRuntimeDialog() {
 
 function setTopMoreMenu(open) {
   topbarView.setTopMoreMenu(open);
+  el.topMoreMenu?.closest?.('.topbar')?.classList.toggle('menu-open', Boolean(open));
 }
 
 function closeTopMoreMenu() {
   topbarView.closeTopMoreMenu();
+  el.topMoreMenu?.closest?.('.topbar')?.classList.remove('menu-open');
 }
 
 function setTopFilterMenu(open) {
   topbarView.setTopFilterMenu(open);
+  el.topFilterMenu?.closest?.('.topbar')?.classList.toggle('menu-open', Boolean(open));
 }
 
 function closeTopFilterMenu() {
   topbarView.closeTopFilterMenu();
+  el.topFilterMenu?.closest?.('.topbar')?.classList.remove('menu-open');
 }
 
 function closeTopMenus() {
@@ -4333,6 +4337,8 @@ function openActiveSessionConfigDialog() {
   openSessionConfigDialog(session);
 }
 
+window.cmcOpenActiveSessionConfig = openActiveSessionConfigDialog;
+
 async function saveSessionConfig(event) {
   event.preventDefault();
   const sessionId = el.sessionConfigForm?.dataset.sessionId || '';
@@ -4488,8 +4494,6 @@ el.topMoreButton.addEventListener('click', (event) => {
 el.topMoreMenu.addEventListener('click', (event) => {
   event.stopPropagation();
 });
-
-el.sessionConfigButton?.addEventListener('click', openActiveSessionConfigDialog);
 
 el.topFilterButton.addEventListener('click', (event) => {
   event.stopPropagation();

@@ -71,7 +71,10 @@ export function createTopbarView(options) {
     if (!el.topMoreButton || !el.topMoreMenu) return;
     el.topMoreMenu.hidden = !open;
     el.topMoreButton.setAttribute('aria-expanded', String(open));
-    if (open) setTopFilterMenu(false);
+    if (open) {
+      el.topFilterMenu?.closest?.('.topbar')?.classList.remove('menu-open');
+      setTopFilterMenu(false);
+    }
   }
 
   function closeTopMoreMenu() {
@@ -83,6 +86,7 @@ export function createTopbarView(options) {
     el.topFilterMenu.hidden = !open;
     el.topFilterButton.setAttribute('aria-expanded', String(open));
     if (open) {
+      el.topMoreMenu?.closest?.('.topbar')?.classList.remove('menu-open');
       el.topMoreMenu.hidden = true;
       el.topMoreButton.setAttribute('aria-expanded', 'false');
     }
