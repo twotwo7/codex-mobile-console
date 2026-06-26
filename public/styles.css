@@ -270,7 +270,7 @@ button:disabled {
 
 .drawer-head {
   display: grid;
-  grid-template-columns: 64px minmax(0, 1fr) 34px;
+  grid-template-columns: 48px minmax(0, 1fr) 34px;
   align-items: center;
 }
 
@@ -372,7 +372,7 @@ button:disabled {
 
 .drawer-mode-row {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 4px;
   padding: 3px;
   border: 1px solid var(--line);
@@ -436,6 +436,10 @@ button:disabled {
 }
 
 .drawer-skills-panel.active {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.drawer-evolution-panel.active {
   grid-template-rows: auto auto minmax(0, 1fr);
 }
 
@@ -3160,6 +3164,148 @@ button:disabled {
 .drawer-skill-list {
   max-height: none;
   min-height: 0;
+}
+
+.evolution-list {
+  display: grid;
+  gap: 8px;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.evolution-card {
+  display: grid;
+  gap: 7px;
+  padding: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+.evolution-card-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: start;
+}
+
+.evolution-title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.evolution-title strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolution-title span,
+.evolution-objective,
+.evolution-meta,
+.evolution-candidates span,
+.evolution-checks code {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.evolution-title span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolution-badges {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  max-width: 120px;
+}
+
+.evolution-badges span {
+  padding: 2px 5px;
+  color: var(--soft);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 999px;
+  font-size: 10px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.evolution-objective {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.evolution-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+}
+
+.evolution-candidates,
+.evolution-checks {
+  display: grid;
+  gap: 5px;
+  padding: 7px;
+  background: color-mix(in srgb, var(--surface) 62%, transparent);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.evolution-candidates div,
+.evolution-checks div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.evolution-candidates strong,
+.evolution-checks span {
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.evolution-checks.ok span {
+  color: var(--success);
+}
+
+.evolution-checks.failed span {
+  color: var(--danger);
+}
+
+.evolution-checks code {
+  min-width: 0;
+  overflow: hidden;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evolution-actions {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.evolution-actions .ghost-button {
+  min-height: 30px;
+  padding: 4px 5px;
+  font-size: 11px;
 }
 
 .command-item,

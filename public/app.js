@@ -77,7 +77,11 @@ const state = {
   shareMode: false,
   shareSelectedKeys: new Set(),
   shareImageBlob: null,
-  shareImageUrl: ''
+  shareImageUrl: '',
+  evolutionProjects: [],
+  evolutionAudits: new Map(),
+  evolutionChecks: new Map(),
+  evolutionLoadedAt: 0
 };
 
 let sessionState;
@@ -94,8 +98,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '183';
-const SW_CACHE_VERSION = 'codex-console-v200';
+const APP_ASSET_VERSION = '184';
+const SW_CACHE_VERSION = 'codex-console-v201';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -165,6 +169,7 @@ const el = {
   drawerSessionsButton: document.querySelector('#drawerSessionsButton'),
   drawerSessionsPanel: document.querySelector('#drawerSessionsPanel'),
   drawerSkillsPanel: document.querySelector('#drawerSkillsPanel'),
+  drawerEvolutionPanel: document.querySelector('#drawerEvolutionPanel'),
   drawerSettingsPanel: document.querySelector('#drawerSettingsPanel'),
   drawerSettingsButton: document.querySelector('#drawerSettingsButton'),
   sessionList: document.querySelector('#sessionList'),
@@ -180,6 +185,7 @@ const el = {
   newSessionButton: document.querySelector('#newSessionButton'),
   smartTagSessionsButton: document.querySelector('#smartTagSessionsButton'),
   skillManagerButton: document.querySelector('#skillManagerButton'),
+  evolutionManagerButton: document.querySelector('#evolutionManagerButton'),
   logoutButton: document.querySelector('#logoutButton'),
   topbar: document.querySelector('.topbar'),
   activeTitle: document.querySelector('#activeTitle'),
@@ -286,6 +292,10 @@ const el = {
   drawerRefreshSkillsButton: document.querySelector('#drawerRefreshSkillsButton'),
   drawerSkillStatus: document.querySelector('#drawerSkillStatus'),
   drawerSkillList: document.querySelector('#drawerSkillList'),
+  evolutionSearch: document.querySelector('#evolutionSearch'),
+  refreshEvolutionButton: document.querySelector('#refreshEvolutionButton'),
+  evolutionStatus: document.querySelector('#evolutionStatus'),
+  evolutionList: document.querySelector('#evolutionList'),
   skillDetailDialog: document.querySelector('#skillDetailDialog'),
   closeSkillDetailDialog: document.querySelector('#closeSkillDetailDialog'),
   skillDetailTitle: document.querySelector('#skillDetailTitle'),
@@ -953,6 +963,11 @@ function setDrawer(open) {
       el.drawerSkillList.textContent = error.message || '加载失败';
     });
   }
+  if (open && state.drawerPanel === 'evolution') {
+    loadEvolutionProjects().catch((error) => {
+      if (el.evolutionList) el.evolutionList.textContent = error.message || '加载失败';
+    });
+  }
 }
 
 function resetSessionRenderLimit() {
@@ -979,23 +994,31 @@ function setSessionViewMode(mode) {
 }
 
 function setDrawerPanel(panel) {
-  state.drawerPanel = ['skills', 'settings'].includes(panel) ? panel : 'sessions';
+  state.drawerPanel = ['skills', 'evolution', 'settings'].includes(panel) ? panel : 'sessions';
   const skillsActive = state.drawerPanel === 'skills';
+  const evolutionActive = state.drawerPanel === 'evolution';
   const settingsActive = state.drawerPanel === 'settings';
-  if (el.drawerTitle) el.drawerTitle.textContent = settingsActive ? '设置' : skillsActive ? 'Skills' : '会话';
-  el.drawerSessionsButton.classList.toggle('active', !skillsActive && !settingsActive);
+  if (el.drawerTitle) el.drawerTitle.textContent = settingsActive ? '设置' : evolutionActive ? '进化' : skillsActive ? 'Skills' : '会话';
+  el.drawerSessionsButton.classList.toggle('active', !skillsActive && !evolutionActive && !settingsActive);
   el.skillManagerButton.classList.toggle('active', skillsActive);
+  el.evolutionManagerButton?.classList.toggle('active', evolutionActive);
   el.drawerSettingsButton.classList.toggle('active', settingsActive);
-  el.drawerSessionsButton.setAttribute('aria-selected', String(!skillsActive && !settingsActive));
+  el.drawerSessionsButton.setAttribute('aria-selected', String(!skillsActive && !evolutionActive && !settingsActive));
   el.skillManagerButton.setAttribute('aria-selected', String(skillsActive));
+  el.evolutionManagerButton?.setAttribute('aria-selected', String(evolutionActive));
   el.drawerSettingsButton.setAttribute('aria-selected', String(settingsActive));
-  el.drawerSessionsPanel.classList.toggle('active', !skillsActive && !settingsActive);
+  el.drawerSessionsPanel.classList.toggle('active', !skillsActive && !evolutionActive && !settingsActive);
   el.drawerSkillsPanel.classList.toggle('active', skillsActive);
+  el.drawerEvolutionPanel?.classList.toggle('active', evolutionActive);
   el.drawerSettingsPanel.classList.toggle('active', settingsActive);
   el.logoutButton.hidden = !settingsActive;
   if (skillsActive) {
     loadSkills().catch((error) => {
       el.drawerSkillList.textContent = error.message || '加载失败';
+    });
+  } else if (evolutionActive) {
+    loadEvolutionProjects().catch((error) => {
+      if (el.evolutionList) el.evolutionList.textContent = error.message || '加载失败';
     });
   } else if (settingsActive) {
     selectSettingsPage('ui');
@@ -3666,6 +3689,168 @@ async function refreshSkillsInBackground() {
   }
 }
 
+function filteredEvolutionProjects() {
+  const query = String(el.evolutionSearch?.value || '').trim().toLowerCase();
+  if (!query) return state.evolutionProjects;
+  return state.evolutionProjects.filter((project) => [
+    project.name,
+    project.relativePath,
+    project.package?.name,
+    project.config?.objective
+  ].some((value) => String(value || '').toLowerCase().includes(query)));
+}
+
+function evolutionBadge(project) {
+  const badges = [];
+  badges.push(project.hasConfig ? '已配置' : '待初始化');
+  if (project.config?.autonomyLevel) badges.push(project.config.autonomyLevel);
+  if (project.package?.version) badges.push(`v${project.package.version}`);
+  if (project.git) badges.push(project.git.dirty ? '有改动' : '干净');
+  return badges;
+}
+
+function renderEvolutionProjects() {
+  if (!el.evolutionList) return;
+  const projects = filteredEvolutionProjects();
+  if (!projects.length) {
+    el.evolutionList.innerHTML = '<p class="skill-empty">没有匹配的项目。</p>';
+    return;
+  }
+  el.evolutionList.innerHTML = projects.map((project) => {
+    const audit = state.evolutionAudits.get(project.id);
+    const check = state.evolutionChecks.get(project.id);
+    const objective = project.config?.objective || '未填写目标';
+    const commands = project.config?.checkCommands || [];
+    const candidates = audit?.candidates || [];
+    const checkRows = check?.results || [];
+    return `
+      <article class="evolution-card" data-project-id="${escapeHtml(project.id)}">
+        <div class="evolution-card-head">
+          <div class="evolution-title">
+            <strong>${escapeHtml(project.name || project.relativePath || '未命名项目')}</strong>
+            <span>${escapeHtml(project.relativePath || project.path || '')}</span>
+          </div>
+          <div class="evolution-badges">
+            ${evolutionBadge(project).map((badge) => `<span>${escapeHtml(badge)}</span>`).join('')}
+          </div>
+        </div>
+        <p class="evolution-objective">${escapeHtml(objective)}</p>
+        <div class="evolution-meta">
+          <span>检查 ${escapeHtml(String(commands.length || 0))} 项</span>
+          ${audit?.checkedAt ? `<span>巡检 ${escapeHtml(formatTime(audit.checkedAt))}</span>` : ''}
+          ${check?.checkedAt ? `<span>检查 ${escapeHtml(formatTime(check.checkedAt))}</span>` : ''}
+        </div>
+        ${candidates.length ? `
+          <div class="evolution-candidates">
+            ${candidates.slice(0, 4).map((item) => `
+              <div>
+                <strong>${escapeHtml(item.title || '候选项')}</strong>
+                <span>${escapeHtml(item.reason || '')}</span>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+        ${checkRows.length ? `
+          <div class="evolution-checks ${check.ok ? 'ok' : 'failed'}">
+            ${checkRows.map((item) => `
+              <div>
+                <span>${item.ok ? '通过' : '失败'}</span>
+                <code>${escapeHtml(item.command || '')}</code>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+        <div class="evolution-actions">
+          <button class="ghost-button inline" type="button" data-evolution-action="init">${project.hasConfig ? '更新配置' : '初始化'}</button>
+          <button class="ghost-button inline" type="button" data-evolution-action="audit">巡检</button>
+          <button class="ghost-button inline" type="button" data-evolution-action="check">检查</button>
+          <button class="ghost-button inline" type="button" data-evolution-action="copy">复制提示词</button>
+        </div>
+      </article>
+    `;
+  }).join('');
+}
+
+async function loadEvolutionProjects(force = false) {
+  if (!el.evolutionList) return;
+  const fresh = Date.now() - state.evolutionLoadedAt < 60 * 1000;
+  if (!force && state.evolutionProjects.length && fresh) {
+    renderEvolutionProjects();
+    return;
+  }
+  el.evolutionStatus.textContent = '正在读取项目列表...';
+  el.evolutionList.textContent = '加载中...';
+  const data = await api('/api/evolution/projects', { timeoutMs: 15000 });
+  state.evolutionProjects = data.projects || [];
+  state.evolutionLoadedAt = Date.now();
+  el.evolutionStatus.textContent = `发现 ${state.evolutionProjects.length} 个项目。先巡检，再复制提示词给对应 Codex 会话执行。`;
+  renderEvolutionProjects();
+}
+
+function mergeEvolutionProject(project) {
+  if (!project?.id) return;
+  const index = state.evolutionProjects.findIndex((item) => item.id === project.id);
+  if (index >= 0) {
+    state.evolutionProjects.splice(index, 1, project);
+  } else {
+    state.evolutionProjects.push(project);
+    state.evolutionProjects.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+  }
+}
+
+async function initEvolutionProject(id) {
+  el.evolutionStatus.textContent = '正在写入 evolution.json...';
+  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/init`, { method: 'POST', timeoutMs: 20000 });
+  mergeEvolutionProject(data.project);
+  el.evolutionStatus.textContent = '已初始化项目自演进配置。';
+  renderEvolutionProjects();
+}
+
+async function auditEvolutionProject(id) {
+  el.evolutionStatus.textContent = '正在巡检项目...';
+  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/audit`, { method: 'POST', timeoutMs: 25000 });
+  mergeEvolutionProject(data.project);
+  state.evolutionAudits.set(id, data);
+  el.evolutionStatus.textContent = `巡检完成，生成 ${data.candidates?.length || 0} 个候选项。`;
+  renderEvolutionProjects();
+  return data;
+}
+
+async function checkEvolutionProject(id) {
+  el.evolutionStatus.textContent = '正在运行项目检查...';
+  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/check`, { method: 'POST', timeoutMs: 130000 });
+  mergeEvolutionProject(data.project);
+  state.evolutionChecks.set(id, data);
+  el.evolutionStatus.textContent = data.ok ? '检查通过。' : '检查失败，请先查看命令结果或复制提示词让 Codex 修复。';
+  renderEvolutionProjects();
+}
+
+async function copyEvolutionPrompt(id) {
+  let audit = state.evolutionAudits.get(id);
+  if (!audit?.prompt) audit = await auditEvolutionProject(id);
+  await navigator.clipboard?.writeText(audit.prompt || '');
+  el.evolutionStatus.textContent = '已复制自演进提示词，可粘贴到目标项目的 Codex 会话。';
+}
+
+async function handleEvolutionAction(event) {
+  const button = event.target.closest('[data-evolution-action]');
+  if (!button) return;
+  const card = button.closest('[data-project-id]');
+  const id = card?.dataset.projectId;
+  if (!id) return;
+  button.disabled = true;
+  try {
+    if (button.dataset.evolutionAction === 'init') await initEvolutionProject(id);
+    if (button.dataset.evolutionAction === 'audit') await auditEvolutionProject(id);
+    if (button.dataset.evolutionAction === 'check') await checkEvolutionProject(id);
+    if (button.dataset.evolutionAction === 'copy') await copyEvolutionPrompt(id);
+  } catch (error) {
+    el.evolutionStatus.textContent = error.message || '操作失败';
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function openSkillDialog() {
   state.skillDialogMode = 'quick';
   if (el.skillDialogHint) {
@@ -4547,6 +4732,7 @@ el.newSessionButton.addEventListener('click', () => {
   openModal(el.dialog);
 });
 el.skillManagerButton.addEventListener('click', () => setDrawerPanel('skills'));
+el.evolutionManagerButton?.addEventListener('click', () => setDrawerPanel('evolution'));
 el.drawerSettingsButton.addEventListener('click', () => setDrawerPanel('settings'));
 el.commandButton.addEventListener('click', () => {
   skillView.renderCommandList();
@@ -4563,6 +4749,15 @@ el.refreshSkillsButton?.addEventListener('click', () => {
 });
 el.drawerRefreshSkillsButton.addEventListener('click', () => {
   refreshSkillsInBackground();
+});
+el.evolutionSearch?.addEventListener('input', renderEvolutionProjects);
+el.refreshEvolutionButton?.addEventListener('click', () => {
+  loadEvolutionProjects(true).catch((error) => {
+    if (el.evolutionStatus) el.evolutionStatus.textContent = error.message || '刷新失败';
+  });
+});
+el.evolutionList?.addEventListener('click', (event) => {
+  handleEvolutionAction(event);
 });
 el.refreshCodexConfigButton?.addEventListener('click', loadCodexConfigSummary);
 el.runtimeButton.addEventListener('click', () => {

@@ -46,6 +46,7 @@ const COMMAND_KILL_GRACE_MS = 3000;
 const APP_UPDATE_CHECK_TIMEOUT_MS = 18000;
 const APP_UPDATE_MANIFEST_URL = process.env.APP_UPDATE_MANIFEST_URL || process.env.UPDATE_MANIFEST_URL || '';
 const CODEX_UPGRADE_TIMEOUT_MS = 10 * 60 * 1000;
+const PROJECTS_ROOT = path.resolve(process.env.PROJECTS_ROOT || '/root/Projects');
 const SITE_MOUNT_ROOT = path.resolve(process.env.SITE_MOUNT_ROOT || '/root/Projects');
 const SITE_MOUNT_CANDIDATES = ['dist', 'build', 'out', 'site', 'preview', 'web', '.'];
 const SITE_MOUNT_BLOCKED_PARTS = new Set(['.git', '.hg', '.svn', 'node_modules', 'data', 'runtime']);
@@ -2503,6 +2504,200 @@ function compareSemver(a = '', b = '') {
   return 0;
 }
 
+function projectIdFromPath(projectPath = '') {
+  return createHash('sha1').update(path.resolve(projectPath)).digest('hex').slice(0, 16);
+}
+
+function isProjectCandidate(entry) {
+  return entry.isDirectory()
+    && !entry.name.startsWith('.')
+    && !['node_modules', 'runtime', 'data'].includes(entry.name);
+}
+
+async function readJsonFile(file, fallback = null) {
+  try {
+    return JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+async function packageInfo(projectPath) {
+  const pkg = await readJsonFile(path.join(projectPath, 'package.json'), null);
+  if (!pkg) return { exists: false, name: '', version: '', scripts: {} };
+  return {
+    exists: true,
+    name: String(pkg.name || ''),
+    version: String(pkg.version || ''),
+    scripts: pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {}
+  };
+}
+
+function defaultEvolutionConfig(projectPath, pkg = {}) {
+  const name = pkg.name || path.basename(projectPath);
+  const checkCommands = [];
+  const scripts = pkg.scripts || {};
+  for (const scriptName of ['check:state', 'check:mobile-ui', 'test', 'lint']) {
+    if (scripts[scriptName]) checkCommands.push(`npm run ${scriptName}`);
+  }
+  if (checkCommands.length === 0 && pkg.exists) checkCommands.push('node --check server.js');
+  return {
+    version: 1,
+    project: name,
+    objective: '',
+    autonomyLevel: 'L1',
+    qualityGoals: ['主流程稳定', '错误可诊断', '变更可验证'],
+    signals: ['git status --short', 'git log --oneline -5', 'runtime logs', 'user feedback'],
+    checkCommands,
+    allowedAutonomousChanges: ['文档', '测试', '日志增强', '错误提示', '低风险 UI 修复'],
+    requiresHumanApproval: ['认证授权', '删除数据', '大重构', '依赖升级', '自动发布']
+  };
+}
+
+function normalizeEvolutionConfig(config = {}, projectPath = '', pkg = {}) {
+  const base = defaultEvolutionConfig(projectPath, pkg);
+  const list = (value, fallback) => Array.isArray(value)
+    ? value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 50)
+    : fallback;
+  return {
+    version: 1,
+    project: String(config.project || base.project || path.basename(projectPath)).slice(0, 120),
+    objective: String(config.objective || base.objective || '').slice(0, 500),
+    autonomyLevel: ['L0', 'L1', 'L2', 'L3'].includes(config.autonomyLevel) ? config.autonomyLevel : base.autonomyLevel,
+    qualityGoals: list(config.qualityGoals, base.qualityGoals),
+    signals: list(config.signals, base.signals),
+    checkCommands: list(config.checkCommands, base.checkCommands).slice(0, 12),
+    allowedAutonomousChanges: list(config.allowedAutonomousChanges, base.allowedAutonomousChanges),
+    requiresHumanApproval: list(config.requiresHumanApproval, base.requiresHumanApproval)
+  };
+}
+
+async function projectGitSummary(projectPath) {
+  const [inside, branch, commit, status, log] = await Promise.all([
+    runCommand('git', ['rev-parse', '--is-inside-work-tree'], { cwd: projectPath, timeoutMs: 4000 }),
+    runCommand('git', ['branch', '--show-current'], { cwd: projectPath, timeoutMs: 4000 }),
+    runCommand('git', ['rev-parse', '--short', 'HEAD'], { cwd: projectPath, timeoutMs: 4000 }),
+    runCommand('git', ['status', '--short'], { cwd: projectPath, timeoutMs: 4000 }),
+    runCommand('git', ['log', '--oneline', '-5'], { cwd: projectPath, timeoutMs: 4000 })
+  ]);
+  const ok = inside.ok && inside.stdout === 'true';
+  return {
+    ok,
+    branch: ok ? branch.stdout : '',
+    commit: ok ? commit.stdout : '',
+    dirty: ok ? Boolean(status.stdout) : false,
+    dirtySummary: ok ? status.stdout.split('\n').filter(Boolean).slice(0, 10) : [],
+    recent: ok ? log.stdout.split('\n').filter(Boolean) : []
+  };
+}
+
+async function resolveEvolutionProject(projectId) {
+  const projects = await listEvolutionProjects({ includeDetails: false });
+  return projects.find((project) => project.id === projectId) || null;
+}
+
+async function publicEvolutionProject(projectPath, options = {}) {
+  const real = await realpath(projectPath).catch(() => '');
+  if (!real || !isInsidePath(PROJECTS_ROOT, real)) return null;
+  const pkg = await packageInfo(real);
+  const configPath = path.join(real, 'evolution.json');
+  const rawConfig = await readJsonFile(configPath, null);
+  const config = normalizeEvolutionConfig(rawConfig || {}, real, pkg);
+  const git = options.includeDetails === false ? null : await projectGitSummary(real);
+  return {
+    id: projectIdFromPath(real),
+    name: config.project || pkg.name || path.basename(real),
+    path: real,
+    relativePath: path.relative(PROJECTS_ROOT, real) || '.',
+    hasConfig: Boolean(rawConfig),
+    config,
+    package: pkg,
+    git
+  };
+}
+
+async function listEvolutionProjects(options = {}) {
+  const entries = await readdir(PROJECTS_ROOT, { withFileTypes: true }).catch(() => []);
+  const projects = [];
+  for (const entry of entries.filter(isProjectCandidate).slice(0, 80)) {
+    const project = await publicEvolutionProject(path.join(PROJECTS_ROOT, entry.name), options);
+    if (project) projects.push(project);
+  }
+  return projects.sort((a, b) => a.name.localeCompare(b.name));
+}
+
+async function initEvolutionProject(projectId) {
+  const project = await resolveEvolutionProject(projectId);
+  if (!project) return null;
+  const full = await publicEvolutionProject(project.path);
+  await writeFile(path.join(project.path, 'evolution.json'), `${JSON.stringify(full.config, null, 2)}\n`, { mode: 0o644 });
+  return publicEvolutionProject(project.path);
+}
+
+function evolutionPrompt(project, audit = {}) {
+  return [
+    '你是本项目的维护代理。请基于项目自演进配置进行一轮低风险优化。',
+    '',
+    `项目：${project.name}`,
+    `路径：${project.path}`,
+    `自治等级：${project.config.autonomyLevel}`,
+    `目标：${project.config.objective || '未填写，请先根据项目代码和 README 推断。'}`,
+    '',
+    `质量目标：${project.config.qualityGoals.join('；')}`,
+    `允许自动修改：${project.config.allowedAutonomousChanges.join('；')}`,
+    `必须人工确认：${project.config.requiresHumanApproval.join('；')}`,
+    '',
+    '请执行：',
+    '1. 读取 evolution.json、README、最近 git log 和可用日志。',
+    '2. 生成 5 个候选优化项，并按用户影响、风险、成本、可验证性评分。',
+    '3. 只选择一个低风险、高价值、可验证的小任务实现。',
+    '4. 运行项目 checkCommands 中的检查。',
+    '5. 如果涉及必须人工确认的范围，只输出方案，不要修改。',
+    '',
+    audit.candidates?.length ? `本次巡检候选：\n${audit.candidates.map((item, index) => `${index + 1}. ${item.title} - ${item.reason}`).join('\n')}` : ''
+  ].filter(Boolean).join('\n');
+}
+
+async function auditEvolutionProject(projectId) {
+  const project = await resolveEvolutionProject(projectId);
+  if (!project) return null;
+  const full = await publicEvolutionProject(project.path);
+  const candidates = [];
+  if (!full.hasConfig) candidates.push({ title: '初始化 evolution.json', reason: '项目还没有自演进配置。', risk: 'low' });
+  if (full.git?.dirty) candidates.push({ title: '清理或提交工作区改动', reason: `存在 ${full.git.dirtySummary.length} 条未提交改动。`, risk: 'medium' });
+  if (full.config.checkCommands.length === 0) candidates.push({ title: '补充检查命令', reason: '缺少可自动验证的 checkCommands。', risk: 'low' });
+  if (!full.config.objective) candidates.push({ title: '补充项目目标', reason: 'objective 为空，AI 难以判断优化方向。', risk: 'low' });
+  const todo = await runCommand('rg', ['-n', 'TODO|FIXME', '.', '--glob', '!node_modules', '--glob', '!data', '--glob', '!runtime'], { cwd: project.path, timeoutMs: 5000 });
+  const todoCount = todo.ok ? todo.stdout.split('\n').filter(Boolean).length : 0;
+  if (todoCount > 0) candidates.push({ title: '梳理 TODO/FIXME', reason: `检测到 ${todoCount} 条 TODO/FIXME。`, risk: 'low' });
+  if (candidates.length === 0) candidates.push({ title: '进行一轮低风险体验/可靠性巡检', reason: '未发现明确异常，可从日志、测试和 README 寻找小步优化。', risk: 'low' });
+  return {
+    project: full,
+    candidates,
+    prompt: evolutionPrompt(full, { candidates }),
+    checkedAt: nowIso()
+  };
+}
+
+async function runEvolutionChecks(projectId) {
+  const project = await resolveEvolutionProject(projectId);
+  if (!project) return null;
+  const full = await publicEvolutionProject(project.path);
+  const results = [];
+  for (const command of full.config.checkCommands.slice(0, 8)) {
+    const result = await runCommand('/bin/bash', ['-lc', command], { cwd: project.path, timeoutMs: 120000 });
+    results.push({
+      command,
+      ok: result.ok,
+      code: result.code,
+      stdout: result.stdout.slice(-4000),
+      stderr: result.stderr.slice(-4000)
+    });
+    if (!result.ok) break;
+  }
+  return { project: full, results, ok: results.every((item) => item.ok), checkedAt: nowIso() };
+}
+
 async function appUpdateCheck() {
   const [git, pkg] = await Promise.all([gitInfo(), packageMeta()]);
   const result = {
@@ -4565,11 +4760,35 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === '/api/projects') {
-    const projectsRoot = process.env.PROJECTS_ROOT || '/root/Projects';
     return json(res, 200, {
-      roots: [projectsRoot, '/root/data/disk/Projects'],
-      defaultCwd: projectsRoot
+      roots: [PROJECTS_ROOT, '/root/data/disk/Projects'],
+      defaultCwd: PROJECTS_ROOT
     });
+  }
+
+  if (url.pathname === '/api/evolution/projects' && req.method === 'GET') {
+    return json(res, 200, { projects: await listEvolutionProjects({ includeDetails: false }) });
+  }
+
+  const evolutionMatch = url.pathname.match(/^\/api\/evolution\/projects\/([^/]+)\/(init|audit|check)$/);
+  if (evolutionMatch && req.method === 'POST') {
+    const projectId = decodeURIComponent(evolutionMatch[1]);
+    const action = evolutionMatch[2];
+    if (action === 'init') {
+      const project = await initEvolutionProject(projectId);
+      if (!project) return json(res, 404, { error: 'project_not_found' });
+      return json(res, 200, { project });
+    }
+    if (action === 'audit') {
+      const audit = await auditEvolutionProject(projectId);
+      if (!audit) return json(res, 404, { error: 'project_not_found' });
+      return json(res, 200, audit);
+    }
+    if (action === 'check') {
+      const result = await runEvolutionChecks(projectId);
+      if (!result) return json(res, 404, { error: 'project_not_found' });
+      return json(res, 200, result);
+    }
   }
 
   if (url.pathname === '/api/sessions' && req.method === 'GET') {

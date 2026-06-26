@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=155">
+    <link rel="stylesheet" href="/styles.css?v=156">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -37,6 +37,7 @@
           <div id="drawerModeRow" class="drawer-mode-row" role="tablist" aria-label="侧边栏视图">
             <button id="drawerSessionsButton" class="active" type="button" role="tab" aria-selected="true" aria-controls="drawerSessionsPanel">会话</button>
             <button id="skillManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSkillsPanel">Skills</button>
+            <button id="evolutionManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerEvolutionPanel">进化</button>
             <button id="drawerSettingsButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSettingsPanel">设置</button>
           </div>
           <div class="drawer-toolbar">
@@ -71,6 +72,14 @@
           </div>
           <p id="drawerSkillStatus" class="skill-status">读取缓存列表，不阻塞聊天主流程。</p>
           <div id="drawerSkillList" class="skill-list drawer-skill-list">加载中...</div>
+        </section>
+        <section id="drawerEvolutionPanel" class="drawer-panel drawer-evolution-panel" role="tabpanel" aria-labelledby="evolutionManagerButton">
+          <div class="drawer-skill-toolbar">
+            <input id="evolutionSearch" type="search" placeholder="搜索项目..." autocomplete="off">
+            <button id="refreshEvolutionButton" class="ghost-button inline" type="button">刷新</button>
+          </div>
+          <p id="evolutionStatus" class="skill-status">项目自演进：先巡检和生成提示词，再由你决定是否执行。</p>
+          <div id="evolutionList" class="evolution-list">加载中...</div>
         </section>
         <section id="drawerSettingsPanel" class="drawer-panel drawer-settings-panel" role="tabpanel" aria-labelledby="drawerSettingsButton">
           <div class="segmented-control settings-tabs" role="tablist" aria-label="设置分类">
@@ -694,6 +703,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=183" type="module"></script>
+    <script src="/app.js?v=184" type="module"></script>
   </body>
 </html>
