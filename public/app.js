@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '163';
-const SW_CACHE_VERSION = 'codex-console-v180';
+const APP_ASSET_VERSION = '164';
+const SW_CACHE_VERSION = 'codex-console-v181';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -193,6 +193,11 @@ const el = {
   topMoreButton: document.querySelector('#topMoreButton'),
   topMoreMenu: document.querySelector('#topMoreMenu'),
   sessionConfigButton: document.querySelector('#sessionConfigButton'),
+  siteRegisterButton: document.querySelector('#siteRegisterButton'),
+  siteRegisterDialog: document.querySelector('#siteRegisterDialog'),
+  closeSiteRegisterDialog: document.querySelector('#closeSiteRegisterDialog'),
+  sendLocalSitePrompt: document.querySelector('#sendLocalSitePrompt'),
+  sendExternalSitePrompt: document.querySelector('#sendExternalSitePrompt'),
   topFilterButton: document.querySelector('#topFilterButton'),
   topFilterMenu: document.querySelector('#topFilterMenu'),
   favoritesButton: document.querySelector('#favoritesButton'),
@@ -1268,6 +1273,15 @@ function renderSiteMountStrip(session = getActiveSession()) {
   label.textContent = `子站点 ${mounts.length}`;
   el.siteMountStrip.append(label);
 
+  const navLink = document.createElement('a');
+  navLink.className = 'site-mount-link site-mount-nav-link';
+  navLink.href = `/sites/session/${encodeURIComponent(session.id)}/`;
+  navLink.target = '_blank';
+  navLink.rel = 'noopener';
+  navLink.textContent = '导航页';
+  navLink.title = '打开当前会话的子站点导航页';
+  el.siteMountStrip.append(navLink);
+
   for (const mount of mounts) {
     const link = document.createElement('a');
     link.className = 'site-mount-link';
@@ -1278,6 +1292,48 @@ function renderSiteMountStrip(session = getActiveSession()) {
     link.title = link.href;
     el.siteMountStrip.append(link);
   }
+}
+
+const SITE_REGISTER_PROMPTS = {
+  local: [
+    '请为当前会话注册一个可预览的本地静态站点。',
+    '',
+    '要求：',
+    '1. 检查当前工作目录是否已有可访问的静态站点产物。',
+    '2. 如果需要构建或整理，请把最终站点放到 dist、build、out、site、preview 或 web 其中一个目录，并确保目录中有 index.html。',
+    '3. 如果当前项目根目录本身就是静态站点，可以保留根目录 index.html。',
+    '4. 完成后不用让我手动填写路径；本控制台会在本轮结束后自动扫描并挂载到 /sites/<auto-slug>/，会话界面会出现跳转按钮。',
+    '5. 如果无法生成静态站点，请简短说明原因和缺少什么。'
+  ].join('\n'),
+  external: [
+    '请把当前会话相关的已有 Web 访问地址注册到本会话的子站点导航页。',
+    '',
+    '要求：',
+    '1. 从当前项目配置、部署文档、Caddy/nginx 配置、README、package scripts 或最近上下文中查找已经存在的 http/https 访问地址。',
+    '2. 不要编造地址；只注册你能确认的已有域名或访问地址。',
+    '3. 找到后，请在回复末尾输出下面这个精确格式，控制台会自动识别并注册：',
+    '<codex-site-links>',
+    '[{"title":"站点名称","url":"https://example.com/"}]',
+    '</codex-site-links>',
+    '4. 如果有多个地址，把它们都放进 JSON 数组；如果没有找到，请说明没有找到。'
+  ].join('\n')
+};
+
+function openSiteRegisterDialog() {
+  if (!state.activeId || !el.siteRegisterDialog) return;
+  closeTopMenus();
+  el.siteRegisterDialog.showModal();
+}
+
+function closeSiteRegisterDialog() {
+  if (el.siteRegisterDialog?.open) el.siteRegisterDialog.close();
+}
+
+async function sendSiteRegisterPrompt(kind) {
+  const prompt = SITE_REGISTER_PROMPTS[kind];
+  if (!prompt || !state.activeId) return;
+  closeSiteRegisterDialog();
+  await promptActions.sendPrompt(prompt);
 }
 
 function renderActive(options = {}) {
@@ -4506,6 +4562,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && !el.sessionActionSheet?.hidden) closeSessionActionSheet();
   if (event.key === 'Escape' && !el.imageViewer.hidden) closeImageViewer();
   if (event.key === 'Escape' && el.sharePreviewDialog?.open) closeSharePreview();
+  if (event.key === 'Escape' && el.siteRegisterDialog?.open) closeSiteRegisterDialog();
 });
 
 el.stopButton.addEventListener('click', stopCurrentRun);
@@ -4523,6 +4580,15 @@ el.sessionConfigButton?.addEventListener('click', (event) => {
   event.stopPropagation();
   openActiveSessionConfigDialog();
 });
+
+el.siteRegisterButton?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  openSiteRegisterDialog();
+});
+
+el.closeSiteRegisterDialog?.addEventListener('click', closeSiteRegisterDialog);
+el.sendLocalSitePrompt?.addEventListener('click', () => sendSiteRegisterPrompt('local'));
+el.sendExternalSitePrompt?.addEventListener('click', () => sendSiteRegisterPrompt('external'));
 
 el.topFilterButton.addEventListener('click', (event) => {
   event.stopPropagation();

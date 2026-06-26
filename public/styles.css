@@ -906,6 +906,11 @@ button:disabled {
   white-space: nowrap;
 }
 
+.site-mount-nav-link {
+  color: #d7f7de;
+  border-color: rgba(127, 215, 163, 0.45);
+}
+
 .top-title {
   min-width: 0;
   display: grid;
@@ -2587,8 +2592,46 @@ button:disabled {
 }
 
 .skill-dialog,
-.skill-detail-dialog {
+.skill-detail-dialog,
+.site-register-dialog {
   width: min(680px, calc(100% - 22px));
+}
+
+.site-register-dialog {
+  max-width: min(460px, calc(100vw - 24px));
+}
+
+.site-register-note {
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.site-register-options {
+  display: grid;
+  gap: 10px;
+}
+
+.site-register-options button {
+  width: 100%;
+  display: grid;
+  gap: 5px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text);
+  text-align: left;
+}
+
+.site-register-options button strong {
+  font-size: 14px;
+}
+
+.site-register-options button span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .skill-dialog {

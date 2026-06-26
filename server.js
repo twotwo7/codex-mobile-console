@@ -1077,6 +1077,15 @@ function safeCompare(a, b) {
   return timingSafeEqual(left, right);
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 function isInsidePath(root, target) {
   const relative = path.relative(root, target);
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
@@ -1107,9 +1116,10 @@ function uniqueSiteSlug(base, currentId = '') {
 function publicSiteMount(mount) {
   return {
     id: mount.id,
+    type: mount.type || 'local',
     slug: mount.slug,
     title: mount.title,
-    url: `/sites/${mount.slug}/`,
+    url: mount.type === 'external' ? mount.url : `/sites/${mount.slug}/`,
     sessionId: mount.sessionId || '',
     createdAt: mount.createdAt || '',
     updatedAt: mount.updatedAt || ''
@@ -1146,6 +1156,7 @@ async function createOrUpdateSiteMount(session, rootDir) {
   const mount = {
     id,
     sessionId: session.id,
+    type: 'local',
     slug: uniqueSiteSlug(baseSlug, id),
     title: label === '.' ? (session.title || '站点') : label,
     root,
@@ -1170,6 +1181,88 @@ async function autoMountSessionSites(session) {
     if (mount && !existingIds.has(mount.id)) mounts.push(mount);
   }
   return mounts;
+}
+
+function safeHttpUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (!['http:', 'https:'].includes(url.protocol)) return '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
+function extractAttrValue(attrs, name) {
+  const match = String(attrs || '').match(new RegExp(`${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
+  return match ? (match[1] || match[2] || match[3] || '').trim() : '';
+}
+
+function extractSiteLinkMarkers(text) {
+  const value = String(text || '');
+  const out = [];
+  const blockMatch = value.match(/<codex-site-links>\s*([\s\S]*?)\s*<\/codex-site-links>/i);
+  if (blockMatch) {
+    try {
+      const parsed = JSON.parse(blockMatch[1]);
+      const items = Array.isArray(parsed) ? parsed : [parsed];
+      for (const item of items) {
+        const url = safeHttpUrl(item?.url);
+        if (url) out.push({ url, title: String(item?.title || '').trim() });
+      }
+    } catch {
+      // Ignore malformed registration blocks; Codex can retry with the exact marker format.
+    }
+  }
+  for (const match of value.matchAll(/<codex-site-link\b([^>]*)\/?>/gi)) {
+    const url = safeHttpUrl(extractAttrValue(match[1], 'url'));
+    if (url) out.push({ url, title: extractAttrValue(match[1], 'title') });
+  }
+  const seen = new Set();
+  return out.filter((item) => {
+    if (seen.has(item.url)) return false;
+    seen.add(item.url);
+    return true;
+  }).slice(0, 20);
+}
+
+function createOrUpdateExternalSiteMount(session, link) {
+  if (!session?.id || !link?.url) return null;
+  const url = safeHttpUrl(link.url);
+  if (!url) return null;
+  const now = nowIso();
+  state.siteMounts ||= {};
+  const existing = Object.values(state.siteMounts)
+    .find((mount) => mount.sessionId === session.id && mount.type === 'external' && mount.url === url && !mount.deletedAt);
+  if (existing) {
+    existing.title = String(link.title || existing.title || '').slice(0, 80) || existing.title;
+    existing.updatedAt = now;
+    return existing;
+  }
+  const parsed = new URL(url);
+  const title = String(link.title || parsed.hostname || '外部站点').trim().slice(0, 80);
+  const id = randomUUID();
+  const mount = {
+    id,
+    sessionId: session.id,
+    type: 'external',
+    slug: uniqueSiteSlug(slugify(`${session.title || 'session'}-${parsed.hostname}`), id),
+    title,
+    url,
+    createdAt: now,
+    updatedAt: now
+  };
+  state.siteMounts[id] = mount;
+  return mount;
+}
+
+function registerSiteLinksFromText(session, text) {
+  const links = extractSiteLinkMarkers(text);
+  if (!links.length) return [];
+  const before = new Set(Object.values(state.siteMounts || {}).map((mount) => mount.id));
+  const mounts = links.map((link) => createOrUpdateExternalSiteMount(session, link)).filter(Boolean);
+  return mounts.filter((mount) => !before.has(mount.id));
 }
 
 function codexSiteMountCapabilityPrompt(session) {
@@ -3396,8 +3489,10 @@ function addMessage(session, message) {
   }
   session.lastSeq = entry.seq;
   session.updatedAt = entry.at;
+  const registeredSites = entry.role === 'assistant' ? registerSiteLinksFromText(session, entry.text) : [];
   scheduleSave();
   broadcast(session.id, entry);
+  if (registeredSites.length) broadcastSession(session);
   return entry;
 }
 
@@ -3856,9 +3951,75 @@ async function serveStatic(req, res, pathname) {
   }
 }
 
+function siteNavigationHtml(session) {
+  const mounts = publicSiteMountsForSession(session.id);
+  const items = mounts.map((mount) => `
+    <a class="site-card" href="${escapeHtml(mount.url)}" target="_blank" rel="noopener">
+      <span>${escapeHtml(mount.type === 'external' ? '外部域名' : '本地子站')}</span>
+      <strong>${escapeHtml(mount.title || mount.slug || '站点')}</strong>
+      <small>${escapeHtml(mount.url)}</small>
+    </a>
+  `).join('');
+  return `<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>${escapeHtml(session.title || '会话')} · 子站点</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #101215; color: #f5f5f0; }
+    body { margin: 0; min-height: 100vh; background: #101215; }
+    main { width: min(920px, calc(100% - 28px)); margin: 0 auto; padding: max(18px, env(safe-area-inset-top)) 0 28px; }
+    header { display: grid; gap: 6px; margin-bottom: 16px; }
+    h1 { margin: 0; font-size: clamp(22px, 6vw, 34px); line-height: 1.08; }
+    p { margin: 0; color: #a7aaa2; font-size: 14px; }
+    .grid { display: grid; gap: 10px; }
+    .site-card { display: grid; gap: 5px; padding: 13px 14px; border: 1px solid #343832; border-radius: 12px; background: #181b18; color: inherit; text-decoration: none; }
+    .site-card:focus-visible { outline: 2px solid #6da8ff; outline-offset: 2px; }
+    .site-card span { color: #7fd7a3; font-size: 12px; font-weight: 800; }
+    .site-card strong { font-size: 16px; overflow-wrap: anywhere; }
+    .site-card small { color: #a7aaa2; overflow-wrap: anywhere; }
+    .empty { padding: 16px; border: 1px dashed #343832; border-radius: 12px; color: #a7aaa2; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>${escapeHtml(session.title || '当前会话')} · 子站点导航</h1>
+      <p>${mounts.length ? `共 ${mounts.length} 个站点` : '当前会话还没有注册站点'}</p>
+    </header>
+    <section class="grid">${items || '<div class="empty">在会话菜单里点击“注册站点”，让 Codex 自动生成或注册访问地址。</div>'}</section>
+  </main>
+</body>
+</html>`;
+}
+
+async function serveSessionSiteNavigation(req, res, sessionId) {
+  const auth = requireAuth(req, res);
+  if (!auth) return;
+  const session = state.sessions[sessionId];
+  if (!session) return json(res, 404, { error: 'session_not_found' });
+  res.writeHead(200, {
+    'content-type': 'text/html; charset=utf-8',
+    'cache-control': 'no-store',
+    'x-content-type-options': 'nosniff'
+  });
+  res.end(siteNavigationHtml(session));
+}
+
 async function serveSiteMount(req, res, url) {
   const auth = requireAuth(req, res);
   if (!auth) return;
+  const navigationMatch = url.pathname.match(/^\/sites\/session\/([^/]+)\/?$/);
+  if (navigationMatch) {
+    let sessionId = '';
+    try {
+      sessionId = decodeURIComponent(navigationMatch[1]);
+    } catch {
+      return json(res, 400, { error: 'bad_site_path' });
+    }
+    return serveSessionSiteNavigation(req, res, sessionId);
+  }
   const match = url.pathname.match(/^\/sites\/([^/]+)(\/.*)?$/);
   if (!match) return json(res, 404, { error: 'site_not_found' });
   let slug = '';
