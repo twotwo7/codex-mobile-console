@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=152">
+    <link rel="stylesheet" href="/styles.css?v=153">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -296,8 +296,6 @@
                 <button id="topMoreButton" class="top-more-button" type="button" aria-label="更多会话操作" aria-haspopup="menu" aria-expanded="false">▾</button>
                 <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
                   <button id="sessionConfigButton" class="top-menu-item" type="button" role="menuitem">会话配置</button>
-                  <button id="siteRegisterButton" class="top-menu-item" type="button" role="menuitem">注册站点</button>
-                  <button id="shareCaptureButton" class="top-menu-item" type="button" role="menuitem">分享截图</button>
                   <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
                 </div>
               </div>
@@ -312,9 +310,12 @@
               </div>
             </div>
             <span id="activeMeta">未选择会话</span>
+            <div class="top-meta-tools" aria-label="会话快捷入口">
+              <nav id="siteMountStrip" class="site-mount-strip" aria-label="子站点" hidden></nav>
+              <button id="shareCaptureButton" class="top-meta-tool top-share-button" type="button" aria-label="生成分享截图" title="生成分享截图" aria-pressed="false"></button>
+            </div>
           </div>
           <div class="top-actions">
-            <nav id="siteMountStrip" class="site-mount-strip" aria-label="子站点" hidden></nav>
             <span id="connectionBadge" class="connection-badge" role="status" aria-label="离线" title="离线" data-icon="offline"></span>
             <button id="stopButton" class="top-stop-button" type="button" aria-label="停止当前任务" title="停止当前任务" hidden>
               <span aria-hidden="true"></span>
@@ -689,6 +690,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=177" type="module"></script>
+    <script src="/app.js?v=178" type="module"></script>
   </body>
 </html>

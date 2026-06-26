@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '177';
-const SW_CACHE_VERSION = 'codex-console-v194';
+const APP_ASSET_VERSION = '178';
+const SW_CACHE_VERSION = 'codex-console-v195';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1254,18 +1254,26 @@ function renderSiteMountStrip(session = getActiveSession()) {
   if (!el.siteMountStrip) return;
   const mounts = Array.isArray(session?.siteMounts) ? session.siteMounts : [];
   if (el.topbar) el.siteMountStrip.style.setProperty('--topbar-height', `${el.topbar.offsetHeight}px`);
-  el.siteMountStrip.hidden = mounts.length === 0;
+  el.siteMountStrip.hidden = !session?.id;
   el.siteMountStrip.textContent = '';
   el.siteMountStrip.classList.toggle('collapsed', state.siteMountStripCollapsed);
-  if (!mounts.length) return;
+  if (!session?.id) return;
 
   const toggle = document.createElement('button');
   toggle.className = 'site-mount-toggle';
   toggle.type = 'button';
-  toggle.textContent = state.siteMountStripCollapsed ? `站点 ${mounts.length}` : '收起站点';
+  toggle.textContent = '';
   toggle.setAttribute('aria-expanded', String(!state.siteMountStripCollapsed));
-  toggle.title = state.siteMountStripCollapsed ? '展开子站点导航' : '收起子站点导航';
-  toggle.addEventListener('click', () => {
+  toggle.setAttribute('aria-label', mounts.length ? `站点 ${mounts.length}` : '注册站点');
+  toggle.title = mounts.length ? `站点 ${mounts.length}` : '注册站点';
+  toggle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeTopMoreMenu();
+    closeTopFilterMenu();
+    if (!mounts.length) {
+      openSiteRegisterDialog();
+      return;
+    }
     state.siteMountStripCollapsed = !state.siteMountStripCollapsed;
     storageSet('cmc.siteMountStripCollapsed', state.siteMountStripCollapsed ? '1' : '0');
     renderSiteMountStrip(session);
@@ -1273,16 +1281,42 @@ function renderSiteMountStrip(session = getActiveSession()) {
   el.siteMountStrip.append(toggle);
   if (state.siteMountStripCollapsed) return;
 
+  const popover = document.createElement('div');
+  popover.className = 'site-mount-popover';
+  popover.setAttribute('role', 'menu');
+
+  const register = document.createElement('button');
+  register.className = 'site-mount-register';
+  register.type = 'button';
+  register.setAttribute('role', 'menuitem');
+  register.textContent = '新增';
+  register.title = '注册 Web 服务或已有域名';
+  register.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeSiteMountStrip();
+    openSiteRegisterDialog();
+  });
+  popover.append(register);
+
   for (const mount of mounts) {
     const link = document.createElement('a');
     link.className = 'site-mount-link';
+    link.setAttribute('role', 'menuitem');
     link.href = mount.url || `/sites/${mount.slug}/`;
     link.target = '_blank';
     link.rel = 'noopener';
     link.textContent = mount.title || mount.slug || '站点';
     link.title = link.href;
-    el.siteMountStrip.append(link);
+    popover.append(link);
   }
+  el.siteMountStrip.append(popover);
+}
+
+function closeSiteMountStrip() {
+  if (state.siteMountStripCollapsed) return;
+  state.siteMountStripCollapsed = true;
+  storageSet('cmc.siteMountStripCollapsed', '1');
+  renderSiteMountStrip();
 }
 
 const SITE_REGISTER_PROMPTS = {
@@ -1605,6 +1639,7 @@ function selectedShareMessages() {
 
 function setShareMode(enabled) {
   state.shareMode = Boolean(enabled);
+  el.shareCaptureButton?.setAttribute('aria-pressed', String(state.shareMode));
   if (!state.shareMode) state.shareSelectedKeys.clear();
   messageView.closeMessageMenus();
   closeTopMenus();
@@ -1630,6 +1665,7 @@ function selectRecentShareMessages(count = 6) {
 }
 
 function updateShareBar() {
+  el.shareCaptureButton?.setAttribute('aria-pressed', String(Boolean(state.shareMode)));
   el.shareBar?.remove();
   el.shareBar = null;
   if (!state.shareMode || !state.activeId || !el.promptForm) return;
@@ -3307,6 +3343,7 @@ function closeRuntimeDialog() {
 }
 
 function setTopMoreMenu(open) {
+  if (open) closeSiteMountStrip();
   topbarView.setTopMoreMenu(open);
   el.topMoreMenu?.closest?.('.topbar')?.classList.toggle('menu-open', Boolean(open));
 }
@@ -3317,6 +3354,7 @@ function closeTopMoreMenu() {
 }
 
 function setTopFilterMenu(open) {
+  if (open) closeSiteMountStrip();
   topbarView.setTopFilterMenu(open);
   el.topFilterMenu?.closest?.('.topbar')?.classList.toggle('menu-open', Boolean(open));
 }
@@ -3328,6 +3366,7 @@ function closeTopFilterMenu() {
 
 function closeTopMenus() {
   topbarView.closeTopMenus();
+  closeSiteMountStrip();
 }
 
 function setAttachmentMenu(open) {
@@ -4320,6 +4359,10 @@ el.topFilterMenu.addEventListener('click', (event) => {
   event.stopPropagation();
 });
 
+el.siteMountStrip?.addEventListener('click', (event) => {
+  event.stopPropagation();
+});
+
 el.favoritesButton.addEventListener('click', () => {
   state.showStarredOnly = !state.showStarredOnly;
   storageSet('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
@@ -4345,6 +4388,7 @@ el.shareCaptureButton?.addEventListener('click', async () => {
     return;
   }
   state.shareMode = true;
+  el.shareCaptureButton?.setAttribute('aria-pressed', 'true');
   if (!state.shareSelectedKeys.size) selectRecentShareMessages(4);
   else renderActive({ stickToBottom: false });
 });

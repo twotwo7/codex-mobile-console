@@ -75,7 +75,17 @@ async function setFixture(page) {
                   </div>
                 </div>
               </div>
-              <span>/root/Projects</span>
+              <span id="activeMeta">/root/Projects</span>
+              <div class="top-meta-tools" aria-label="会话快捷入口">
+                <nav class="site-mount-strip" aria-label="子站点">
+                  <button class="site-mount-toggle" type="button" aria-expanded="true" aria-label="站点 2"></button>
+                  <div class="site-mount-popover" role="menu">
+                    <button class="site-mount-register" type="button" role="menuitem">新增</button>
+                    <a class="site-mount-link" href="#" role="menuitem">预览服务</a>
+                  </div>
+                </nav>
+                <button class="top-meta-tool top-share-button" type="button" aria-label="生成分享截图" aria-pressed="true"></button>
+              </div>
             </div>
             <div class="top-actions">
               <span class="connection-badge" data-icon="online" title="在线"></span>
@@ -240,11 +250,20 @@ async function checkLongTitleMenu(page, viewportName) {
   await page.evaluate(() => {
     document.querySelector('#activeTitle').textContent = '这是一个非常非常长的会话标题用于验证手机端标题省略和箭头固定可见';
     document.querySelector('#activeMeta').textContent = '/root/Projects/very-long-directory-name/with/mobile/title/layout/check';
+    const site = document.querySelector('#siteMountStrip');
+    if (site) {
+      site.hidden = false;
+      if (!site.querySelector('.site-mount-toggle')) {
+        site.innerHTML = '<button class="site-mount-toggle" type="button" aria-expanded="false" aria-label="站点"></button>';
+      }
+    }
   });
   const titleRow = await assertVisibleBox(page, '.top-title-row', 'long title row');
   const title = await assertVisibleBox(page, '#activeTitle', 'long title text');
   const arrow = await assertVisibleBox(page, '#topMoreButton', 'title menu arrow');
   const filter = await assertVisibleBox(page, '#topFilterButton', 'view filter button');
+  const site = await assertVisibleBox(page, '#siteMountStrip', 'site shortcut');
+  const share = await assertVisibleBox(page, '#shareCaptureButton', 'share shortcut');
   const actions = await assertVisibleBox(page, '.top-actions', 'top actions');
   if (arrow.x <= title.x || arrow.x + arrow.width > actions.x - 2) {
     throw new Error(`title menu arrow is not stable: ${JSON.stringify({ title, arrow, actions })}`);
@@ -254,6 +273,9 @@ async function checkLongTitleMenu(page, viewportName) {
   }
   if (titleRow.height > 28) {
     throw new Error(`long title row wrapped: ${JSON.stringify(titleRow)}`);
+  }
+  if (site.y <= titleRow.y || share.y <= titleRow.y || Math.abs(site.y - share.y) > 2) {
+    throw new Error(`shortcut buttons are not in the meta row: ${JSON.stringify({ titleRow, site, share })}`);
   }
   await page.click('#topMoreButton');
   await page.waitForSelector('#topMoreMenu:not([hidden])', { timeout: 5000 });
