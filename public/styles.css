@@ -841,11 +841,12 @@ button:disabled {
   height: 100svh;
   overflow: hidden;
   display: grid;
-  grid-template-rows: auto 1fr auto;
+  grid-template-rows: auto auto 1fr auto;
 }
 
 .topbar {
   position: relative;
+  grid-row: 1;
   z-index: 35;
   min-height: calc(64px + env(safe-area-inset-top));
   padding: calc(12px + env(safe-area-inset-top)) 16px 12px;
@@ -856,6 +857,53 @@ button:disabled {
 
 .topbar.menu-open {
   z-index: 95;
+}
+
+.site-mount-strip {
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--chrome);
+  scrollbar-width: none;
+}
+
+.site-mount-strip[hidden] {
+  display: none;
+}
+
+.site-mount-strip::-webkit-scrollbar {
+  display: none;
+}
+
+.site-mount-label {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.site-mount-link {
+  flex: 0 0 auto;
+  max-width: 150px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .top-title {
@@ -1092,6 +1140,7 @@ button:disabled {
 }
 
 .empty-state {
+  grid-row: 3;
   align-self: center;
   justify-self: center;
   width: min(420px, calc(100% - 40px));
@@ -1106,6 +1155,7 @@ button:disabled {
 }
 
 .message-pane {
+  grid-row: 3;
   min-height: 0;
   overflow: auto;
   overflow-anchor: none;
@@ -1528,6 +1578,7 @@ button:disabled {
 }
 
 .prompt-bar {
+  grid-row: 4;
   display: grid;
   gap: 8px;
   max-height: min(46svh, 360px);

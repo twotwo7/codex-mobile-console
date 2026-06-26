@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { appendFile, copyFile, mkdir, readFile, writeFile, stat, rename, readdir, unlink, statfs, readlink } from 'node:fs/promises';
+import { appendFile, copyFile, mkdir, readFile, writeFile, stat, rename, readdir, unlink, statfs, readlink, realpath } from 'node:fs/promises';
 import { chmodSync, copyFileSync, createReadStream, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,11 +40,20 @@ const MAX_AUDIT_EVENTS = 200;
 const SMART_TAG_RULE_VERSION = 4;
 const COMMAND_KILL_GRACE_MS = 3000;
 const CODEX_UPGRADE_TIMEOUT_MS = 10 * 60 * 1000;
+const SITE_MOUNT_ROOT = path.resolve(process.env.SITE_MOUNT_ROOT || '/root/Projects');
+const SITE_MOUNT_CANDIDATES = ['dist', 'build', 'out', 'site', 'preview', 'web', '.'];
+const SITE_MOUNT_BLOCKED_PARTS = new Set(['.git', '.hg', '.svn', 'node_modules', 'data', 'runtime']);
+const SITE_MOUNT_BLOCKED_FILES = new Set(['.env', '.env.local', '.env.production', '.env.development']);
+const SITE_MOUNT_SAFE_EXTENSIONS = new Set([
+  '.html', '.css', '.js', '.mjs', '.json', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif',
+  '.ico', '.txt', '.map', '.wasm', '.woff', '.woff2', '.ttf', '.otf', '.mp3', '.mp4', '.webm'
+]);
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.svg': 'image/svg+xml; charset=utf-8',
   '.png': 'image/png',
@@ -52,7 +61,17 @@ const contentTypes = {
   '.jpeg': 'image/jpeg',
   '.webp': 'image/webp',
   '.gif': 'image/gif',
-  '.ico': 'image/x-icon'
+  '.ico': 'image/x-icon',
+  '.txt': 'text/plain; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.wasm': 'application/wasm',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.otf': 'font/otf',
+  '.mp3': 'audio/mpeg',
+  '.mp4': 'video/mp4',
+  '.webm': 'video/webm'
 };
 
 let adminPassword = '';
@@ -137,6 +156,7 @@ async function init() {
     state.codexSessionTitles ||= {};
     state.codexSessionTags ||= {};
     state.starredMessages ||= {};
+    state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.nextSeq ||= 1;
   } else {
@@ -144,6 +164,7 @@ async function init() {
     state.codexSessionTitles ||= {};
     state.codexSessionTags ||= {};
     state.starredMessages ||= {};
+    state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     await saveState();
   }
@@ -1056,6 +1077,118 @@ function safeCompare(a, b) {
   return timingSafeEqual(left, right);
 }
 
+function isInsidePath(root, target) {
+  const relative = path.relative(root, target);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function slugify(value, fallback = 'site') {
+  const slug = String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
+  return slug || fallback;
+}
+
+function uniqueSiteSlug(base, currentId = '') {
+  const existing = new Set(Object.values(state.siteMounts || {})
+    .filter((mount) => !currentId || mount.id !== currentId)
+    .map((mount) => mount.slug));
+  let slug = base;
+  let index = 2;
+  while (existing.has(slug)) {
+    slug = `${base}-${index}`;
+    index += 1;
+  }
+  return slug;
+}
+
+function publicSiteMount(mount) {
+  return {
+    id: mount.id,
+    slug: mount.slug,
+    title: mount.title,
+    url: `/sites/${mount.slug}/`,
+    sessionId: mount.sessionId || '',
+    createdAt: mount.createdAt || '',
+    updatedAt: mount.updatedAt || ''
+  };
+}
+
+function publicSiteMountsForSession(sessionId) {
+  return Object.values(state.siteMounts || {})
+    .filter((mount) => mount.sessionId === sessionId && !mount.deletedAt)
+    .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+    .map(publicSiteMount);
+}
+
+async function createOrUpdateSiteMount(session, rootDir) {
+  if (!session?.id || !session.cwd || !rootDir) return null;
+  const root = await realpath(rootDir).catch(() => '');
+  if (!root || !isInsidePath(SITE_MOUNT_ROOT, root)) return null;
+  const info = await stat(root).catch(() => null);
+  if (!info?.isDirectory()) return null;
+  if (!(await exists(path.join(root, 'index.html')))) return null;
+
+  const existing = Object.values(state.siteMounts || {})
+    .find((mount) => mount.sessionId === session.id && mount.root === root && !mount.deletedAt);
+  const now = nowIso();
+  if (existing) {
+    existing.updatedAt = now;
+    return existing;
+  }
+
+  const relative = path.relative(session.cwd, root);
+  const label = relative && !relative.startsWith('..') ? relative : path.basename(root);
+  const baseSlug = slugify(`${session.title || path.basename(session.cwd)}-${label}`);
+  const id = randomUUID();
+  const mount = {
+    id,
+    sessionId: session.id,
+    slug: uniqueSiteSlug(baseSlug, id),
+    title: label === '.' ? (session.title || '站点') : label,
+    root,
+    createdAt: now,
+    updatedAt: now
+  };
+  state.siteMounts ||= {};
+  state.siteMounts[id] = mount;
+  return mount;
+}
+
+async function autoMountSessionSites(session) {
+  if (!session?.id || !session.cwd || session.source === 'codex') return [];
+  const cwd = await realpath(session.cwd).catch(() => '');
+  if (!cwd || !isInsidePath(SITE_MOUNT_ROOT, cwd)) return [];
+  const existingIds = new Set(Object.values(state.siteMounts || {})
+    .filter((mount) => mount.sessionId === session.id && !mount.deletedAt)
+    .map((mount) => mount.id));
+  const mounts = [];
+  for (const candidate of SITE_MOUNT_CANDIDATES) {
+    const mount = await createOrUpdateSiteMount(session, path.join(cwd, candidate));
+    if (mount && !existingIds.has(mount.id)) mounts.push(mount);
+  }
+  return mounts;
+}
+
+function codexSiteMountCapabilityPrompt(session) {
+  if (!session?.cwd || session.source === 'codex') return '';
+  return [
+    '',
+    '',
+    '<codex-mobile-console-site-preview>',
+    'If you create or build a static web page/site for the user, put the generated site under one of these directories in the current working directory: dist, build, out, site, preview, or web. If the current directory itself is the static site, keep an index.html at the project root.',
+    'After this Codex run completes, the console automatically exposes every detected directory that contains index.html as /sites/<auto-slug>/ and shows jump buttons in the session UI. Do not ask the user to manually enter a preview path unless a static site output is impossible.',
+    '</codex-mobile-console-site-preview>'
+  ].join('\n');
+}
+
+function promptWithConsoleCapabilities(session, prompt) {
+  const capability = codexSiteMountCapabilityPrompt(session);
+  return capability ? `${prompt}${capability}` : prompt;
+}
+
 function sessionActivityAt(session) {
   const messages = Array.isArray(session?.messages) ? session.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -1104,6 +1237,7 @@ function publicSession(session) {
     activeRun: publicRun(activeRun),
     lastRun: publicRun(lastRun),
     runCounts,
+    siteMounts: publicSiteMountsForSession(session.id),
     contextHealth: statusSummary.contextHealth,
     recentAudit: (session.audit || []).slice(-10),
     trashedAt: session.trashedAt || '',
@@ -3500,7 +3634,7 @@ function runCodex(session, prompt, options = {}) {
   appendRunEvent(session, 'process.spawned', { summary: `${command} ${commandArgs.slice(0, 6).join(' ')}` }, { runId: run.id });
   broadcastSession(session);
 
-  child.stdin.write(prompt);
+  child.stdin.write(promptWithConsoleCapabilities(session, prompt));
   child.stdin.end();
 
   let stdoutBuffer = '';
@@ -3591,6 +3725,21 @@ function runCodex(session, prompt, options = {}) {
       status: nextStatus,
       queuedCount: session.queue?.length || 0
     });
+    if (finalRunState === 'completed') {
+      autoMountSessionSites(session).then((mounts) => {
+        if (!mounts.length) return;
+        addMessage(session, {
+          role: 'system',
+          text: `子站点已挂载：${mounts.map((mount) => `/sites/${mount.slug}/`).join(' ')}`,
+          status: 'completed'
+        });
+        broadcastSession(session);
+        scheduleSave();
+      }).catch((error) => {
+        appendRunEvent(session, 'site_mount.failed', { error: error.message || String(error) }, { runId: activeRunId });
+        scheduleSave();
+      });
+    }
     broadcastSession(session);
 
     if (next?.prompt) {
@@ -3704,6 +3853,70 @@ async function serveStatic(req, res, pathname) {
       return;
     }
     json(res, 404, { error: 'not_found' });
+  }
+}
+
+async function serveSiteMount(req, res, url) {
+  const auth = requireAuth(req, res);
+  if (!auth) return;
+  const match = url.pathname.match(/^\/sites\/([^/]+)(\/.*)?$/);
+  if (!match) return json(res, 404, { error: 'site_not_found' });
+  let slug = '';
+  try {
+    slug = decodeURIComponent(match[1]);
+  } catch {
+    return json(res, 400, { error: 'bad_site_path' });
+  }
+  const mount = Object.values(state.siteMounts || {}).find((item) => item.slug === slug && !item.deletedAt);
+  if (!mount) return json(res, 404, { error: 'site_not_found' });
+  if (!match[2]) {
+    res.writeHead(302, { location: `/sites/${encodeURIComponent(slug)}/` });
+    res.end();
+    return;
+  }
+
+  const root = await realpath(mount.root).catch(() => '');
+  if (!root || !isInsidePath(SITE_MOUNT_ROOT, root)) return json(res, 404, { error: 'site_not_found' });
+  let requestFile = match[2] === '/' ? '/index.html' : match[2];
+  try {
+    requestFile = decodeURIComponent(requestFile);
+  } catch {
+    return json(res, 400, { error: 'bad_site_path' });
+  }
+  const requestParts = requestFile.split('/').filter(Boolean);
+  if (requestParts.some((part) => SITE_MOUNT_BLOCKED_PARTS.has(part) || part.startsWith('.'))) {
+    return json(res, 403, { error: 'forbidden' });
+  }
+  if (SITE_MOUNT_BLOCKED_FILES.has(path.basename(requestFile).toLowerCase())) {
+    return json(res, 403, { error: 'forbidden' });
+  }
+  const filePath = path.resolve(root, `.${path.normalize(requestFile)}`);
+  if (!isInsidePath(root, filePath)) return json(res, 403, { error: 'forbidden' });
+
+  const sendFile = async (target) => {
+    const ext = path.extname(target).toLowerCase();
+    if (!SITE_MOUNT_SAFE_EXTENSIONS.has(ext)) return json(res, 403, { error: 'forbidden' });
+    const cacheControl = ext === '.html' ? 'no-store' : 'private, max-age=120';
+    res.writeHead(200, {
+      'content-type': contentTypes[ext] || 'application/octet-stream',
+      'cache-control': cacheControl,
+      'x-content-type-options': 'nosniff'
+    });
+    createReadStream(target).pipe(res);
+  };
+
+  try {
+    const info = await stat(filePath);
+    if (info.isDirectory()) {
+      const index = path.join(filePath, 'index.html');
+      if (await exists(index)) return sendFile(index);
+      return json(res, 404, { error: 'site_file_not_found' });
+    }
+    return sendFile(filePath);
+  } catch {
+    const index = path.join(root, 'index.html');
+    if (await exists(index)) return sendFile(index);
+    return json(res, 404, { error: 'site_file_not_found' });
   }
 }
 
@@ -4503,6 +4716,10 @@ const server = http.createServer((req, res) => {
   }
 
   if (url.pathname === '/api/events') return handleEvents(req, res, url);
+  if (url.pathname.startsWith('/sites/')) {
+    serveSiteMount(req, res, url).catch((error) => json(res, 500, { error: 'internal', message: String(error.message || error) }));
+    return;
+  }
   if (url.pathname.startsWith('/api/')) {
     handleApi(req, res, url).catch((error) => json(res, 500, { error: 'internal', message: String(error.message || error) }));
     return;

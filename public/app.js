@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '161';
-const SW_CACHE_VERSION = 'codex-console-v178';
+const APP_ASSET_VERSION = '163';
+const SW_CACHE_VERSION = 'codex-console-v180';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -185,6 +185,7 @@ const el = {
   activeMeta: document.querySelector('#activeMeta'),
   connectionBadge: document.querySelector('#connectionBadge'),
   emptyState: document.querySelector('#emptyState'),
+  siteMountStrip: document.querySelector('#siteMountStrip'),
   messagePane: document.querySelector('#messagePane'),
   promptForm: document.querySelector('#promptForm'),
   promptInput: document.querySelector('#promptInput'),
@@ -1250,8 +1251,33 @@ function renderSessionButton(session) {
 
 function renderActiveStatus(session = getActiveSession()) {
   topbarView.renderActiveStatus(session);
+  renderSiteMountStrip(session);
   updateMessageDisplayButton();
   updateCollapseActionButtons();
+}
+
+function renderSiteMountStrip(session = getActiveSession()) {
+  if (!el.siteMountStrip) return;
+  const mounts = Array.isArray(session?.siteMounts) ? session.siteMounts : [];
+  el.siteMountStrip.hidden = mounts.length === 0;
+  el.siteMountStrip.textContent = '';
+  if (!mounts.length) return;
+
+  const label = document.createElement('span');
+  label.className = 'site-mount-label';
+  label.textContent = `子站点 ${mounts.length}`;
+  el.siteMountStrip.append(label);
+
+  for (const mount of mounts) {
+    const link = document.createElement('a');
+    link.className = 'site-mount-link';
+    link.href = mount.url || `/sites/${mount.slug}/`;
+    link.target = '_blank';
+    link.rel = 'noopener';
+    link.textContent = mount.title || mount.slug || '站点';
+    link.title = link.href;
+    el.siteMountStrip.append(link);
+  }
 }
 
 function renderActive(options = {}) {
