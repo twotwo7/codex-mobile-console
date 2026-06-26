@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '180';
-const SW_CACHE_VERSION = 'codex-console-v197';
+const APP_ASSET_VERSION = '181';
+const SW_CACHE_VERSION = 'codex-console-v198';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -802,11 +802,26 @@ function scheduleLocalCacheCleanup(timeout = 2200) {
 }
 
 async function api(path, options = {}) {
+  const { timeoutMs = 0, ...fetchOptions } = options;
+  let timeoutId = null;
+  const controller = timeoutMs > 0 && !fetchOptions.signal ? new AbortController() : null;
+  if (controller) {
+    timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  }
   const res = await fetch(path, {
     credentials: 'same-origin',
-    headers: { 'content-type': 'application/json', ...(options.headers || {}) },
-    ...options
-  });
+    headers: { 'content-type': 'application/json', ...(fetchOptions.headers || {}) },
+    ...fetchOptions,
+    signal: controller?.signal || fetchOptions.signal
+  }).catch((error) => {
+    if (error.name === 'AbortError') {
+      const timeoutError = new Error('请求超时，请检查服务器网络或稍后重试。');
+      timeoutError.code = 'request_timeout';
+      timeoutError.detail = '请求超时，请检查服务器网络或稍后重试。';
+      throw timeoutError;
+    }
+    throw error;
+  }).finally(() => clearTimeout(timeoutId));
   const text = await res.text();
   const data = text ? JSON.parse(text) : {};
   if (!res.ok) {
@@ -2603,8 +2618,13 @@ async function loadAppVersion() {
 
 async function checkAppUpdate() {
   if (!el.appUpdatePanel) return;
+  el.checkAppUpdateButton.disabled = true;
   el.appUpdatePanel.textContent = '检查中...';
-  renderAppUpdate(await api('/api/app/update-check'));
+  try {
+    renderAppUpdate(await api('/api/app/update-check', { timeoutMs: 22000 }));
+  } finally {
+    el.checkAppUpdateButton.disabled = false;
+  }
 }
 
 async function updateApp() {
@@ -2655,9 +2675,14 @@ function renderCodexUpgrade(data = {}) {
 
 async function checkCodexUpgrade() {
   if (!el.codexUpgradePanel) return;
+  el.checkCodexUpgradeButton.disabled = true;
   el.codexUpgradePanel.textContent = '检查中...';
-  const data = await api('/api/codex/upgrade-check');
-  renderCodexUpgrade(data);
+  try {
+    const data = await api('/api/codex/upgrade-check', { timeoutMs: 18000 });
+    renderCodexUpgrade(data);
+  } finally {
+    el.checkCodexUpgradeButton.disabled = false;
+  }
 }
 
 async function upgradeCodex() {

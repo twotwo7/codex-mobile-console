@@ -39,6 +39,7 @@ const MAX_RUN_EVENTS = 80;
 const MAX_AUDIT_EVENTS = 200;
 const SMART_TAG_RULE_VERSION = 4;
 const COMMAND_KILL_GRACE_MS = 3000;
+const APP_UPDATE_CHECK_TIMEOUT_MS = 18000;
 const CODEX_UPGRADE_TIMEOUT_MS = 10 * 60 * 1000;
 const SITE_MOUNT_ROOT = path.resolve(process.env.SITE_MOUNT_ROOT || '/root/Projects');
 const SITE_MOUNT_CANDIDATES = ['dist', 'build', 'out', 'site', 'preview', 'web', '.'];
@@ -112,7 +113,10 @@ function commandPath() {
 function commandEnv() {
   return {
     ...process.env,
-    PATH: commandPath()
+    PATH: commandPath(),
+    GIT_TERMINAL_PROMPT: process.env.GIT_TERMINAL_PROMPT || '0',
+    GIT_ASKPASS: process.env.GIT_ASKPASS || '/bin/false',
+    GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND || 'ssh -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new'
   };
 }
 
@@ -2365,6 +2369,17 @@ async function appVersionInfo(options = {}) {
   };
 }
 
+function withTimeout(promise, timeoutMs, fallback) {
+  let timer = null;
+  return Promise.race([
+    Promise.resolve(promise).finally(() => clearTimeout(timer)),
+    new Promise((resolve) => {
+      timer = setTimeout(() => resolve(typeof fallback === 'function' ? fallback() : fallback), timeoutMs);
+      timer.unref?.();
+    })
+  ]);
+}
+
 function versionFromTag(tag = '') {
   return String(tag || '').replace(/^v/i, '');
 }
@@ -2407,22 +2422,46 @@ async function appUpdateCheck() {
     result.warnings.push('当前目录不是可用的 git 仓库，无法自动检测控制台更新。');
     return result;
   }
-  const fetch = await runCommand('git', ['fetch', '--tags', 'origin'], { timeoutMs: 30000 });
-  if (!fetch.ok) {
+
+  const branch = git.branch || 'main';
+  const remoteTags = await withTimeout(
+    runCommand('git', ['ls-remote', '--tags', 'origin', 'v*'], { timeoutMs: 12000 }),
+    APP_UPDATE_CHECK_TIMEOUT_MS,
+    { ok: false, stdout: '', stderr: `GitHub 远端版本检查超过 ${Math.round(APP_UPDATE_CHECK_TIMEOUT_MS / 1000)} 秒。` }
+  );
+  if (!remoteTags.ok) {
     result.ok = false;
-    result.warnings.push(fetch.stderr || fetch.stdout || 'git fetch 失败。');
+    result.warnings.push(remoteTags.stderr || remoteTags.stdout || '无法读取 GitHub 远端标签。');
     return result;
   }
-  const tags = await runCommand('git', ['tag', '--list', 'v*', '--sort=-v:refname'], { timeoutMs: 8000 });
-  const latestTag = tags.stdout.split('\n').map((item) => item.trim()).filter(isSemverTag).sort((a, b) => -compareSemver(a, b))[0] || '';
+
+  const remoteTagMap = new Map();
+  for (const line of remoteTags.stdout.split('\n')) {
+    const [commit, ref] = line.trim().split(/\s+/);
+    if (!commit || !ref) continue;
+    const peeled = ref.endsWith('^{}');
+    const tag = ref.replace(/^refs\/tags\//, '').replace(/\^\{\}$/, '');
+    if (!isSemverTag(tag)) continue;
+    const entry = remoteTagMap.get(tag) || {};
+    if (peeled) entry.peeledCommit = commit;
+    else entry.commit = commit;
+    remoteTagMap.set(tag, entry);
+  }
+  const latestTag = [...remoteTagMap.keys()].sort((a, b) => -compareSemver(a, b))[0] || '';
   result.latestTag = latestTag;
   if (latestTag) {
-    const tagCommit = await runCommand('git', ['rev-list', '-n', '1', latestTag], { timeoutMs: 8000 });
-    result.latestTagCommit = tagCommit.stdout || '';
+    const tagInfo = remoteTagMap.get(latestTag) || {};
+    result.latestTagCommit = tagInfo.peeledCommit || tagInfo.commit || '';
   }
-  const branch = git.branch || 'main';
-  const remoteCommit = await runCommand('git', ['rev-parse', `origin/${branch}`], { timeoutMs: 8000 });
+
+  const remoteCommit = await runCommand('git', ['ls-remote', 'origin', `refs/heads/${branch}`], { timeoutMs: 8000 });
   result.latestRemoteCommit = remoteCommit.stdout || '';
+  if (remoteCommit.ok && remoteCommit.stdout) {
+    result.latestRemoteCommit = remoteCommit.stdout.trim().split(/\s+/)[0] || '';
+  }
+  if (!remoteCommit.ok) {
+    result.warnings.push(remoteCommit.stderr || remoteCommit.stdout || `无法读取远端分支 ${branch}。`);
+  }
   if (latestTag && result.latestTagCommit && result.latestTagCommit !== git.commit && compareSemver(latestTag, pkg.version) > 0) {
     result.updateAvailable = true;
     result.target = latestTag;
