@@ -95,8 +95,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '168';
-const SW_CACHE_VERSION = 'codex-console-v185';
+const APP_ASSET_VERSION = '169';
+const SW_CACHE_VERSION = 'codex-console-v186';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
