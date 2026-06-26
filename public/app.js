@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '165';
-const SW_CACHE_VERSION = 'codex-console-v182';
+const APP_ASSET_VERSION = '166';
+const SW_CACHE_VERSION = 'codex-console-v183';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1267,20 +1267,6 @@ function renderSiteMountStrip(session = getActiveSession()) {
   el.siteMountStrip.hidden = mounts.length === 0;
   el.siteMountStrip.textContent = '';
   if (!mounts.length) return;
-
-  const label = document.createElement('span');
-  label.className = 'site-mount-label';
-  label.textContent = `子站点 ${mounts.length}`;
-  el.siteMountStrip.append(label);
-
-  const navLink = document.createElement('a');
-  navLink.className = 'site-mount-link site-mount-nav-link';
-  navLink.href = `/sites/session/${encodeURIComponent(session.id)}/`;
-  navLink.target = '_blank';
-  navLink.rel = 'noopener';
-  navLink.textContent = '导航页';
-  navLink.title = '打开当前会话的子站点导航页';
-  el.siteMountStrip.append(navLink);
 
   for (const mount of mounts) {
     const link = document.createElement('a');

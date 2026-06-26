@@ -880,13 +880,6 @@ button:disabled {
   display: none;
 }
 
-.site-mount-label {
-  flex: 0 0 auto;
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 800;
-}
-
 .site-mount-link {
   flex: 0 0 auto;
   max-width: 150px;
@@ -904,12 +897,6 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.site-mount-nav-link {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
-  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
 }
 
 .top-title {
