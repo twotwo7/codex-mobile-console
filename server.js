@@ -2605,6 +2605,41 @@ async function runAppUpdateSteps(task, steps) {
   }
 }
 
+function appUpdateValidationSteps() {
+  return [
+    { label: 'npm install --omit=dev', command: 'npm', args: ['install', '--omit=dev'], timeoutMs: 120000 },
+    { label: 'node --check server.js', command: 'node', args: ['--check', 'server.js'], timeoutMs: 30000 },
+    { label: 'node --check public/app.js', command: 'node', args: ['--check', 'public/app.js'], timeoutMs: 30000 }
+  ];
+}
+
+function buildAppUpdateSteps(mode, target, check = {}) {
+  if (mode === 'bundle') {
+    return [
+      {
+        label: `apply update bundle ${check.latestTag || target}`,
+        command: 'node',
+        args: [
+          'scripts/apply-release-bundle.mjs',
+          '--url', target,
+          '--sha256', check.bundleSha256 || '',
+          '--tag', check.latestTag || '',
+          '--root', __dirname
+        ],
+        timeoutMs: 180000
+      },
+      ...appUpdateValidationSteps()
+    ];
+  }
+  return [
+    { label: 'git fetch --tags origin', command: 'git', args: ['fetch', '--tags', 'origin'], timeoutMs: 30000 },
+    mode === 'branch'
+      ? { label: `git merge --ff-only ${target}`, command: 'git', args: ['merge', '--ff-only', target], timeoutMs: 30000 }
+      : { label: `git checkout ${target}`, command: 'git', args: ['checkout', target], timeoutMs: 30000 },
+    ...appUpdateValidationSteps()
+  ];
+}
+
 async function startAppUpdate(options = {}) {
   if (appUpdateTask?.status === 'running') return appUpdateTask;
   if (running.size > 0) {
@@ -2663,32 +2698,7 @@ async function startAppUpdate(options = {}) {
   const task = appUpdateTask;
   (async () => {
     try {
-      const steps = mode === 'bundle' ? [
-        {
-          label: `apply update bundle ${check.latestTag || target}`,
-          command: 'node',
-          args: [
-            'scripts/apply-release-bundle.mjs',
-            '--url', target,
-            '--sha256', check.bundleSha256 || '',
-            '--tag', check.latestTag || '',
-            '--root', __dirname
-          ],
-          timeoutMs: 180000
-        },
-        { label: 'npm install --omit=dev', command: 'npm', args: ['install', '--omit=dev'], timeoutMs: 120000 },
-        { label: 'node --check server.js', command: 'node', args: ['--check', 'server.js'], timeoutMs: 30000 },
-        { label: 'node --check public/app.js', command: 'node', args: ['--check', 'public/app.js'], timeoutMs: 30000 }
-      ] : [
-        { label: 'git fetch --tags origin', command: 'git', args: ['fetch', '--tags', 'origin'], timeoutMs: 30000 },
-        mode === 'branch'
-          ? { label: `git merge --ff-only ${target}`, command: 'git', args: ['merge', '--ff-only', target], timeoutMs: 30000 }
-          : { label: `git checkout ${target}`, command: 'git', args: ['checkout', target], timeoutMs: 30000 },
-        { label: 'npm install --omit=dev', command: 'npm', args: ['install', '--omit=dev'], timeoutMs: 120000 },
-        { label: 'node --check server.js', command: 'node', args: ['--check', 'server.js'], timeoutMs: 30000 },
-        { label: 'node --check public/app.js', command: 'node', args: ['--check', 'public/app.js'], timeoutMs: 30000 }
-      ];
-      await runAppUpdateSteps(task, steps);
+      await runAppUpdateSteps(task, buildAppUpdateSteps(mode, target, check));
       const after = await gitInfo();
       task.status = 'finished';
       task.finishedAt = nowIso();
@@ -2722,6 +2732,10 @@ async function runAutoAppUpdate(reason = 'timer') {
     const check = await appUpdateCheck();
     if (!check.ok) {
       state.appUpdateSettings.lastAutoError = (check.warnings || []).join('\n').slice(0, 500) || 'update_check_failed';
+      return;
+    }
+    if (check.dirty) {
+      state.appUpdateSettings.lastAutoError = '本地工作区有未提交改动，自动更新已跳过。';
       return;
     }
     if (!check.updateAvailable) return;
