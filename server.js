@@ -1194,30 +1194,61 @@ function safeHttpUrl(value) {
   }
 }
 
+function isLoopbackHost(hostname) {
+  const value = String(hostname || '').toLowerCase();
+  return value === 'localhost' || value === '127.0.0.1' || value === '::1' || value === '[::1]';
+}
+
+function safeLocalServiceUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim());
+    if (url.protocol !== 'http:') return '';
+    if (!isLoopbackHost(url.hostname)) return '';
+    const port = Number(url.port || 80);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) return '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return '';
+  }
+}
+
 function extractAttrValue(attrs, name) {
   const match = String(attrs || '').match(new RegExp(`${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
   return match ? (match[1] || match[2] || match[3] || '').trim() : '';
 }
 
+function extractJsonSiteMarkers(value, tagName, type) {
+  const out = [];
+  const pattern = new RegExp(`<${tagName}>\\s*([\\s\\S]*?)\\s*<\\/${tagName}>`, 'i');
+  const match = String(value || '').match(pattern);
+  if (!match) return out;
+  try {
+    const parsed = JSON.parse(match[1]);
+    const items = Array.isArray(parsed) ? parsed : [parsed];
+    for (const item of items) {
+      const url = type === 'service' ? safeLocalServiceUrl(item?.url) : safeHttpUrl(item?.url);
+      if (url) out.push({ type, url, title: String(item?.title || '').trim() });
+    }
+  } catch {
+    // Ignore malformed registration blocks; Codex can retry with the exact marker format.
+  }
+  return out;
+}
+
 function extractSiteLinkMarkers(text) {
   const value = String(text || '');
-  const out = [];
-  const blockMatch = value.match(/<codex-site-links>\s*([\s\S]*?)\s*<\/codex-site-links>/i);
-  if (blockMatch) {
-    try {
-      const parsed = JSON.parse(blockMatch[1]);
-      const items = Array.isArray(parsed) ? parsed : [parsed];
-      for (const item of items) {
-        const url = safeHttpUrl(item?.url);
-        if (url) out.push({ url, title: String(item?.title || '').trim() });
-      }
-    } catch {
-      // Ignore malformed registration blocks; Codex can retry with the exact marker format.
-    }
-  }
+  const out = [
+    ...extractJsonSiteMarkers(value, 'codex-site-links', 'external'),
+    ...extractJsonSiteMarkers(value, 'codex-site-services', 'service')
+  ];
   for (const match of value.matchAll(/<codex-site-link\b([^>]*)\/?>/gi)) {
     const url = safeHttpUrl(extractAttrValue(match[1], 'url'));
-    if (url) out.push({ url, title: extractAttrValue(match[1], 'title') });
+    if (url) out.push({ type: 'external', url, title: extractAttrValue(match[1], 'title') });
+  }
+  for (const match of value.matchAll(/<codex-site-service\b([^>]*)\/?>/gi)) {
+    const url = safeLocalServiceUrl(extractAttrValue(match[1], 'url'));
+    if (url) out.push({ type: 'service', url, title: extractAttrValue(match[1], 'title') });
   }
   const seen = new Set();
   return out.filter((item) => {
@@ -1227,10 +1258,41 @@ function extractSiteLinkMarkers(text) {
   }).slice(0, 20);
 }
 
+function createOrUpdateServiceSiteMount(session, link) {
+  if (!session?.id || !link?.url) return null;
+  const url = safeLocalServiceUrl(link.url);
+  if (!url) return null;
+  const now = nowIso();
+  state.siteMounts ||= {};
+  const existing = Object.values(state.siteMounts)
+    .find((mount) => mount.sessionId === session.id && mount.type === 'service' && mount.targetUrl === url && !mount.deletedAt);
+  if (existing) {
+    existing.title = String(link.title || existing.title || '').slice(0, 80) || existing.title;
+    existing.updatedAt = now;
+    return existing;
+  }
+  const parsed = new URL(url);
+  const title = String(link.title || `服务 ${parsed.port || 80}`).trim().slice(0, 80);
+  const id = randomUUID();
+  const mount = {
+    id,
+    sessionId: session.id,
+    type: 'service',
+    slug: uniqueSiteSlug(slugify(`${session.title || 'session'}-${parsed.port || 'service'}`), id),
+    title,
+    targetUrl: url,
+    createdAt: now,
+    updatedAt: now
+  };
+  state.siteMounts[id] = mount;
+  return mount;
+}
+
 function createOrUpdateExternalSiteMount(session, link) {
   if (!session?.id || !link?.url) return null;
   const url = safeHttpUrl(link.url);
   if (!url) return null;
+  if (safeLocalServiceUrl(url)) return createOrUpdateServiceSiteMount(session, { ...link, url });
   const now = nowIso();
   state.siteMounts ||= {};
   const existing = Object.values(state.siteMounts)
@@ -1261,7 +1323,9 @@ function registerSiteLinksFromText(session, text) {
   const links = extractSiteLinkMarkers(text);
   if (!links.length) return [];
   const before = new Set(Object.values(state.siteMounts || {}).map((mount) => mount.id));
-  const mounts = links.map((link) => createOrUpdateExternalSiteMount(session, link)).filter(Boolean);
+  const mounts = links
+    .map((link) => link.type === 'service' ? createOrUpdateServiceSiteMount(session, link) : createOrUpdateExternalSiteMount(session, link))
+    .filter(Boolean);
   return mounts.filter((mount) => !before.has(mount.id));
 }
 
@@ -3938,7 +4002,7 @@ function siteNavigationHtml(session) {
   const mounts = publicSiteMountsForSession(session.id);
   const items = mounts.map((mount) => `
     <a class="site-card" href="${escapeHtml(mount.url)}" target="_blank" rel="noopener">
-      <span>${escapeHtml(mount.type === 'external' ? '外部域名' : '本地子站')}</span>
+      <span>${escapeHtml(mount.type === 'external' ? '外部域名' : mount.type === 'service' ? 'Web 服务' : '本地子站')}</span>
       <strong>${escapeHtml(mount.title || mount.slug || '站点')}</strong>
       <small>${escapeHtml(mount.url)}</small>
     </a>
@@ -3990,6 +4054,65 @@ async function serveSessionSiteNavigation(req, res, sessionId) {
   res.end(siteNavigationHtml(session));
 }
 
+async function proxyServiceMount(req, res, mount, requestPath, search = '') {
+  const targetBase = safeLocalServiceUrl(mount.targetUrl);
+  if (!targetBase) return json(res, 404, { error: 'site_service_not_found' });
+  const base = new URL(targetBase);
+  const basePath = base.pathname.endsWith('/') ? base.pathname.slice(0, -1) : base.pathname;
+  const suffix = requestPath === '/' ? '/' : requestPath;
+  const target = new URL(base);
+  target.pathname = path.posix.normalize(`${basePath}${suffix}`);
+  if (!target.pathname.startsWith('/')) target.pathname = `/${target.pathname}`;
+  target.search = search || '';
+
+  const headers = { ...req.headers };
+  delete headers.host;
+  delete headers.connection;
+  delete headers['content-length'];
+  headers.host = target.host;
+  headers['x-forwarded-host'] = req.headers.host || '';
+  headers['x-forwarded-proto'] = 'https';
+  headers['x-forwarded-prefix'] = `/sites/${mount.slug}`;
+
+  const proxyReq = http.request(target, {
+    method: req.method,
+    headers,
+    timeout: 30_000
+  }, (proxyRes) => {
+    const responseHeaders = { ...proxyRes.headers };
+    delete responseHeaders['content-security-policy'];
+    delete responseHeaders['content-security-policy-report-only'];
+    if (responseHeaders.location) {
+      try {
+        const location = new URL(String(responseHeaders.location), target);
+        if (location.origin === target.origin) {
+          const basePath = base.pathname.endsWith('/') ? base.pathname.slice(0, -1) : base.pathname;
+          const relativePath = location.pathname.startsWith(basePath)
+            ? location.pathname.slice(basePath.length) || '/'
+            : location.pathname;
+          responseHeaders.location = `/sites/${mount.slug}${relativePath}${location.search || ''}`;
+        }
+      } catch {
+        // Keep the upstream Location header if it is not parseable.
+      }
+    }
+    res.writeHead(proxyRes.statusCode || 502, responseHeaders);
+    proxyRes.pipe(res);
+  });
+
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy(new Error('proxy_timeout'));
+  });
+  proxyReq.on('error', (error) => {
+    if (res.headersSent) {
+      res.destroy(error);
+      return;
+    }
+    json(res, 502, { error: 'site_service_unavailable', message: error.message || String(error) });
+  });
+  req.pipe(proxyReq);
+}
+
 async function serveSiteMount(req, res, url) {
   const auth = requireAuth(req, res);
   if (!auth) return;
@@ -4017,6 +4140,14 @@ async function serveSiteMount(req, res, url) {
     res.writeHead(302, { location: `/sites/${encodeURIComponent(slug)}/` });
     res.end();
     return;
+  }
+  if (mount.type === 'external') {
+    res.writeHead(302, { location: mount.url });
+    res.end();
+    return;
+  }
+  if (mount.type === 'service') {
+    return proxyServiceMount(req, res, mount, match[2] || '/', url.search || '');
   }
 
   const root = await realpath(mount.root).catch(() => '');

@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=146">
+    <link rel="stylesheet" href="/styles.css?v=147">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -617,8 +617,8 @@
       <p class="site-register-note">选择一种提示词，会自动发送到当前会话。</p>
       <div class="site-register-options">
         <button id="sendLocalSitePrompt" type="button">
-          <strong>本地静态站点</strong>
-          <span>让 Codex 构建或整理到 dist/build/out/site/preview/web，然后自动挂载。</span>
+          <strong>Web 服务</strong>
+          <span>让 Codex 创建并启动完整 Web 服务，再注册为本站子路径转发。</span>
         </button>
         <button id="sendExternalSitePrompt" type="button">
           <strong>已有域名</strong>
@@ -747,6 +747,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=170" type="module"></script>
+    <script src="/app.js?v=171" type="module"></script>
   </body>
 </html>

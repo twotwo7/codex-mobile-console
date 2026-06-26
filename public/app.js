@@ -95,8 +95,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '170';
-const SW_CACHE_VERSION = 'codex-console-v187';
+const APP_ASSET_VERSION = '171';
+const SW_CACHE_VERSION = 'codex-console-v188';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1300,14 +1300,19 @@ function renderSiteMountStrip(session = getActiveSession()) {
 
 const SITE_REGISTER_PROMPTS = {
   local: [
-    '请为当前会话注册一个可预览的本地静态站点。',
+    '请为当前会话创建并注册一个可预览的完整 Web 服务。',
     '',
     '要求：',
-    '1. 检查当前工作目录是否已有可访问的静态站点产物。',
-    '2. 如果需要构建或整理，请把最终站点放到 dist、build、out、site、preview 或 web 其中一个目录，并确保目录中有 index.html。',
-    '3. 如果当前项目根目录本身就是静态站点，可以保留根目录 index.html。',
-    '4. 完成后不用让我手动填写路径；本控制台会在本轮结束后自动扫描并挂载到 /sites/<auto-slug>/，会话界面会出现跳转按钮。',
-    '5. 如果无法生成静态站点，请简短说明原因和缺少什么。'
+    '1. 不要只生成静态目录；请创建或整理成一个能持续运行的本地 Web 服务。',
+    '2. 服务必须监听 127.0.0.1 的空闲端口，不要直接监听公网地址。',
+    '3. 如果项目已有启动方式，请优先使用项目自己的 npm/pnpm/python/go 等启动脚本；没有则补齐最小可运行服务。',
+    '4. 页面需要能在反向代理子路径下工作：优先使用相对资源路径，或读取 X-Forwarded-Prefix；不要把资源硬编码到 /assets、/static 等根路径。',
+    '5. 启动后请确认本机 http://127.0.0.1:<port>/ 可以访问。',
+    '6. 找到可访问地址后，请在回复末尾输出下面这个精确格式，控制台会自动注册成 codex.ai.hehao.pro 的 /sites/<auto-slug>/ 子路径转发：',
+    '<codex-site-services>',
+    '[{"title":"站点名称","url":"http://127.0.0.1:3000/"}]',
+    '</codex-site-services>',
+    '7. 如果无法启动服务，请简短说明失败原因和缺少什么。'
   ].join('\n'),
   external: [
     '请把当前会话相关的已有 Web 访问地址注册到本会话的子站点导航页。',
