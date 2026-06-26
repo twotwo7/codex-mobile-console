@@ -18,7 +18,10 @@ if (existsSync(ENV_FILE)) {
     if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
     const index = trimmed.indexOf('=');
     const key = trimmed.slice(0, index).trim();
-    const value = trimmed.slice(index + 1).trim();
+    let value = trimmed.slice(index + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
     if (key) fileEnv[key] = value;
   }
 }
@@ -57,6 +60,32 @@ function joinUrl(base, key) {
 function ossResource(bucket, key) {
   const cleanKey = key.replace(/^\/+/, '');
   return cleanKey ? `/${bucket}/${cleanKey}` : `/${bucket}/`;
+}
+
+function ossHost() {
+  const bucket = env('ALI_OSS_BUCKET');
+  const endpoint = env('ALI_OSS_ENDPOINT');
+  if (!bucket || !endpoint) return '';
+  return `${bucket}.${endpoint.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
+}
+
+function signedOssUrl(key) {
+  const accessKeyId = env('ALI_OSS_ACCESS_KEY_ID');
+  const accessKeySecret = env('ALI_OSS_ACCESS_KEY_SECRET');
+  const bucket = env('ALI_OSS_BUCKET');
+  const host = ossHost();
+  if (!accessKeyId || !accessKeySecret || !bucket || !host) return '';
+  const days = Math.max(1, Number(env('ALI_OSS_SIGNED_URL_DAYS', '3650')) || 3650);
+  const expires = Math.floor(Date.now() / 1000) + days * 24 * 60 * 60;
+  const resource = ossResource(bucket, key);
+  const stringToSign = ['GET', '', '', String(expires), resource].join('\n');
+  const signature = createHmac('sha1', accessKeySecret).update(stringToSign).digest('base64');
+  const params = new URLSearchParams({
+    OSSAccessKeyId: accessKeyId,
+    Expires: String(expires),
+    Signature: signature
+  });
+  return `https://${host}/${key}?${params.toString()}`;
 }
 
 async function ossRequest({ method, key = '', body = Buffer.alloc(0), contentType = '', headers = {} }) {
@@ -100,7 +129,7 @@ async function createBucketIfRequested() {
   if (env('ALI_OSS_AUTO_CREATE_BUCKET', '0') !== '1') return false;
   const result = await ossRequest({
     method: 'PUT',
-    headers: { 'x-oss-acl': env('ALI_OSS_BUCKET_ACL', 'public-read') }
+    headers: { 'x-oss-acl': env('ALI_OSS_BUCKET_ACL', 'private') }
   });
   if (result.ok || result.status === 409) return true;
   throw new Error(`OSS bucket create failed ${result.status}: ${result.text}`);
@@ -108,12 +137,13 @@ async function createBucketIfRequested() {
 
 async function putOssObject({ key, body, contentType }) {
   if (env('ALI_OSS_DRY_RUN', '0') === '1') return false;
+  const objectAcl = env('ALI_OSS_OBJECT_ACL', '');
   const result = await ossRequest({
     method: 'PUT',
     key,
     body,
     contentType,
-    headers: { 'x-oss-object-acl': 'public-read' }
+    headers: objectAcl ? { 'x-oss-object-acl': objectAcl } : {}
   });
   if (!result.ok) throw new Error(`OSS upload failed ${result.status}: ${result.text}`);
   return true;
@@ -138,9 +168,10 @@ const bundleSha256 = createHash('sha256').update(bundle).digest('hex');
 
 const prefix = env('ALI_OSS_PREFIX', 'codex-mobile-console/releases').replace(/^\/+|\/+$/g, '');
 const publicBase = env('ALI_OSS_PUBLIC_BASE_URL');
+const useSignedUrls = env('ALI_OSS_SIGNED_URLS', '0') === '1';
 const bundleKey = `${prefix}/${bundleName}`;
 const manifestKey = `${prefix}/latest.json`;
-const bundleUrl = publicBase ? joinUrl(publicBase, bundleKey) : '';
+const bundleUrl = useSignedUrls ? signedOssUrl(bundleKey) : publicBase ? joinUrl(publicBase, bundleKey) : '';
 const manifest = {
   name: 'codex-mobile-console',
   version,
@@ -172,7 +203,7 @@ console.log(JSON.stringify({
   bundlePath,
   bundleSha256,
   manifestPath: path.join(releaseDir, 'latest.json'),
-  manifestUrl: publicBase ? joinUrl(publicBase, manifestKey) : '',
+  manifestUrl: useSignedUrls ? signedOssUrl(manifestKey) : publicBase ? joinUrl(publicBase, manifestKey) : '',
   bucketCreated,
   uploaded: uploadedBundle && uploadedManifest
 }, null, 2));
