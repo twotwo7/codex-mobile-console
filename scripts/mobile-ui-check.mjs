@@ -260,7 +260,10 @@ async function checkRunSettingsPanel(page, viewportName) {
   await page.waitForSelector('[data-settings-page="run"].active', { timeout: 5000 });
   await assertVisibleBox(page, '.codex-config-card', 'codex config card');
   await assertVisibleBox(page, '#runSettingsState', 'run settings summary');
-  await assertVisibleBox(page, '#defaultModelInput', 'default model input');
+  await assertVisibleBox(page, '#defaultModelSelect', 'default model select');
+  await page.selectOption('#defaultModelSelect', 'custom');
+  await assertVisibleBox(page, '#defaultModelCustomInput', 'default custom model input');
+  await page.selectOption('#defaultModelSelect', '');
   await page.locator('#defaultSandboxSelect').evaluate((node) => node.scrollIntoView({ block: 'center' }));
   await assertVisibleBox(page, '#defaultSandboxSelect', 'default sandbox select');
   const dims = await page.evaluate(() => ({
