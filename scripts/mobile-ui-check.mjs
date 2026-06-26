@@ -44,27 +44,6 @@ async function waitForActiveSession(page, sessionId) {
   }, sessionId, { timeout: 10000 });
 }
 
-async function ensureGoalCheckSession(page) {
-  const sessions = await api(page, '/api/sessions').catch(() => ({ sessions: [] }));
-  const existing = (sessions.sessions || []).find((session) => !session.trashedAt && !session.id?.startsWith?.('codex:'));
-  if (existing?.id) {
-    await page.evaluate((id) => localStorage.setItem('cmc.activeId', id), existing.id);
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForSelector('#appView:not([hidden])', { timeout: 10000 });
-    await waitForActiveSession(page, existing.id);
-    return { id: existing.id, temporary: false };
-  }
-  const created = await api(page, '/api/sessions', {
-    method: 'POST',
-    body: JSON.stringify({ title: 'UI check task panel', cwd: '/root/Projects' })
-  });
-  await page.evaluate((id) => localStorage.setItem('cmc.activeId', id), created.session.id);
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#appView:not([hidden])', { timeout: 10000 });
-  await waitForActiveSession(page, created.session.id);
-  return { id: created.session.id, temporary: true };
-}
-
 async function setFixture(page) {
   await page.setContent(`<!doctype html>
     <html lang="zh-CN">
@@ -83,7 +62,6 @@ async function setFixture(page) {
                 <div class="top-more">
                   <button class="top-more-button" type="button" aria-label="更多会话操作" aria-expanded="true">▾</button>
                   <div class="top-more-menu" role="menu">
-                    <button class="top-menu-item" type="button">任务面板</button>
                     <button class="top-menu-item" type="button">运行时信息</button>
                   </div>
                 </div>
@@ -115,7 +93,7 @@ async function setFixture(page) {
               <div class="message-images"><button type="button"><img alt="sample" src="${sampleImage()}"></button></div>
             </article>
             <article class="message assistant">
-              <div class="message-head"><span>ASSISTANT</span><span>6/7 22:31</span><div class="message-menu open"><button class="message-menu-button" type="button">⋯</button><div class="message-menu-popover"><button>应用到任务面板</button><button>复制</button></div></div></div>
+              <div class="message-head"><span>ASSISTANT</span><span>6/7 22:31</span><div class="message-menu open"><button class="message-menu-button" type="button">⋯</button><div class="message-menu-popover"><button>复制</button></div></div></div>
               <div class="message-summary">输出 · Markdown 示例</div>
               <div class="message-text"><h3>结论</h3><p><strong>建议</strong>优先处理布局。</p><div class="message-table-wrap"><table><thead><tr><th>方案</th><th>建议</th></tr></thead><tbody><tr><td>Playwright</td><td>立刻加</td></tr></tbody></table></div></div>
             </article>
@@ -180,27 +158,6 @@ async function checkSkillDialog(page) {
   await assertVisibleBox(page, '#skillDialog', 'skill dialog');
   await page.click('#closeSkillDialog');
   await page.waitForSelector('#skillDialog', { state: 'hidden', timeout: 5000 });
-}
-
-async function checkGoalDialog(page) {
-  const checkSession = await ensureGoalCheckSession(page);
-  await page.click('#topMoreButton');
-  await page.waitForSelector('#topMoreMenu:not([hidden])', { timeout: 5000 });
-  await page.locator('#sessionGoalButton').evaluate((button) => button.click());
-  await page.waitForSelector('#sessionGoalDialog[open]', { timeout: 5000 });
-  await assertVisibleBox(page, '#sessionGoalDialog', 'goal dialog');
-  await assertVisibleBox(page, '.goal-summary-card', 'goal summary card');
-  await assertVisibleBox(page, '#syncSessionGoal', 'goal ai button');
-  const manualOpen = await page.locator('.session-goal-manual[open]').count();
-  if (manualOpen) throw new Error('manual goal editor should be collapsed by default');
-  await page.click('#cancelSessionGoal');
-  await page.waitForSelector('#sessionGoalDialog', { state: 'hidden', timeout: 5000 });
-  if (checkSession.temporary) {
-    await api(page, `/api/sessions/${encodeURIComponent(checkSession.id)}`, {
-      method: 'DELETE',
-      body: JSON.stringify({ permanent: false })
-    }).catch(() => {});
-  }
 }
 
 function assertStableBox(before, after, label, tolerance = 1) {
@@ -341,7 +298,6 @@ async function run() {
       await checkRunSettingsPanel(page, viewport.name);
       await checkLongTitleMenu(page, viewport.name);
       await checkSkillDialog(page);
-      await checkGoalDialog(page);
       await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-app.png`), fullPage: true });
 
       await setFixture(page);

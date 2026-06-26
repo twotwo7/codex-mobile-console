@@ -181,17 +181,6 @@ export function createMessageView(actions) {
       popover.append(retry);
     }
 
-    if (message.role === 'assistant' && actions.canApplyGoal?.(message)) {
-      const applyGoal = document.createElement('button');
-      applyGoal.type = 'button';
-      applyGoal.textContent = '应用到任务面板';
-      applyGoal.addEventListener('click', () => {
-        popover.hidden = true;
-        actions.applyGoalFromMessage?.(message);
-      });
-      popover.append(applyGoal);
-    }
-
     if (!actions.isShareMode?.()) {
       const share = document.createElement('button');
       share.type = 'button';

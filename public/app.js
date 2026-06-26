@@ -4,11 +4,11 @@ import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
-import { createMessageView } from './message-view.js?v=16';
+import { createMessageView } from './message-view.js?v=17';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
-import { createSessionStateController } from './session-state.js?v=7';
+import { createSessionStateController } from './session-state.js?v=8';
 import { createSkillView } from './skill-view.js?v=3';
 import { createTopbarView } from './topbar-view.js?v=7';
 
@@ -74,7 +74,6 @@ const state = {
   skillDialogMode: 'quick',
   installPromptEvent: null,
   installStatus: '',
-  pendingGoalSyncSessionId: storageGet('cmc.pendingGoalSyncSessionId', ''),
   shareMode: false,
   shareSelectedKeys: new Set(),
   shareImageBlob: null,
@@ -95,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '171';
-const SW_CACHE_VERSION = 'codex-console-v188';
+const APP_ASSET_VERSION = '172';
+const SW_CACHE_VERSION = 'codex-console-v189';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -205,7 +204,6 @@ const el = {
   favoritesButton: document.querySelector('#favoritesButton'),
   messageDisplayButton: document.querySelector('#messageDisplayButton'),
   shareCaptureButton: document.querySelector('#shareCaptureButton'),
-  sessionGoalButton: document.querySelector('#sessionGoalButton'),
   collapseMessagesButton: document.querySelector('#collapseMessagesButton'),
   expandMessagesButton: document.querySelector('#expandMessagesButton'),
   runtimeButton: document.querySelector('#runtimeButton'),
@@ -298,14 +296,6 @@ const el = {
   sessionConfigForm: document.querySelector('#sessionConfigForm'),
   cancelSessionConfig: document.querySelector('#cancelSessionConfig'),
   sessionConfigState: document.querySelector('#sessionConfigState'),
-  sessionGoalDialog: document.querySelector('#sessionGoalDialog'),
-  sessionGoalForm: document.querySelector('#sessionGoalForm'),
-  cancelSessionGoal: document.querySelector('#cancelSessionGoal'),
-  sessionGoalSummary: document.querySelector('#sessionGoalSummary'),
-  sessionGoalState: document.querySelector('#sessionGoalState'),
-  insertSessionGoal: document.querySelector('#insertSessionGoal'),
-  syncSessionGoal: document.querySelector('#syncSessionGoal'),
-  clearSessionGoal: document.querySelector('#clearSessionGoal'),
   queueEditDialog: document.querySelector('#queueEditDialog'),
   queueEditForm: document.querySelector('#queueEditForm'),
   queueEditInput: document.querySelector('#queueEditInput'),
@@ -368,8 +358,6 @@ const promptActions = createPromptActions({
 });
 
 const messageView = createMessageView({
-  applyGoalFromMessage,
-  canApplyGoal: (message) => Boolean(extractGoalJson(message?.text || '')),
   getMessageCollapsed,
   getShareKey,
   isShareMode: () => state.shareMode,
@@ -1207,7 +1195,6 @@ function openSessionActionSheet(session) {
     appendSessionActionButton('永久删除', () => deleteSession(session), { danger: true });
   } else {
     appendSessionActionButton('任务详情', () => openTaskDetailDialog(session));
-    appendSessionActionButton('任务面板', () => openSessionGoalDialog(session));
     appendSessionActionButton('重命名', () => renameSession(session));
     appendSessionActionButton('编辑标签', () => editSessionTags(session));
     if (session.source !== 'codex') appendSessionActionButton('配置', () => openSessionConfigDialog(session));
@@ -3082,7 +3069,6 @@ function taskContinuationText(data = {}) {
   const harness = data.harness || {};
   const task = session.taskDetail || data.taskDetail || {};
   const run = harness.activeRun || task.run || session.lastRun || {};
-  const goal = normalizeGoal(session.goal || {});
   const failure = task.failure || (run.errorSummary ? { code: run.errorCode || '', summary: run.errorSummary } : null);
   const parts = [
     '请从旧会话继续完成任务。你现在处在一个新的 Codex 会话中，请先恢复上下文，再继续推进。',
@@ -3091,7 +3077,6 @@ function taskContinuationText(data = {}) {
     `工作目录：${session.cwd || '(未知)'}`,
     session.codexSessionId ? `旧 Codex 会话 ID：${session.codexSessionId}` : '',
     '',
-    goal.objective ? goalPromptText(goal) : '',
     run.promptSummary ? `最近任务输入：\n${run.promptSummary}` : '',
     failure ? `最近失败：${failure.code || 'unknown'}\n${failure.summary || ''}` : '',
     '',
@@ -3181,8 +3166,7 @@ async function continueTaskInNewSession(data = {}) {
   const payload = {
     title: `${source.title || 'Codex session'} 续接`,
     cwd: source.cwd || '/root/Projects',
-    ...normalizeRunConfig(source),
-    goal: normalizeGoal(source.goal || {})
+    ...normalizeRunConfig(source)
   };
   const buttons = [...el.taskDetailBody.querySelectorAll('button')];
   buttons.forEach((button) => {
@@ -3525,298 +3509,6 @@ async function loadCodexConfigSummary() {
   }
 }
 
-function normalizeGoal(goal = {}) {
-  const rawPlan = Array.isArray(goal.plan) ? goal.plan : [];
-  const plan = rawPlan
-    .map((item) => {
-      const text = typeof item === 'string' ? item : item?.text;
-      const status = typeof item === 'object' && ['todo', 'doing', 'done', 'blocked'].includes(item.status) ? item.status : 'todo';
-      return { text: String(text || '').trim(), status };
-    })
-    .filter((item) => item.text);
-  const risks = (Array.isArray(goal.risks) ? goal.risks : [])
-    .map((item) => String(item || '').trim())
-    .filter(Boolean);
-  return {
-    objective: String(goal.objective || '').trim(),
-    notes: String(goal.notes || '').trim(),
-    phase: String(goal.phase || '').trim(),
-    plan,
-    conclusion: String(goal.conclusion || '').trim(),
-    risks,
-    status: ['active', 'paused', 'complete'].includes(goal.status) ? goal.status : 'active',
-    updatedAt: goal.updatedAt || ''
-  };
-}
-
-function goalStatusText(status) {
-  if (status === 'complete') return '完成';
-  if (status === 'paused') return '暂存';
-  return '进行中';
-}
-
-function planStatusText(status) {
-  if (status === 'doing') return 'doing';
-  if (status === 'done') return 'done';
-  if (status === 'blocked') return 'blocked';
-  return 'todo';
-}
-
-function planTextFromItems(items = []) {
-  return items.map((item) => `[${planStatusText(item.status)}] ${item.text}`).join('\n');
-}
-
-function planItemsFromText(text = '') {
-  return String(text || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => {
-      const match = line.match(/^\[(todo|doing|done|blocked)\]\s*(.+)$/i);
-      return {
-        status: match ? match[1].toLowerCase() : 'todo',
-        text: match ? match[2].trim() : line
-      };
-    })
-    .filter((item) => item.text);
-}
-
-function goalFromForm() {
-  const form = el.sessionGoalForm;
-  return normalizeGoal({
-    objective: form.elements.objective.value,
-    notes: form.elements.notes.value,
-    status: form.elements.status.value,
-    phase: form.elements.phase.value,
-    plan: planItemsFromText(form.elements.planText.value),
-    conclusion: form.elements.conclusion.value,
-    risks: String(form.elements.risksText.value || '').split(/\r?\n/).map((item) => item.trim()).filter(Boolean)
-  });
-}
-
-function goalPromptText(goal = {}) {
-  const value = normalizeGoal(goal);
-  const lines = [
-    '当前任务面板：',
-    `目标：${value.objective || '(未填写)'}`,
-    `状态：${goalStatusText(value.status)}`,
-    value.phase ? `当前阶段：${value.phase}` : '',
-    value.plan.length ? `计划：\n${value.plan.map((item, index) => `${index + 1}. [${planStatusText(item.status)}] ${item.text}`).join('\n')}` : '',
-    value.conclusion ? `最近结论：\n${value.conclusion}` : '',
-    value.risks.length ? `风险/待确认：\n${value.risks.map((item) => `- ${item}`).join('\n')}` : '',
-    value.notes ? `备注：\n${value.notes}` : ''
-  ].filter(Boolean);
-  return lines.join('\n');
-}
-
-function goalSyncPromptText(goal = {}) {
-  return [
-    '请根据当前会话上下文，帮我生成或更新任务面板。',
-    '你需要先理解我当前要完成什么、已经做到哪里、下一步该做什么。',
-    '控制台会自动识别这个 JSON，并一键或自动应用到任务面板。',
-    '只输出一个 JSON 对象，不要输出 Markdown 代码块，不要添加解释文字。',
-    '字段要求：',
-    '{',
-    '  "objective": "当前目标",',
-    '  "status": "active|paused|complete",',
-    '  "phase": "当前阶段",',
-    '  "plan": [{"text":"计划项","status":"todo|doing|done|blocked"}],',
-    '  "conclusion": "最近结论",',
-    '  "risks": ["风险或待确认问题"],',
-    '  "notes": "必要补充"',
-    '}',
-    '',
-    '当前已有任务面板如下，请在此基础上更新：',
-    goalPromptText(goal)
-  ].join('\n');
-}
-
-function extractGoalJson(text = '') {
-  const value = String(text || '').trim();
-  if (!value || !value.includes('{') || !value.includes('}')) return null;
-  if (!/"(?:objective|status|phase|plan|conclusion|risks|notes)"\s*:/.test(value)) return null;
-  const candidates = [];
-  const fence = value.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fence?.[1]) candidates.push(fence[1].trim());
-  candidates.push(value);
-  const firstBrace = value.indexOf('{');
-  const lastBrace = value.lastIndexOf('}');
-  if (firstBrace >= 0 && lastBrace > firstBrace) candidates.push(value.slice(firstBrace, lastBrace + 1));
-
-  for (const candidate of candidates) {
-    try {
-      const parsed = JSON.parse(candidate);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-      const goal = normalizeGoal(parsed);
-      const hasUsefulContent = Boolean(
-        goal.objective || goal.phase || goal.conclusion || goal.notes || goal.plan.length || goal.risks.length
-      );
-      if (hasUsefulContent) return goal;
-    } catch {
-      // Try the next shape; assistant messages may include fenced or prefixed JSON.
-    }
-  }
-  return null;
-}
-
-function renderSessionGoalSummary(goal = {}) {
-  if (!el.sessionGoalSummary) return;
-  const value = normalizeGoal(goal);
-  const doneCount = value.plan.filter((item) => item.status === 'done').length;
-  el.sessionGoalSummary.innerHTML = `
-    <section class="goal-hero">
-      <span class="goal-section-label">当前目标</span>
-      <strong>${escapeHtml(value.objective || '还没有任务目标')}</strong>
-    </section>
-    <div class="goal-chip-row">
-      <span class="goal-status-dot ${escapeHtml(value.status)}" aria-hidden="true"></span>
-      <span>${escapeHtml(goalStatusText(value.status))}</span>
-      <span>${escapeHtml(value.phase || '未填写阶段')}</span>
-      <span>${value.plan.length ? `${doneCount}/${value.plan.length} 完成` : '暂无计划'}</span>
-      <span>${value.risks.length ? `${value.risks.length} 风险` : '无风险'}</span>
-    </div>
-    <section class="goal-section">
-      <span class="goal-section-label">计划</span>
-      <div class="goal-plan-list">
-        ${value.plan.length ? value.plan.map((item) => `
-          <div class="goal-plan-item ${escapeHtml(item.status)}">
-            <em>${escapeHtml(planStatusText(item.status))}</em>
-            <p>${escapeHtml(item.text)}</p>
-          </div>
-        `).join('') : '<p class="goal-empty">暂无计划项。</p>'}
-      </div>
-    </section>
-    <section class="goal-section">
-      <span class="goal-section-label">最近结论</span>
-      <p>${escapeHtml(value.conclusion || value.notes || '建议直接让 Codex 根据当前对话生成任务面板。')}</p>
-    </section>
-    ${value.risks.length ? `
-      <section class="goal-section">
-        <span class="goal-section-label">风险/待确认</span>
-        <div class="goal-risk-list">
-          ${value.risks.map((item) => `<p>${escapeHtml(item)}</p>`).join('')}
-        </div>
-      </section>
-    ` : ''}
-  `;
-}
-
-function openSessionGoalDialog(session = getActiveSession()) {
-  if (!session?.id || !el.sessionGoalDialog || !el.sessionGoalForm) return;
-  const goal = normalizeGoal(session.goal || {});
-  el.sessionGoalForm.dataset.sessionId = session.id;
-  el.sessionGoalForm.elements.objective.value = goal.objective;
-  el.sessionGoalForm.elements.notes.value = goal.notes;
-  el.sessionGoalForm.elements.status.value = goal.status;
-  el.sessionGoalForm.elements.phase.value = goal.phase;
-  el.sessionGoalForm.elements.planText.value = planTextFromItems(goal.plan);
-  el.sessionGoalForm.elements.conclusion.value = goal.conclusion;
-  el.sessionGoalForm.elements.risksText.value = goal.risks.join('\n');
-  renderSessionGoalSummary(goal);
-  el.sessionGoalState.textContent = goal.updatedAt
-    ? `${goalStatusText(goal.status)} · 更新 ${formatTime(goal.updatedAt)}`
-    : '推荐让 Codex 先生成，再按结果保存。';
-  openModal(el.sessionGoalDialog);
-}
-
-async function saveSessionGoal(event, overrideGoal = null) {
-  event?.preventDefault?.();
-  const sessionId = el.sessionGoalForm?.dataset.sessionId || state.activeId || '';
-  if (!sessionId) return;
-  const formGoal = overrideGoal || goalFromForm();
-  el.sessionGoalState.textContent = '保存中...';
-  try {
-    await saveGoalForSession(sessionId, formGoal);
-    renderSessionGoalSummary(formGoal);
-    el.sessionGoalState.textContent = '已保存。';
-    if (!overrideGoal) closeModal(el.sessionGoalDialog);
-  } catch (error) {
-    el.sessionGoalState.textContent = error.message || '保存失败';
-  }
-}
-
-async function saveGoalForSession(sessionId, goal) {
-  const formGoal = normalizeGoal(goal);
-  const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {
-    method: 'PATCH',
-    body: JSON.stringify({ goal: formGoal })
-  });
-  if (data.session) mergeSessionSnapshot(data.session);
-  saveSessionCache();
-  renderSessions();
-  renderActive({ messages: false });
-  return data.session || null;
-}
-
-async function applyGoalFromMessage(message, options = {}) {
-  const sessionId = options.sessionId || state.activeId || '';
-  const goal = extractGoalJson(message?.text || '');
-  if (!sessionId || !goal) {
-    if (!options.silent) alert('这条消息没有识别到可应用的任务面板 JSON。');
-    return false;
-  }
-  try {
-    await saveGoalForSession(sessionId, goal);
-    if (el.sessionGoalDialog?.open && (el.sessionGoalForm?.dataset.sessionId || state.activeId) === sessionId) {
-      renderSessionGoalSummary(goal);
-      if (el.sessionGoalState) el.sessionGoalState.textContent = '已从 Codex 结果应用。';
-    }
-    if (!options.silent) {
-      upsertMessage(sessionId, {
-        at: new Date().toISOString(),
-        role: 'system',
-        text: '任务面板已根据这条 Codex 结果更新。'
-      });
-    }
-    return true;
-  } catch (error) {
-    if (!options.silent) alert(error.message || '应用任务面板失败');
-    return false;
-  }
-}
-
-function maybeAutoApplyGoalResult(sessionId, message) {
-  if (!state.pendingGoalSyncSessionId || state.pendingGoalSyncSessionId !== sessionId) return;
-  if (message?.role !== 'assistant') return;
-  const text = String(message.text || '');
-  const goal = extractGoalJson(message.text || '');
-  if (!goal && /"(?:objective|status|phase|plan|conclusion|risks|notes)"\s*:/.test(text)) return;
-  state.pendingGoalSyncSessionId = '';
-  storageSet('cmc.pendingGoalSyncSessionId', '');
-  if (!goal) {
-    upsertMessage(sessionId, {
-      at: new Date().toISOString(),
-      role: 'system',
-      text: '没有识别到可自动应用的任务面板 JSON；可以让 Codex 重新生成，或从消息菜单手动应用。'
-    });
-    return;
-  }
-  applyGoalFromMessage(message, { sessionId, silent: true }).then((applied) => {
-    if (!applied) return;
-    upsertMessage(sessionId, {
-      at: new Date().toISOString(),
-      role: 'system',
-      text: '任务面板已自动更新。'
-    });
-  });
-}
-
-function insertCurrentSessionGoal() {
-  insertPromptText(goalPromptText(goalFromForm()));
-  closeModal(el.sessionGoalDialog);
-}
-
-function insertGoalSyncPrompt() {
-  const sessionId = state.activeId || '';
-  if (sessionId) {
-    state.pendingGoalSyncSessionId = sessionId;
-    storageSet('cmc.pendingGoalSyncSessionId', sessionId);
-  }
-  if (el.sessionGoalState) el.sessionGoalState.textContent = '已发送给 Codex，返回 JSON 后会自动更新任务面板。';
-  promptActions.sendPrompt(goalSyncPromptText(goalFromForm()), { keepInput: true });
-  closeModal(el.sessionGoalDialog);
-}
-
 function insertPromptText(text) {
   const value = el.promptInput.value || '';
   const start = el.promptInput.selectionStart ?? value.length;
@@ -3901,8 +3593,6 @@ function upsertMessage(sessionId, message) {
 
   const sessionChanged = applySessionStatusFromMessage(sessionId, renderedMessage, messages);
   if (sessionChanged) renderSessions();
-  maybeAutoApplyGoalResult(sessionId, renderedMessage);
-
   if (sessionId === state.activeId) {
     const stickToBottom = isNewMessage ? shouldFollowNewMessage(sessionId) : shouldStickToBottom(sessionId);
     if (state.messageDisplayMode === 'brief') {
@@ -3950,7 +3640,6 @@ function updateMessage(sessionId, message) {
   messageScheduler.scheduleSave(sessionId);
   const sessionChanged = applySessionStatusFromMessage(sessionId, updatedMessage, messages);
   if (sessionChanged) renderSessions();
-  maybeAutoApplyGoalResult(sessionId, updatedMessage);
   if (sessionId === state.activeId) {
     if (state.messageDisplayMode === 'brief') {
       messageScheduler.scheduleRender(sessionId, { stickToBottom: shouldStickToBottom(sessionId) });
@@ -4639,11 +4328,6 @@ el.shareCaptureButton?.addEventListener('click', async () => {
 
 el.smartTagSessionsButton?.addEventListener('click', inferSessionTags);
 
-el.sessionGoalButton?.addEventListener('click', () => {
-  closeTopMoreMenu();
-  openSessionGoalDialog();
-});
-
 el.collapseMessagesButton.addEventListener('click', () => {
   setAllConversationMessagesCollapsed(true);
 });
@@ -4775,22 +4459,6 @@ el.runtimeButton.addEventListener('click', () => {
 el.closeRuntimeDialog.addEventListener('click', closeRuntimeDialog);
 el.cancelSessionConfig?.addEventListener('click', () => closeModal(el.sessionConfigDialog));
 el.sessionConfigForm?.addEventListener('submit', saveSessionConfig);
-el.cancelSessionGoal?.addEventListener('click', () => closeModal(el.sessionGoalDialog));
-el.sessionGoalForm?.addEventListener('submit', saveSessionGoal);
-el.insertSessionGoal?.addEventListener('click', insertCurrentSessionGoal);
-el.syncSessionGoal?.addEventListener('click', insertGoalSyncPrompt);
-el.clearSessionGoal?.addEventListener('click', () => {
-  el.sessionGoalForm.elements.objective.value = '';
-  el.sessionGoalForm.elements.notes.value = '';
-  el.sessionGoalForm.elements.status.value = 'paused';
-  el.sessionGoalForm.elements.phase.value = '';
-  el.sessionGoalForm.elements.planText.value = '';
-  el.sessionGoalForm.elements.conclusion.value = '';
-  el.sessionGoalForm.elements.risksText.value = '';
-  const emptyGoal = { objective: '', notes: '', status: 'paused', phase: '', plan: [], conclusion: '', risks: [] };
-  renderSessionGoalSummary(emptyGoal);
-  saveSessionGoal(null, emptyGoal);
-});
 el.runtimeDialog.addEventListener('close', () => {
   clearInterval(state.runtimeTimer);
   state.runtimeTimer = null;

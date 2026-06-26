@@ -288,46 +288,6 @@ async function codexConfigSummary() {
   };
 }
 
-function normalizeSessionGoal(value = {}, current = {}) {
-  const objective = cleanShortString(value.objective ?? current.objective ?? '', 500);
-  const notes = String(value.notes ?? current.notes ?? '').trim().slice(0, 4000);
-  const phase = cleanShortString(value.phase ?? current.phase ?? '', 120);
-  const conclusion = String(value.conclusion ?? current.conclusion ?? '').trim().slice(0, 2000);
-  const rawRisks = Array.isArray(value.risks) ? value.risks : (Array.isArray(current.risks) ? current.risks : []);
-  const risks = rawRisks
-    .map((item) => cleanShortString(item, 240))
-    .filter(Boolean)
-    .slice(0, 12);
-  const rawPlan = Array.isArray(value.plan) ? value.plan : (Array.isArray(current.plan) ? current.plan : []);
-  const plan = rawPlan
-    .map((item) => {
-      const text = typeof item === 'string' ? item : item?.text;
-      const statusValue = typeof item === 'object' ? item.status : '';
-      const status = ['todo', 'doing', 'done', 'blocked'].includes(statusValue) ? statusValue : 'todo';
-      return {
-        text: cleanShortString(text, 240),
-        status
-      };
-    })
-    .filter((item) => item.text)
-    .slice(0, 20);
-  const status = ['active', 'paused', 'complete'].includes(value.status)
-    ? value.status
-    : ['active', 'paused', 'complete'].includes(current.status) ? current.status : (objective ? 'active' : 'paused');
-  const updatedAt = value.updatedAt || current.updatedAt || '';
-  const hasContent = objective || notes || phase || conclusion || risks.length || plan.length;
-  return {
-    objective,
-    notes,
-    phase,
-    plan,
-    conclusion,
-    risks,
-    status,
-    updatedAt: hasContent ? updatedAt || nowIso() : ''
-  };
-}
-
 function clampInteger(value, min, max, fallback) {
   const next = Number(value);
   if (!Number.isFinite(next)) return fallback;
@@ -474,14 +434,9 @@ function inferSessionTags(session) {
   const title = String(session.title || '').toLowerCase();
   const cwd = String(session.cwd || '');
   const base = path.basename(cwd).trim();
-  const goal = session.goal || {};
   const text = [
     title,
-    cwd.toLowerCase(),
-    String(goal.objective || '').toLowerCase(),
-    String(goal.phase || '').toLowerCase(),
-    String(goal.conclusion || '').toLowerCase(),
-    String(goal.notes || '').toLowerCase()
+    cwd.toLowerCase()
   ].join(' ');
   const keywordMap = [
     ['购物', ['购物', '买', '价格', '京东', '淘宝', '苏宁', '商品', '品牌', '好物', '调研', '冰箱', '手机', '笔记本', '电脑', '数码', '烘干机', '洗衣', '家电']],
@@ -489,7 +444,7 @@ function inferSessionTags(session) {
     ['开发平台', ['codex', 'console', '平台', '控制台', '开发平台', '开发工具', 'github', 'api', '插件', 'skill', 'skills']],
     ['服务器维护', ['服务器', '部署', '域名', 'https', 'caddy', 'nginx', 'systemd', '端口', '服务', '重启', '运维', 'ssh']],
     ['娱乐网站', ['娱乐', '视频', 'youtube', '游戏', '旅行', '旅游', '活动', '世界杯', '音乐', '影视', '上饶', '北海']],
-    ['工作项目', ['客户', '业务', '项目', 'crm', '后台', '管理', '报表', '任务面板']],
+    ['工作项目', ['客户', '业务', '项目', 'crm', '后台', '管理', '报表']],
     ['个人工具', ['工具', '效率', '自动化', '脚本', '快捷', '本机']],
     ['内容创作', ['图片', '截图', '分享', 'markdown', '表格', '文案', '生成', '编辑']],
     ['问题排查', ['bug', '修复', '报错', '失败', '卡死', '卡顿', '性能', '重试', '恢复']],
@@ -1341,7 +1296,6 @@ function sessionActivityAt(session) {
 
 function publicSession(session) {
   ensureSessionHarness(session);
-  const goal = normalizeSessionGoal(session.goal || {});
   const statusSummary = deriveSessionStatusSummary(session);
   const activeRun = activeRunRecord(session);
   const lastRun = latestRun(session);
@@ -1366,7 +1320,6 @@ function publicSession(session) {
     strictConfig: session.strictConfig === true,
     ignoreUserConfig: session.ignoreUserConfig === true,
     ignoreRules: session.ignoreRules === true,
-    goal,
     tags: normalizeSessionTags(session.tags || []),
     codexSessionId: session.codexSessionId || '',
     status: effectiveStatus,
@@ -1772,7 +1725,6 @@ function sessionView(session) {
 
 function publicExternalSession(session) {
   const codexSessionId = session.codexSessionId;
-  state.codexSessionGoals ||= {};
   state.codexSessionTags ||= {};
   return {
     id: `codex:${codexSessionId}`,
@@ -1789,7 +1741,6 @@ function publicExternalSession(session) {
     strictConfig: false,
     ignoreUserConfig: false,
     ignoreRules: false,
-    goal: normalizeSessionGoal(state.codexSessionGoals[codexSessionId] || {}),
     tags: normalizeSessionTags(state.codexSessionTags[codexSessionId] || []),
     codexSessionId,
     status: 'external',
@@ -3464,7 +3415,6 @@ async function importCodexSession(codexSessionId, options = {}) {
     model: '',
     sandbox: 'workspace-write',
     approval: 'on-request',
-    goal: normalizeSessionGoal(state.codexSessionGoals?.[codexSessionId] || {}),
     tags: normalizeSessionTags(state.codexSessionTags?.[codexSessionId] || []),
     codexSessionId,
     status: 'idle',
@@ -4411,7 +4361,6 @@ async function handleApi(req, res, url) {
       title,
       cwd,
       ...sessionConfig,
-      goal: normalizeSessionGoal(body.goal || {}),
       tags: normalizeSessionTags(body.tags || []),
       codexSessionId: '',
       status: 'idle',
@@ -4488,10 +4437,9 @@ async function handleApi(req, res, url) {
     const sessionId = decodeURIComponent(sessionMatch[1]);
     const body = await readJson(req);
     const hasConfigPatch = body.config && typeof body.config === 'object';
-    const hasGoalPatch = body.goal && typeof body.goal === 'object';
     const hasTagsPatch = body.tags !== undefined;
     const title = body.title === undefined ? '' : String(body.title || '').trim().slice(0, 80);
-    if (!hasConfigPatch && !hasGoalPatch && !hasTagsPatch && !title) return json(res, 400, { error: 'empty_patch' });
+    if (!hasConfigPatch && !hasTagsPatch && !title) return json(res, 400, { error: 'empty_patch' });
 
     if (sessionId.startsWith('codex:')) {
       if (hasConfigPatch) return json(res, 400, { error: 'external_session_config_readonly' });
@@ -4505,10 +4453,6 @@ async function handleApi(req, res, url) {
             session.updatedAt = nowIso();
           }
         }
-      }
-      if (hasGoalPatch) {
-        state.codexSessionGoals ||= {};
-        state.codexSessionGoals[codexSessionId] = normalizeSessionGoal(body.goal, state.codexSessionGoals[codexSessionId] || {});
       }
       if (hasTagsPatch) {
         state.codexSessionTags ||= {};
@@ -4525,9 +4469,8 @@ async function handleApi(req, res, url) {
     if (!session) return json(res, 404, { error: 'session_not_found' });
     if (title) session.title = title;
     if (hasConfigPatch) Object.assign(session, normalizeSessionConfig(body.config, session));
-    if (hasGoalPatch) session.goal = normalizeSessionGoal(body.goal, session.goal || {});
     if (hasTagsPatch) session.tags = normalizeSessionTags(body.tags || []);
-    if (title || hasConfigPatch || hasGoalPatch) session.updatedAt = nowIso();
+    if (title || hasConfigPatch) session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { session: publicSession(session) });
   }
@@ -4605,7 +4548,6 @@ async function handleApi(req, res, url) {
     session.strictConfig = sourceSession?.strictConfig === true || session.strictConfig === true;
     session.ignoreUserConfig = sourceSession?.ignoreUserConfig === true || session.ignoreUserConfig === true;
     session.ignoreRules = sourceSession?.ignoreRules === true || session.ignoreRules === true;
-    session.goal = normalizeSessionGoal(sourceSession?.goal || {}, session.goal || {});
     session.tags = normalizeSessionTags(sourceSession?.tags || session.tags || []);
     session.updatedAt = nowIso();
     scheduleSave();
