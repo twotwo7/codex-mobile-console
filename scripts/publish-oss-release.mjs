@@ -1,15 +1,30 @@
 #!/usr/bin/env node
 import { createHash, createHmac } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
+const ENV_FILE = process.env.ALI_OSS_ENV_FILE || path.join(ROOT, 'data', 'aliyun-oss.env');
+const fileEnv = {};
+
+if (existsSync(ENV_FILE)) {
+  const rawEnv = await readFile(ENV_FILE, 'utf8');
+  for (const line of rawEnv.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
+    const index = trimmed.indexOf('=');
+    const key = trimmed.slice(0, index).trim();
+    const value = trimmed.slice(index + 1).trim();
+    if (key) fileEnv[key] = value;
+  }
+}
 
 function env(name, fallback = '') {
-  return String(process.env[name] || fallback).trim();
+  return String(process.env[name] || fileEnv[name] || fallback).trim();
 }
 
 function run(command, args, options = {}) {
