@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '179';
-const SW_CACHE_VERSION = 'codex-console-v196';
+const APP_ASSET_VERSION = '180';
+const SW_CACHE_VERSION = 'codex-console-v197';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1656,14 +1656,6 @@ function toggleShareSelected(message, options = {}) {
   renderActive({ stickToBottom: false });
 }
 
-function selectRecentShareMessages(count = 6) {
-  state.shareSelectedKeys.clear();
-  for (const message of allShareableMessages().slice(-count)) {
-    state.shareSelectedKeys.add(getShareKey(message));
-  }
-  renderActive({ stickToBottom: false });
-}
-
 function updateShareBar() {
   el.shareCaptureButton?.setAttribute('aria-pressed', String(Boolean(state.shareMode)));
   el.shareBar?.remove();
@@ -1675,13 +1667,11 @@ function updateShareBar() {
   bar.style.setProperty('--prompt-bar-height', `${promptHeight}px`);
   const count = state.shareSelectedKeys.size;
   bar.innerHTML = `
-    <span>已选 ${count} 条</span>
-    <button type="button" data-share-action="recent">最近6条</button>
+    <span>已选 ${count}</span>
     <button type="button" data-share-action="clear">清空</button>
     <button type="button" data-share-action="cancel">取消</button>
-    <button type="button" data-share-action="generate" ${count ? '' : 'disabled'}>生成长图</button>
+    <button type="button" data-share-action="generate" ${count ? '' : 'disabled'}>生成</button>
   `;
-  bar.querySelector('[data-share-action="recent"]').addEventListener('click', () => selectRecentShareMessages(6));
   bar.querySelector('[data-share-action="clear"]').addEventListener('click', () => {
     state.shareSelectedKeys.clear();
     renderActive({ stickToBottom: false });
@@ -4395,8 +4385,7 @@ el.shareCaptureButton?.addEventListener('click', async () => {
   }
   state.shareMode = true;
   el.shareCaptureButton?.setAttribute('aria-pressed', 'true');
-  if (!state.shareSelectedKeys.size) selectRecentShareMessages(4);
-  else renderActive({ stickToBottom: false });
+  renderActive({ stickToBottom: false });
 });
 
 el.smartTagSessionsButton?.addEventListener('click', inferSessionTags);

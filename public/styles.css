@@ -2132,24 +2132,32 @@ button:disabled {
   right: 12px;
   bottom: calc(var(--prompt-bar-height, 96px) + 8px + env(safe-area-inset-bottom));
   z-index: 42;
-  display: grid;
-  grid-template-columns: auto repeat(4, max-content);
+  display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 8px 12px;
+  gap: 6px;
+  overflow-x: auto;
+  white-space: nowrap;
+  padding: 7px 10px;
   border: 1px solid var(--line);
-  border-radius: 14px;
+  border-radius: 999px;
   background: var(--surface);
   box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
+  scrollbar-width: none;
+}
+
+.share-bar::-webkit-scrollbar {
+  display: none;
 }
 
 .share-bar span {
+  flex: 0 0 auto;
   color: var(--muted);
   font-size: 12px;
   font-weight: 800;
 }
 
 .share-bar button {
+  flex: 0 0 auto;
   min-height: 30px;
   padding: 0 9px;
   border: 1px solid var(--line);
@@ -3465,12 +3473,9 @@ button:disabled {
   }
 
   .share-bar {
-    grid-template-columns: auto repeat(2, minmax(0, 1fr));
-    gap: 6px;
-  }
-
-  .share-bar span {
-    grid-column: 1 / -1;
+    left: 10px;
+    right: 10px;
+    padding: 6px 8px;
   }
 
   .share-bar button {
