@@ -38,6 +38,8 @@ const MAX_SESSION_RUNS = 200;
 const MAX_RUN_EVENTS = 80;
 const MAX_AUDIT_EVENTS = 200;
 const SMART_TAG_RULE_VERSION = 4;
+const COMMAND_KILL_GRACE_MS = 3000;
+const CODEX_UPGRADE_TIMEOUT_MS = 10 * 60 * 1000;
 
 const contentTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -81,6 +83,33 @@ let skillMaintenanceTimer = null;
 let skillRegistryFileMtimeMs = 0;
 let codexUpgradeTask = null;
 let appUpdateTask = null;
+
+function commandPath() {
+  const fallback = `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${CODEX_BIN_DIR}`;
+  const value = process.env.PATH || fallback;
+  return value.split(path.delimiter).includes(CODEX_BIN_DIR) ? value : `${value}${path.delimiter}${CODEX_BIN_DIR}`;
+}
+
+function commandEnv() {
+  return {
+    ...process.env,
+    PATH: commandPath()
+  };
+}
+
+function terminateChildProcess(child, signal = 'SIGTERM') {
+  if (!child) return;
+  try {
+    if (child.pid && process.platform !== 'win32') process.kill(-child.pid, signal);
+    else child.kill(signal);
+  } catch {
+    try {
+      child.kill(signal);
+    } catch {
+      // Best effort. The close/error handler reconciles final state.
+    }
+  }
+}
 
 async function exists(file) {
   try {
@@ -1866,35 +1895,45 @@ async function serviceRuntimeInfo() {
 }
 
 function runCommand(command, args = [], options = {}) {
-  const timeoutMs = Number(options.timeoutMs || 8000);
+  const timeoutMs = Math.max(1, Number(options.timeoutMs || 8000));
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: options.cwd || __dirname,
-      env: {
-        ...process.env,
-        PATH: process.env.PATH || `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${CODEX_BIN_DIR}`
-      },
+      detached: process.platform !== 'win32',
+      env: commandEnv(),
       stdio: ['ignore', 'pipe', 'pipe']
     });
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let timedOut = false;
+    let killTimer = null;
     const finish = (result) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(killTimer);
+      const code = timedOut ? 124 : result.code;
+      const signal = timedOut ? 'timeout' : result.signal || '';
       resolve({
-        ok: result.code === 0,
-        code: result.code,
-        signal: result.signal || '',
+        ok: !timedOut && result.code === 0,
+        code,
+        signal,
         stdout: stdout.trim(),
         stderr: stderr.trim()
       });
     };
     const timer = setTimeout(() => {
-      child.kill('SIGTERM');
-      finish({ code: 124, signal: 'timeout' });
+      timedOut = true;
+      stderr += `\nCommand timed out after ${timeoutMs}ms.`;
+      terminateChildProcess(child, 'SIGTERM');
+      killTimer = setTimeout(() => {
+        terminateChildProcess(child, 'SIGKILL');
+        finish({ code: 124, signal: 'timeout' });
+      }, COMMAND_KILL_GRACE_MS);
+      killTimer.unref?.();
     }, timeoutMs);
+    timer.unref?.();
     child.stdout.on('data', (chunk) => {
       stdout += chunk.toString();
       if (stdout.length > 20000) stdout = stdout.slice(-20000);
@@ -1999,39 +2038,60 @@ async function startCodexUpgrade() {
     currentVersion: before.currentVersion || '',
     target: 'latest',
     code: null,
+    signal: '',
+    timeoutMs: CODEX_UPGRADE_TIMEOUT_MS,
     log: '',
     restart: null
   };
   const task = codexUpgradeTask;
   const child = spawn('npm', ['install', '-g', '@openai/codex@latest'], {
     cwd: __dirname,
-    env: {
-      ...process.env,
-      PATH: process.env.PATH || `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${CODEX_BIN_DIR}`
-    },
+    detached: process.platform !== 'win32',
+    env: commandEnv(),
     stdio: ['ignore', 'pipe', 'pipe']
   });
+  let settled = false;
+  let timedOut = false;
+  let killTimer = null;
   const append = (chunk) => {
     task.log += chunk.toString();
     if (task.log.length > 20000) task.log = task.log.slice(-20000);
   };
-  child.stdout.on('data', append);
-  child.stderr.on('data', append);
-  child.on('error', (error) => {
-    task.status = 'failed';
+  const finish = async (code, signal = '') => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timeoutTimer);
+    clearTimeout(killTimer);
+    task.code = timedOut ? 124 : code;
+    task.signal = timedOut ? 'timeout' : signal || '';
     task.finishedAt = nowIso();
-    task.log += `\n${error.message || error}`;
-  });
-  child.on('close', async (code) => {
-    task.code = code;
-    task.finishedAt = nowIso();
-    if (code === 0) {
+    if (!timedOut && code === 0) {
       task.status = 'finished';
       task.after = await codexVersionInfo({ latest: false }).catch(() => null);
       task.restart = await requestServiceRestart('codex-upgrade').catch((error) => ({ error: error.message || String(error) }));
     } else {
       task.status = 'failed';
     }
+  };
+  const timeoutTimer = setTimeout(() => {
+    timedOut = true;
+    append(`\nCodex upgrade timed out after ${CODEX_UPGRADE_TIMEOUT_MS}ms.`);
+    terminateChildProcess(child, 'SIGTERM');
+    killTimer = setTimeout(() => {
+      terminateChildProcess(child, 'SIGKILL');
+      finish(124, 'timeout');
+    }, COMMAND_KILL_GRACE_MS);
+    killTimer.unref?.();
+  }, CODEX_UPGRADE_TIMEOUT_MS);
+  timeoutTimer.unref?.();
+  child.stdout.on('data', append);
+  child.stderr.on('data', append);
+  child.on('error', (error) => {
+    append(`\n${error.message || error}`);
+    finish(127, 'error');
+  });
+  child.on('close', (code, signal) => {
+    finish(code, signal);
   });
   return task;
 }
@@ -3571,29 +3631,11 @@ function stopRunningSession(session) {
   });
   broadcastSession(session);
 
-  try {
-    if (child.pid) process.kill(-child.pid, 'SIGTERM');
-    else child.kill('SIGTERM');
-  } catch {
-    try {
-      child.kill('SIGTERM');
-    } catch {
-      // The close handler will reconcile status if the process is already gone.
-    }
-  }
+  terminateChildProcess(child, 'SIGTERM');
 
   setTimeout(() => {
     if (!running.has(session.id)) return;
-    try {
-      if (child.pid) process.kill(-child.pid, 'SIGKILL');
-      else child.kill('SIGKILL');
-    } catch {
-      try {
-        child.kill('SIGKILL');
-      } catch {
-        // Best effort; the running map is cleaned up by close/error handlers.
-      }
-    }
+    terminateChildProcess(child, 'SIGKILL');
   }, 3000).unref();
 
   scheduleSave();

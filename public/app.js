@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '160';
-const SW_CACHE_VERSION = 'codex-console-v177';
+const APP_ASSET_VERSION = '161';
+const SW_CACHE_VERSION = 'codex-console-v178';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -4337,8 +4337,6 @@ function openActiveSessionConfigDialog() {
   openSessionConfigDialog(session);
 }
 
-window.cmcOpenActiveSessionConfig = openActiveSessionConfigDialog;
-
 async function saveSessionConfig(event) {
   event.preventDefault();
   const sessionId = el.sessionConfigForm?.dataset.sessionId || '';
@@ -4493,6 +4491,11 @@ el.topMoreButton.addEventListener('click', (event) => {
 
 el.topMoreMenu.addEventListener('click', (event) => {
   event.stopPropagation();
+});
+
+el.sessionConfigButton?.addEventListener('click', (event) => {
+  event.stopPropagation();
+  openActiveSessionConfigDialog();
 });
 
 el.topFilterButton.addEventListener('click', (event) => {
