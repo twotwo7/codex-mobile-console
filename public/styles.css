@@ -2127,13 +2127,20 @@ button:disabled {
 }
 
 .share-bar {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: calc(var(--prompt-bar-height, 96px) + 8px + env(safe-area-inset-bottom));
+  z-index: 42;
   display: grid;
   grid-template-columns: auto repeat(4, max-content);
   align-items: center;
   gap: 7px;
   padding: 8px 12px;
-  border-top: 1px solid var(--line);
-  background: var(--chrome);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.16);
 }
 
 .share-bar span {

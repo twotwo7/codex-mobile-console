@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '178';
-const SW_CACHE_VERSION = 'codex-console-v195';
+const APP_ASSET_VERSION = '179';
+const SW_CACHE_VERSION = 'codex-console-v196';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1671,6 +1671,8 @@ function updateShareBar() {
   if (!state.shareMode || !state.activeId || !el.promptForm) return;
   const bar = document.createElement('div');
   bar.className = 'share-bar';
+  const promptHeight = Math.max(86, Math.ceil(el.promptForm.getBoundingClientRect().height || 0));
+  bar.style.setProperty('--prompt-bar-height', `${promptHeight}px`);
   const count = state.shareSelectedKeys.size;
   bar.innerHTML = `
     <span>已选 ${count} 条</span>
@@ -1688,7 +1690,7 @@ function updateShareBar() {
   bar.querySelector('[data-share-action="generate"]').addEventListener('click', () => generateShareImage().catch((error) => {
     alert(error.message || '生成分享截图失败');
   }));
-  el.promptForm.before(bar);
+  el.promptForm.parentElement?.append(bar);
   el.shareBar = bar;
 }
 
@@ -4380,6 +4382,10 @@ el.messageDisplayButton.addEventListener('click', () => {
 
 el.shareCaptureButton?.addEventListener('click', async () => {
   closeTopMoreMenu();
+  if (state.shareMode) {
+    setShareMode(false);
+    return;
+  }
   if (!allShareableMessages().length && state.activeId) {
     await loadSession(state.activeId, { full: true, showLoading: false });
   }
