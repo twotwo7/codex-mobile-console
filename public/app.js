@@ -95,8 +95,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '167';
-const SW_CACHE_VERSION = 'codex-console-v184';
+const APP_ASSET_VERSION = '168';
+const SW_CACHE_VERSION = 'codex-console-v185';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -182,6 +182,7 @@ const el = {
   smartTagSessionsButton: document.querySelector('#smartTagSessionsButton'),
   skillManagerButton: document.querySelector('#skillManagerButton'),
   logoutButton: document.querySelector('#logoutButton'),
+  topbar: document.querySelector('.topbar'),
   activeTitle: document.querySelector('#activeTitle'),
   activeMeta: document.querySelector('#activeMeta'),
   connectionBadge: document.querySelector('#connectionBadge'),
@@ -1265,6 +1266,7 @@ function renderActiveStatus(session = getActiveSession()) {
 function renderSiteMountStrip(session = getActiveSession()) {
   if (!el.siteMountStrip) return;
   const mounts = Array.isArray(session?.siteMounts) ? session.siteMounts : [];
+  if (el.topbar) el.siteMountStrip.style.setProperty('--topbar-height', `${el.topbar.offsetHeight}px`);
   el.siteMountStrip.hidden = mounts.length === 0;
   el.siteMountStrip.textContent = '';
   el.siteMountStrip.classList.toggle('collapsed', state.siteMountStripCollapsed);
