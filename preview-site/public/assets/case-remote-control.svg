@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 780" role="img" aria-labelledby="title desc">
+  <title id="title">手机接管 Codex 长任务案例</title>
+  <desc id="desc">展示手机端控制 Codex 修复问题、查看进度和发送补充指令的界面。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#18212a"/>
+      <stop offset="0.55" stop-color="#0e1318"/>
+      <stop offset="1" stop-color="#18302e"/>
+    </linearGradient>
+    <linearGradient id="mint" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7cf5df"/>
+      <stop offset="1" stop-color="#56c7ef"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="28" stdDeviation="26" flood-color="#000000" flood-opacity="0.42"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="780" rx="42" fill="url(#bg)"/>
+  <path d="M0 116h1200" stroke="#ffffff" stroke-opacity=".09"/>
+  <path d="M100 660c240-64 410-74 612-8 138 45 249 45 388-18" fill="none" stroke="#7cf5df" stroke-opacity=".16" stroke-width="3"/>
+
+  <g transform="translate(80 84)">
+    <text x="0" y="0" fill="#7cf5df" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="20" font-weight="800">ON THE PHONE</text>
+    <text x="0" y="58" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="58" font-weight="900">客户临时发来截图，</text>
+    <text x="0" y="124" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="58" font-weight="900">手机直接让 Codex 改。</text>
+    <text x="0" y="176" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="25">会话在服务器上继续跑，手机负责发指令、看状态、停命令。</text>
+  </g>
+
+  <g transform="translate(118 328)">
+    <rect width="440" height="276" rx="28" fill="#121920" stroke="#ffffff" stroke-opacity=".12"/>
+    <text x="30" y="54" fill="#82aaff" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="22" font-weight="900">案例任务</text>
+    <text x="30" y="102" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="30" font-weight="850">给茶叶详情页加图片识别入口</text>
+    <text x="30" y="148" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="22">客户发来茶饼截图，希望能边看图边问 AI。</text>
+    <g transform="translate(30 188)">
+      <rect width="128" height="42" rx="21" fill="#203040"/>
+      <circle cx="27" cy="21" r="8" fill="#61d7c7"/>
+      <text x="46" y="28" fill="#d9e2dc" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="800">图片上传</text>
+      <rect x="146" width="118" height="42" rx="21" fill="#302836"/>
+      <circle cx="173" cy="21" r="8" fill="#ff6b76"/>
+      <text x="192" y="28" fill="#d9e2dc" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="800">可停止</text>
+    </g>
+  </g>
+
+  <g transform="translate(692 64)" filter="url(#shadow)">
+    <rect width="356" height="656" rx="44" fill="#0b0f13" stroke="#ffffff" stroke-opacity=".16" stroke-width="2"/>
+    <rect x="22" y="24" width="312" height="608" rx="30" fill="#11171d"/>
+    <g transform="translate(44 58)">
+      <circle cx="17" cy="17" r="17" fill="#25313d"/>
+      <text x="50" y="23" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="20" font-weight="900">茶叶商城 / mobile</text>
+      <circle cx="278" cy="16" r="13" fill="#ff6b76"/>
+      <rect x="269" y="7" width="18" height="18" rx="5" fill="#ff8d95"/>
+    </g>
+    <g transform="translate(44 118)">
+      <rect width="268" height="74" rx="18" fill="#17222b"/>
+      <text x="18" y="31" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="16">你</text>
+      <text x="18" y="58" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18">把截图识别入口放到商品页。</text>
+      <rect y="92" width="268" height="118" rx="18" fill="#0f141a" stroke="#61d7c7" stroke-opacity=".28"/>
+      <text x="18" y="124" fill="#61d7c7" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="900">Codex 正在处理</text>
+      <text x="18" y="154" fill="#d9e2dc" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="17">1. 检查图片上传组件</text>
+      <text x="18" y="184" fill="#d9e2dc" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="17">2. 增加移动端预览弹层</text>
+      <rect y="232" width="268" height="88" rx="18" fill="#17222b"/>
+      <text x="18" y="265" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="16">补充</text>
+      <text x="18" y="292" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18">右上角加关闭按钮，别全屏。</text>
+    </g>
+    <g transform="translate(44 525)">
+      <rect width="172" height="50" rx="18" fill="#0d1218" stroke="#ffffff" stroke-opacity=".13"/>
+      <text x="18" y="32" fill="#8b949e" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18">继续输入...</text>
+      <rect x="184" width="84" height="50" rx="18" fill="url(#mint)"/>
+      <text x="209" y="32" fill="#062522" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="900">发送</text>
+    </g>
+  </g>
+</svg>

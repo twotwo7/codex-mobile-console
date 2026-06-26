@@ -3,60 +3,140 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Codex Mobile Console</title>
+    <title>Codex Mobile Console - 手机里的 Codex 控制台</title>
     <meta name="description" content="Self-hosted mobile control panel for persistent Codex development sessions.">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
+    <header class="site-header" aria-label="站点导航">
+      <a class="brand" href="./" aria-label="Codex Mobile Console 首页">
+        <span class="brand-mark">C</span>
+        <span>Codex Mobile Console</span>
+      </a>
+      <nav>
+        <a href="#cases">案例</a>
+        <a href="#features">功能</a>
+        <a href="#install">部署</a>
+      </nav>
+    </header>
+
     <main>
       <section class="hero">
         <div class="hero-copy">
           <p class="eyebrow">Self-hosted Codex control</p>
-          <h1>Codex Mobile Console</h1>
-          <p class="lead">手机接管服务器里的 Codex 会话。看进度、补指令、切项目、停任务，不再靠移动 SSH 硬撑。</p>
+          <h1>手机接管<br>服务器里的<br>Codex。</h1>
+          <p class="lead">在路上也能看进度、补需求、切会话、停命令。Codex 留在服务器稳定运行，手机只负责友好地控制它。</p>
           <div class="actions">
-            <a class="primary" href="https://github.com/twotwo7/codex-mobile-console" target="_blank" rel="noreferrer">GitHub</a>
+            <a class="primary" href="https://github.com/twotwo7/codex-mobile-console" target="_blank" rel="noreferrer">查看 GitHub</a>
             <button id="copyInstall" type="button">复制安装命令</button>
           </div>
           <pre><code>curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash</code></pre>
         </div>
-        <div class="hero-media" aria-label="Codex Mobile Console mobile screenshots">
-          <img class="shot main-shot" src="assets/mobile-chat.png" alt="手机聊天界面截图">
-          <img class="shot side-shot" src="assets/mobile-sessions.png" alt="会话列表截图">
+        <figure class="hero-visual">
+          <img src="assets/case-remote-control.svg" alt="用手机查看 Codex 正在修复线上问题的案例界面">
+        </figure>
+      </section>
+
+      <section class="proof" aria-label="核心能力">
+        <div>
+          <strong>30 天</strong>
+          <span>本机安全会话</span>
+        </div>
+        <div>
+          <strong>多会话</strong>
+          <span>按目录、最近使用、收藏切换</span>
+        </div>
+        <div>
+          <strong>常驻</strong>
+          <span>终端断开后任务继续跑</span>
+        </div>
+        <div>
+          <strong>PWA</strong>
+          <span>手机浏览器即可使用</span>
         </div>
       </section>
 
-      <section class="workflow">
-        <p class="eyebrow">Designed for remote AI development</p>
-        <h2>Codex 继续在服务器上跑，手机只是控制面板。</h2>
-        <div class="steps">
+      <section id="cases" class="section">
+        <div class="section-head">
+          <p class="eyebrow">Real use cases</p>
+          <h2>图里就是日常会遇到的开发场景。</h2>
+          <p>不是远程 SSH 的小屏硬撑，而是把 Codex 的关键动作重新整理成适合手机操作的控制面板。</p>
+        </div>
+
+        <div class="case-grid">
+          <article class="case-item">
+            <img src="assets/case-queue.svg" alt="手机排队发送多个 Codex 开发任务的案例">
+            <div>
+              <p class="eyebrow">Queue</p>
+              <h3>灵感来了先排队，当前任务结束后自动接上。</h3>
+              <p>开会、通勤、吃饭时想到补充需求，直接放进队列；需要调整顺序时置顶或编辑。</p>
+            </div>
+          </article>
+
+          <article class="case-item reverse">
+            <img src="assets/case-runtime.svg" alt="Codex 运行时状态诊断界面案例">
+            <div>
+              <p class="eyebrow">Runtime</p>
+              <h3>状态不对时，一眼看到进程、队列和浏览器缓存。</h3>
+              <p>右上角状态、运行时面板、停止入口、恢复检测放在一起，避免任务完成后还误以为仍在运行。</p>
+            </div>
+          </article>
+
+          <article class="case-item">
+            <img src="assets/case-skills.svg" alt="Codex Skill 管理和快捷使用案例">
+            <div>
+              <p class="eyebrow">Skills</p>
+              <h3>常用能力沉淀成 Skill，输入时可以快速带入。</h3>
+              <p>Skill 管理异步扫描、本地缓存、变更提示，主聊天流程保持轻量稳定。</p>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section id="features" class="feature-band">
+        <div class="section-head compact">
+          <p class="eyebrow">Feature map</p>
+          <h2>围绕手机开发流做的功能，不是简单套壳终端。</h2>
+        </div>
+        <div class="feature-list">
           <div>
             <span>01</span>
-            <strong>保持会话</strong>
-            <p>终端断开不影响服务器上的 Codex 任务。</p>
+            <strong>会话持久化</strong>
+            <p>服务端管理 Codex 子进程，页面关闭、浏览器退后台、网络断开后仍可回到原会话。</p>
           </div>
           <div>
             <span>02</span>
-            <strong>随时补充</strong>
-            <p>手机打开 PWA，继续发送需求或排队下一条指令。</p>
+            <strong>移动端消息体验</strong>
+            <p>多行输入、图片上传、消息折叠、按轮查看、自动跟随底部，尽量减少手机屏幕浪费。</p>
           </div>
           <div>
             <span>03</span>
-            <strong>看见运行时</strong>
-            <p>查看进程、状态、缓存和运行中的任务。</p>
+            <strong>状态和安全控制</strong>
+            <p>可查看运行时、终止当前命令、回收站删除、30 天登录策略、仅本机绑定部署。</p>
+          </div>
+          <div>
+            <span>04</span>
+            <strong>自托管部署</strong>
+            <p>适合 VPS、NAS、家用主机或远程开发机，推荐放在 HTTPS、VPN 或访问控制后面。</p>
           </div>
         </div>
       </section>
 
-      <section class="detail">
-        <img src="assets/mobile-settings.png" alt="设置与存储截图">
+      <section id="install" class="install">
         <div>
-          <p class="eyebrow">Private by design</p>
-          <h2>适合 VPS、NAS、家用小主机和远程开发机。</h2>
-          <p>默认绑定 127.0.0.1，建议放在 HTTPS、VPN、Tailscale 或 Cloudflare Access 后面。它不是公开 SaaS，而是你的个人 Codex 控制台。</p>
+          <p class="eyebrow">Deploy once, use anywhere</p>
+          <h2>把它装在 Codex 所在的那台机器上。</h2>
+          <p>应用负责接管本机 Codex 会话、历史缓存、PWA 访问和运行时状态。你只需要在手机浏览器里打开自己的域名。</p>
+        </div>
+        <div class="install-panel">
+          <span>推荐入口</span>
+          <code>https://your-domain.example</code>
+          <p>反代到本机服务，开启 HTTPS，并加上访问控制。</p>
+          <a class="primary" href="https://github.com/twotwo7/codex-mobile-console" target="_blank" rel="noreferrer">去 GitHub 获取安装说明</a>
         </div>
       </section>
     </main>
+
     <script src="app.js" type="module"></script>
   </body>
 </html>

@@ -13,10 +13,20 @@ button?.addEventListener('click', async () => {
   }
 });
 
-const observer = new IntersectionObserver((entries) => {
-  for (const entry of entries) {
-    if (entry.isIntersecting) entry.target.classList.add('visible');
-  }
-}, { threshold: 0.16 });
+const revealTargets = document.querySelectorAll('.proof, .section-head, .case-item, .feature-list, .install');
 
-document.querySelectorAll('.workflow, .detail').forEach((node) => observer.observe(node));
+if ('IntersectionObserver' in window) {
+  revealTargets.forEach((node) => node.classList.add('reveal'));
+
+  const observer = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      entry.target.classList.add('visible');
+      observer.unobserve(entry.target);
+    }
+  }, { threshold: 0.14, rootMargin: '0px 0px -8% 0px' });
+
+  revealTargets.forEach((node) => observer.observe(node));
+} else {
+  revealTargets.forEach((node) => node.classList.add('visible'));
+}
