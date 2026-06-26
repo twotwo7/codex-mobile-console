@@ -907,8 +907,9 @@ button:disabled {
 }
 
 .site-mount-nav-link {
-  color: #d7f7de;
-  border-color: rgba(127, 215, 163, 0.45);
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-2));
 }
 
 .top-title {
