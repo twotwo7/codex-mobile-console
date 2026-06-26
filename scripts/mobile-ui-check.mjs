@@ -85,13 +85,13 @@ async function setFixture(page) {
                 </div>
               </div>
               <nav class="site-mount-strip" aria-label="子站点">
-                <button class="site-mount-toggle" type="button" aria-expanded="true" data-count="2" aria-label="站点 2"></button>
+                <button class="site-mount-toggle" type="button" aria-expanded="true" aria-label="站点 2"></button>
                 <div class="site-mount-popover" role="menu">
                   <button class="site-mount-register" type="button" role="menuitem">新增</button>
                   <a class="site-mount-link" href="#" role="menuitem">预览服务</a>
                 </div>
               </nav>
-              <button class="top-tool-button top-share-button" type="button" aria-label="生成分享截图"></button>
+              <button class="top-tool-button top-share-button" type="button" aria-label="生成分享截图" aria-pressed="true"></button>
             </div>
           </header>
           <section class="message-pane">

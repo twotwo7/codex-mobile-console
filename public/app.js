@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '175';
-const SW_CACHE_VERSION = 'codex-console-v192';
+const APP_ASSET_VERSION = '176';
+const SW_CACHE_VERSION = 'codex-console-v193';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1267,8 +1267,6 @@ function renderSiteMountStrip(session = getActiveSession()) {
   toggle.className = 'site-mount-toggle';
   toggle.type = 'button';
   toggle.textContent = '';
-  if (mounts.length) toggle.dataset.count = String(mounts.length);
-  else delete toggle.dataset.count;
   toggle.setAttribute('aria-expanded', String(!state.siteMountStripCollapsed));
   toggle.setAttribute('aria-label', mounts.length ? `站点 ${mounts.length}` : '注册站点');
   toggle.title = mounts.length ? `站点 ${mounts.length}` : '注册站点';
@@ -1641,6 +1639,7 @@ function selectedShareMessages() {
 
 function setShareMode(enabled) {
   state.shareMode = Boolean(enabled);
+  el.shareCaptureButton?.setAttribute('aria-pressed', String(state.shareMode));
   if (!state.shareMode) state.shareSelectedKeys.clear();
   messageView.closeMessageMenus();
   closeTopMenus();
@@ -1666,6 +1665,9 @@ function selectRecentShareMessages(count = 6) {
 }
 
 function updateShareBar() {
+  if (el.shareCaptureButton) {
+    el.shareCaptureButton.setAttribute('aria-pressed', String(Boolean(state.shareMode)));
+  }
   el.shareBar?.remove();
   el.shareBar = null;
   if (!state.shareMode || !state.activeId || !el.promptForm) return;
@@ -4391,6 +4393,7 @@ el.shareCaptureButton?.addEventListener('click', async () => {
     return;
   }
   state.shareMode = true;
+  el.shareCaptureButton?.setAttribute('aria-pressed', 'true');
   if (!state.shareSelectedKeys.size) selectRecentShareMessages(4);
   else renderActive({ stickToBottom: false });
 });
