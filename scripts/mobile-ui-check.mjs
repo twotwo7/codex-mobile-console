@@ -55,31 +55,43 @@ async function setFixture(page) {
       <body>
         <main class="workspace">
           <header class="topbar">
-            <button class="icon-button" type="button">☰</button>
-            <div class="top-title">
-              <div class="top-title-row">
-                <strong>移动端检查</strong>
-                <div class="top-more">
-                  <button class="top-more-button" type="button" aria-label="更多会话操作" aria-expanded="true">▾</button>
-                  <div class="top-more-menu" role="menu">
-                    <button class="top-menu-item" type="button">运行时信息</button>
+            <button class="icon-button top-drawer-button" type="button">☰</button>
+            <div class="top-main-row">
+              <div class="top-title">
+                <div class="top-title-row">
+                  <strong>移动端检查</strong>
+                  <div class="top-more">
+                    <button class="top-more-button" type="button" aria-label="更多会话操作" aria-expanded="true">▾</button>
+                    <div class="top-more-menu" role="menu">
+                      <button class="top-menu-item" type="button">运行时信息</button>
+                    </div>
                   </div>
                 </div>
-                <div class="top-more top-filter">
-                  <button class="top-more-button top-filter-button" type="button" aria-label="视图筛选" aria-expanded="false"></button>
-                  <div class="top-more-menu top-filter-menu" role="menu" hidden>
-                    <button class="top-menu-item active" type="button" role="menuitemcheckbox" aria-checked="true">已筛选收藏</button>
-                    <button class="top-menu-item active" type="button" role="menuitemcheckbox" aria-checked="true">结论视图开启</button>
-                    <button class="top-menu-item" type="button">折叠对话</button>
-                    <button class="top-menu-item" type="button">展开对话</button>
-                  </div>
+                <span>/root/Projects</span>
+              </div>
+              <div class="top-actions">
+                <span class="connection-badge" data-icon="online" title="在线"></span>
+                <button class="top-stop-button" type="button" aria-label="停止当前任务"><span aria-hidden="true"></span></button>
+              </div>
+            </div>
+            <div class="top-tool-row">
+              <div class="top-more top-filter">
+                <button class="top-tool-button top-filter-button" type="button" aria-label="视图筛选" aria-expanded="false"></button>
+                <div class="top-more-menu top-filter-menu" role="menu" hidden>
+                  <button class="top-menu-item active" type="button" role="menuitemcheckbox" aria-checked="true">已筛选收藏</button>
+                  <button class="top-menu-item active" type="button" role="menuitemcheckbox" aria-checked="true">结论视图开启</button>
+                  <button class="top-menu-item" type="button">折叠对话</button>
+                  <button class="top-menu-item" type="button">展开对话</button>
                 </div>
               </div>
-              <span>/root/Projects</span>
-            </div>
-            <div class="top-actions">
-              <span class="connection-badge" data-icon="online" title="在线"></span>
-              <button class="top-stop-button" type="button" aria-label="停止当前任务"><span aria-hidden="true"></span></button>
+              <nav class="site-mount-strip" aria-label="子站点">
+                <button class="site-mount-toggle" type="button" aria-expanded="true" data-count="2" aria-label="站点 2"></button>
+                <div class="site-mount-popover" role="menu">
+                  <button class="site-mount-register" type="button" role="menuitem">新增</button>
+                  <a class="site-mount-link" href="#" role="menuitem">预览服务</a>
+                </div>
+              </nav>
+              <button class="top-tool-button top-share-button" type="button" aria-label="生成分享截图"></button>
             </div>
           </header>
           <section class="message-pane">

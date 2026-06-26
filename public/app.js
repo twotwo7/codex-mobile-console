@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '174';
-const SW_CACHE_VERSION = 'codex-console-v191';
+const APP_ASSET_VERSION = '175';
+const SW_CACHE_VERSION = 'codex-console-v192';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1283,9 +1283,14 @@ function renderSiteMountStrip(session = getActiveSession()) {
   el.siteMountStrip.append(toggle);
   if (state.siteMountStripCollapsed) return;
 
+  const popover = document.createElement('div');
+  popover.className = 'site-mount-popover';
+  popover.setAttribute('role', 'menu');
+
   const register = document.createElement('button');
   register.className = 'site-mount-register';
   register.type = 'button';
+  register.setAttribute('role', 'menuitem');
   register.textContent = mounts.length ? '新增' : '新增站点';
   register.title = '注册 Web 服务或已有域名';
   register.addEventListener('click', (event) => {
@@ -1293,18 +1298,20 @@ function renderSiteMountStrip(session = getActiveSession()) {
     closeSiteMountStrip();
     openSiteRegisterDialog();
   });
-  el.siteMountStrip.append(register);
+  popover.append(register);
 
   for (const mount of mounts) {
     const link = document.createElement('a');
     link.className = 'site-mount-link';
+    link.setAttribute('role', 'menuitem');
     link.href = mount.url || `/sites/${mount.slug}/`;
     link.target = '_blank';
     link.rel = 'noopener';
     link.textContent = mount.title || mount.slug || '站点';
     link.title = link.href;
-    el.siteMountStrip.append(link);
+    popover.append(link);
   }
+  el.siteMountStrip.append(popover);
 }
 
 function closeSiteMountStrip() {
