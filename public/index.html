@@ -235,6 +235,10 @@
                   <button id="checkAppUpdateButton" class="ghost-button inline" type="button">检查</button>
                 </div>
                 <div id="appUpdatePanel" class="maintenance-copy">读取当前版本...</div>
+                <label class="settings-checkbox">
+                  <input id="autoAppUpdateToggle" type="checkbox">
+                  <span>自动更新 <small>空闲时自动检查并安全升级控制台。</small></span>
+                </label>
                 <div class="maintenance-actions">
                   <button id="updateAppButton" class="ghost-button inline danger" type="button">安全升级控制台</button>
                   <button id="rollbackAppButton" class="ghost-button inline" type="button">回滚上个版本</button>
@@ -690,6 +694,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=182" type="module"></script>
+    <script src="/app.js?v=183" type="module"></script>
   </body>
 </html>

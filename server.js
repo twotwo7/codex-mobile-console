@@ -34,6 +34,10 @@ const DEFAULT_STORAGE_SETTINGS = {
   runtimeRetentionDays: 7,
   maxUploadMb: 1024
 };
+const DEFAULT_APP_UPDATE_SETTINGS = {
+  autoUpdate: false,
+  checkIntervalHours: 6
+};
 const MAX_SESSION_RUNS = 200;
 const MAX_RUN_EVENTS = 80;
 const MAX_AUDIT_EVENTS = 200;
@@ -104,6 +108,8 @@ let skillMaintenanceTimer = null;
 let skillRegistryFileMtimeMs = 0;
 let codexUpgradeTask = null;
 let appUpdateTask = null;
+let appUpdateMaintenanceTimer = null;
+let appAutoUpdateInFlight = false;
 
 function commandPath() {
   const fallback = `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${CODEX_BIN_DIR}`;
@@ -163,6 +169,7 @@ async function init() {
     state.starredMessages ||= {};
     state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
+    state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
     state.nextSeq ||= 1;
   } else {
     state.hiddenCodexSessions ||= {};
@@ -171,6 +178,7 @@ async function init() {
     state.starredMessages ||= {};
     state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
+    state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
     await saveState();
   }
   for (const session of Object.values(state.sessions || {})) ensureSessionHarness(session);
@@ -181,6 +189,7 @@ async function init() {
   startStorageMaintenance();
   startRunMonitor();
   startSkillMaintenance();
+  startAppUpdateMaintenance();
 }
 
 function normalizeStorageSettings(value = {}) {
@@ -189,6 +198,16 @@ function normalizeStorageSettings(value = {}) {
     uploadRetentionDays: clampInteger(value.uploadRetentionDays, 0, 3650, DEFAULT_STORAGE_SETTINGS.uploadRetentionDays),
     runtimeRetentionDays: clampInteger(value.runtimeRetentionDays, 0, 3650, DEFAULT_STORAGE_SETTINGS.runtimeRetentionDays),
     maxUploadMb: clampInteger(value.maxUploadMb, 0, 102400, DEFAULT_STORAGE_SETTINGS.maxUploadMb)
+  };
+}
+
+function normalizeAppUpdateSettings(value = {}) {
+  return {
+    autoUpdate: value.autoUpdate === true,
+    checkIntervalHours: clampInteger(value.checkIntervalHours, 1, 168, DEFAULT_APP_UPDATE_SETTINGS.checkIntervalHours),
+    lastAutoCheckAt: String(value.lastAutoCheckAt || ''),
+    lastAutoUpdateAt: String(value.lastAutoUpdateAt || ''),
+    lastAutoError: String(value.lastAutoError || '').slice(0, 500)
   };
 }
 
@@ -2365,6 +2384,7 @@ async function appVersionInfo(options = {}) {
     git,
     rollback,
     updateTask: appUpdateTask,
+    updateSettings: normalizeAppUpdateSettings(state.appUpdateSettings),
     latest,
     checkedAt: nowIso()
   };
@@ -2682,6 +2702,54 @@ async function startAppUpdate(options = {}) {
     }
   })();
   return task;
+}
+
+async function runAutoAppUpdate(reason = 'timer') {
+  if (appAutoUpdateInFlight) return;
+  const settings = normalizeAppUpdateSettings(state.appUpdateSettings);
+  if (!settings.autoUpdate) return;
+  if (appUpdateTask?.status === 'running') return;
+  if (running.size > 0) return;
+
+  appAutoUpdateInFlight = true;
+  state.appUpdateSettings = {
+    ...settings,
+    lastAutoCheckAt: nowIso(),
+    lastAutoError: ''
+  };
+  scheduleSave();
+  try {
+    const check = await appUpdateCheck();
+    if (!check.ok) {
+      state.appUpdateSettings.lastAutoError = (check.warnings || []).join('\n').slice(0, 500) || 'update_check_failed';
+      return;
+    }
+    if (!check.updateAvailable) return;
+    await startAppUpdate({ target: check.target, mode: check.mode, reason });
+    state.appUpdateSettings.lastAutoUpdateAt = nowIso();
+  } catch (error) {
+    state.appUpdateSettings.lastAutoError = String(error.message || error).slice(0, 500);
+  } finally {
+    appAutoUpdateInFlight = false;
+    state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
+    scheduleSave();
+  }
+}
+
+function startAppUpdateMaintenance() {
+  clearInterval(appUpdateMaintenanceTimer);
+  const tick = () => {
+    const settings = normalizeAppUpdateSettings(state.appUpdateSettings);
+    if (!settings.autoUpdate) return;
+    const last = Date.parse(settings.lastAutoCheckAt || '') || 0;
+    const intervalMs = settings.checkIntervalHours * 60 * 60 * 1000;
+    if (!last || Date.now() - last >= intervalMs) {
+      runAutoAppUpdate('scheduled').catch(() => {});
+    }
+  };
+  appUpdateMaintenanceTimer = setInterval(tick, 5 * 60 * 1000);
+  appUpdateMaintenanceTimer.unref?.();
+  setTimeout(tick, 30 * 1000).unref?.();
 }
 
 async function startAppRollback() {
@@ -4366,6 +4434,22 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/app/update-check' && req.method === 'GET') {
     return json(res, 200, await appVersionInfo({ checkRemote: true }));
+  }
+
+  if (url.pathname === '/api/app/update-settings' && req.method === 'GET') {
+    return json(res, 200, { settings: normalizeAppUpdateSettings(state.appUpdateSettings) });
+  }
+
+  if (url.pathname === '/api/app/update-settings' && req.method === 'PATCH') {
+    const body = await readJson(req).catch(() => ({}));
+    state.appUpdateSettings = normalizeAppUpdateSettings({
+      ...state.appUpdateSettings,
+      autoUpdate: body.autoUpdate === true,
+      checkIntervalHours: body.checkIntervalHours
+    });
+    scheduleSave();
+    startAppUpdateMaintenance();
+    return json(res, 200, { settings: state.appUpdateSettings });
   }
 
   if (url.pathname === '/api/app/update' && req.method === 'POST') {

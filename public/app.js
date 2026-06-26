@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '182';
-const SW_CACHE_VERSION = 'codex-console-v199';
+const APP_ASSET_VERSION = '183';
+const SW_CACHE_VERSION = 'codex-console-v200';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -262,6 +262,7 @@ const el = {
   refreshHealthButton: document.querySelector('#refreshHealthButton'),
   systemHealthPanel: document.querySelector('#systemHealthPanel'),
   checkAppUpdateButton: document.querySelector('#checkAppUpdateButton'),
+  autoAppUpdateToggle: document.querySelector('#autoAppUpdateToggle'),
   appUpdatePanel: document.querySelector('#appUpdatePanel'),
   updateAppButton: document.querySelector('#updateAppButton'),
   rollbackAppButton: document.querySelector('#rollbackAppButton'),
@@ -2585,6 +2586,7 @@ function renderAppUpdate(data = {}) {
   const latest = data.latest || {};
   const task = data.updateTask || null;
   const rollback = data.rollback || null;
+  const updateSettings = data.updateSettings || {};
   const target = latest.target || task?.target || '';
   const sourceText = latest.source === 'manifest'
     ? 'OSS'
@@ -2604,6 +2606,7 @@ function renderAppUpdate(data = {}) {
   ].filter(Boolean);
   el.rollbackAppButton.disabled = !rollback?.commit || task?.status === 'running';
   el.updateAppButton.disabled = task?.status === 'running';
+  if (el.autoAppUpdateToggle) el.autoAppUpdateToggle.checked = updateSettings.autoUpdate === true;
   el.appUpdatePanel.innerHTML = `
     <div class="maintenance-grid">
       <span>版本 <strong>${escapeHtml(data.version || '-')}</strong></span>
@@ -2613,8 +2616,10 @@ function renderAppUpdate(data = {}) {
       <span>源 <strong>${escapeHtml(sourceText)}</strong></span>
       <span>目标 <strong>${escapeHtml(targetText)}</strong></span>
       <span>回滚 <strong>${escapeHtml(rollback?.shortCommit || '-')}</strong></span>
+      <span>自动 <strong>${escapeHtml(updateSettings.autoUpdate ? '开启' : '关闭')}</strong></span>
     </div>
     <p>控制台升级只处理本应用代码；会阻止运行中的 Codex 任务和本地未提交改动。</p>
+    ${updateSettings.lastAutoError ? `<p>${escapeHtml(updateSettings.lastAutoError)}</p>` : ''}
     ${warnings.length ? `<p>${warnings.map((item) => escapeHtml(item)).join('<br>')}</p>` : ''}
   `;
 }
@@ -2646,6 +2651,18 @@ async function updateApp() {
   } finally {
     el.updateAppButton.disabled = false;
   }
+}
+
+async function saveAppUpdateSettings() {
+  const data = await api('/api/app/update-settings', {
+    method: 'PATCH',
+    body: JSON.stringify({
+      autoUpdate: el.autoAppUpdateToggle?.checked === true,
+      checkIntervalHours: 6
+    })
+  });
+  const versionData = await api('/api/app/version');
+  renderAppUpdate({ ...versionData, updateSettings: data.settings });
 }
 
 async function rollbackApp() {
@@ -4623,6 +4640,9 @@ el.checkAppUpdateButton?.addEventListener('click', () => checkAppUpdate().catch(
 }));
 el.updateAppButton?.addEventListener('click', () => updateApp().catch((error) => {
   el.appUpdatePanel.textContent = error.detail || error.message || '升级启动失败';
+}));
+el.autoAppUpdateToggle?.addEventListener('change', () => saveAppUpdateSettings().catch((error) => {
+  el.appUpdatePanel.textContent = error.detail || error.message || '自动更新保存失败';
 }));
 el.rollbackAppButton?.addEventListener('click', () => rollbackApp().catch((error) => {
   el.appUpdatePanel.textContent = error.detail || error.message || '回滚启动失败';
