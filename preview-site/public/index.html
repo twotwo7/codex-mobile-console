@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex Mobile Console</title>
+    <meta name="description" content="Self-hosted mobile control panel for persistent Codex development sessions.">
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main>
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Self-hosted Codex control</p>
+          <h1>Codex Mobile Console</h1>
+          <p class="lead">手机接管服务器里的 Codex 会话。看进度、补指令、切项目、停任务，不再靠移动 SSH 硬撑。</p>
+          <div class="actions">
+            <a class="primary" href="https://github.com/twotwo7/codex-mobile-console" target="_blank" rel="noreferrer">GitHub</a>
+            <button id="copyInstall" type="button">复制安装命令</button>
+          </div>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash</code></pre>
+        </div>
+        <div class="hero-media" aria-label="Codex Mobile Console mobile screenshots">
+          <img class="shot main-shot" src="assets/mobile-chat.png" alt="手机聊天界面截图">
+          <img class="shot side-shot" src="assets/mobile-sessions.png" alt="会话列表截图">
+        </div>
+      </section>
+
+      <section class="workflow">
+        <p class="eyebrow">Designed for remote AI development</p>
+        <h2>Codex 继续在服务器上跑，手机只是控制面板。</h2>
+        <div class="steps">
+          <div>
+            <span>01</span>
+            <strong>保持会话</strong>
+            <p>终端断开不影响服务器上的 Codex 任务。</p>
+          </div>
+          <div>
+            <span>02</span>
+            <strong>随时补充</strong>
+            <p>手机打开 PWA，继续发送需求或排队下一条指令。</p>
+          </div>
+          <div>
+            <span>03</span>
+            <strong>看见运行时</strong>
+            <p>查看进程、状态、缓存和运行中的任务。</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="detail">
+        <img src="assets/mobile-settings.png" alt="设置与存储截图">
+        <div>
+          <p class="eyebrow">Private by design</p>
+          <h2>适合 VPS、NAS、家用小主机和远程开发机。</h2>
+          <p>默认绑定 127.0.0.1，建议放在 HTTPS、VPN、Tailscale 或 Cloudflare Access 后面。它不是公开 SaaS，而是你的个人 Codex 控制台。</p>
+        </div>
+      </section>
+    </main>
+    <script src="app.js" type="module"></script>
+  </body>
+</html>
