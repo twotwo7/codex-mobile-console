@@ -27,6 +27,7 @@ const state = {
   defaultRunConfig: storageJsonGet('cmc.defaultRunConfig', {}),
   showStarredOnly: storageGet('cmc.showStarredOnly') === '1',
   messageDisplayMode: storageGet('cmc.messageDisplayMode', 'full') === 'brief' ? 'brief' : 'full',
+  siteMountStripCollapsed: storageGet('cmc.siteMountStripCollapsed', '1') !== '0',
   pendingImages: [],
   pendingFiles: [],
   sending: false,
@@ -94,8 +95,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '166';
-const SW_CACHE_VERSION = 'codex-console-v183';
+const APP_ASSET_VERSION = '167';
+const SW_CACHE_VERSION = 'codex-console-v184';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1266,7 +1267,22 @@ function renderSiteMountStrip(session = getActiveSession()) {
   const mounts = Array.isArray(session?.siteMounts) ? session.siteMounts : [];
   el.siteMountStrip.hidden = mounts.length === 0;
   el.siteMountStrip.textContent = '';
+  el.siteMountStrip.classList.toggle('collapsed', state.siteMountStripCollapsed);
   if (!mounts.length) return;
+
+  const toggle = document.createElement('button');
+  toggle.className = 'site-mount-toggle';
+  toggle.type = 'button';
+  toggle.textContent = state.siteMountStripCollapsed ? `站点 ${mounts.length}` : '收起站点';
+  toggle.setAttribute('aria-expanded', String(!state.siteMountStripCollapsed));
+  toggle.title = state.siteMountStripCollapsed ? '展开子站点导航' : '收起子站点导航';
+  toggle.addEventListener('click', () => {
+    state.siteMountStripCollapsed = !state.siteMountStripCollapsed;
+    storageSet('cmc.siteMountStripCollapsed', state.siteMountStripCollapsed ? '1' : '0');
+    renderSiteMountStrip(session);
+  });
+  el.siteMountStrip.append(toggle);
+  if (state.siteMountStripCollapsed) return;
 
   for (const mount of mounts) {
     const link = document.createElement('a');

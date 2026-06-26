@@ -872,6 +872,10 @@ button:disabled {
   scrollbar-width: none;
 }
 
+.site-mount-strip.collapsed {
+  padding-block: 4px;
+}
+
 .site-mount-strip[hidden] {
   display: none;
 }
@@ -880,6 +884,7 @@ button:disabled {
   display: none;
 }
 
+.site-mount-toggle,
 .site-mount-link {
   flex: 0 0 auto;
   max-width: 150px;
@@ -897,6 +902,19 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.site-mount-toggle {
+  max-width: none;
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line));
+  background: color-mix(in srgb, var(--accent) 9%, var(--surface-2));
+}
+
+.site-mount-toggle[aria-expanded="true"] {
+  color: var(--muted);
+  border-color: var(--line);
+  background: var(--surface-2);
 }
 
 .top-title {
