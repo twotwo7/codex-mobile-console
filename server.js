@@ -40,6 +40,7 @@ const MAX_AUDIT_EVENTS = 200;
 const SMART_TAG_RULE_VERSION = 4;
 const COMMAND_KILL_GRACE_MS = 3000;
 const APP_UPDATE_CHECK_TIMEOUT_MS = 18000;
+const APP_UPDATE_MANIFEST_URL = process.env.APP_UPDATE_MANIFEST_URL || process.env.UPDATE_MANIFEST_URL || '';
 const CODEX_UPGRADE_TIMEOUT_MS = 10 * 60 * 1000;
 const SITE_MOUNT_ROOT = path.resolve(process.env.SITE_MOUNT_ROOT || '/root/Projects');
 const SITE_MOUNT_CANDIDATES = ['dist', 'build', 'out', 'site', 'preview', 'web', '.'];
@@ -2369,6 +2370,27 @@ async function appVersionInfo(options = {}) {
   };
 }
 
+async function fetchJson(url, timeoutMs = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  timer.unref?.();
+  try {
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: { accept: 'application/json' }
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      const error = new Error(text || `HTTP ${response.status}`);
+      error.status = response.status;
+      throw error;
+    }
+    return text ? JSON.parse(text) : {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function withTimeout(promise, timeoutMs, fallback) {
   let timer = null;
   return Promise.race([
@@ -2378,6 +2400,69 @@ function withTimeout(promise, timeoutMs, fallback) {
       timer.unref?.();
     })
   ]);
+}
+
+function normalizeUpdateManifest(raw = {}) {
+  const version = String(raw.version || '').trim();
+  const tag = String(raw.tag || (version ? `v${version}` : '')).trim();
+  return {
+    version,
+    tag,
+    commit: String(raw.commit || '').trim(),
+    bundleUrl: String(raw.bundleUrl || raw.bundle || '').trim(),
+    bundleSha256: String(raw.bundleSha256 || raw.sha256 || '').trim().toLowerCase(),
+    publishedAt: String(raw.publishedAt || '').trim()
+  };
+}
+
+async function manifestUpdateCheck(pkg, git) {
+  if (!APP_UPDATE_MANIFEST_URL) return null;
+  const result = {
+    source: 'manifest',
+    manifestUrl: APP_UPDATE_MANIFEST_URL,
+    ok: true,
+    latestVersion: '',
+    latestTag: '',
+    latestTagCommit: '',
+    latestRemoteCommit: '',
+    updateAvailable: false,
+    target: '',
+    mode: '',
+    bundleUrl: '',
+    bundleSha256: '',
+    warnings: [],
+    checkedAt: nowIso()
+  };
+  try {
+    const manifest = normalizeUpdateManifest(await fetchJson(APP_UPDATE_MANIFEST_URL, 10000));
+    result.latestVersion = manifest.version;
+    result.latestTag = manifest.tag;
+    result.latestTagCommit = manifest.commit;
+    result.latestRemoteCommit = manifest.commit;
+    result.bundleUrl = manifest.bundleUrl;
+    result.bundleSha256 = manifest.bundleSha256;
+    if (!manifest.version || !isSemverTag(manifest.tag)) {
+      result.ok = false;
+      result.warnings.push('OSS 更新清单缺少有效 version/tag。');
+      return result;
+    }
+    if (compareSemver(manifest.version, pkg.version) <= 0 && (!manifest.commit || manifest.commit === git.commit)) {
+      return result;
+    }
+    if (!manifest.bundleUrl || !manifest.bundleSha256) {
+      result.ok = false;
+      result.warnings.push('OSS 更新清单缺少 bundleUrl/bundleSha256，无法安全升级。');
+      return result;
+    }
+    result.updateAvailable = true;
+    result.target = manifest.bundleUrl;
+    result.mode = 'bundle';
+    return result;
+  } catch (error) {
+    result.ok = false;
+    result.warnings.push(`OSS 更新源不可用：${error.message || String(error)}`);
+    return result;
+  }
 }
 
 function versionFromTag(tag = '') {
@@ -2401,6 +2486,8 @@ function compareSemver(a = '', b = '') {
 async function appUpdateCheck() {
   const [git, pkg] = await Promise.all([gitInfo(), packageMeta()]);
   const result = {
+    source: APP_UPDATE_MANIFEST_URL ? 'github-fallback' : 'github',
+    manifestUrl: APP_UPDATE_MANIFEST_URL,
     ok: git.ok,
     currentCommit: git.commit,
     currentShortCommit: git.shortCommit,
@@ -2414,6 +2501,8 @@ async function appUpdateCheck() {
     updateAvailable: false,
     target: '',
     mode: '',
+    bundleUrl: '',
+    bundleSha256: '',
     warnings: [],
     checkedAt: nowIso()
   };
@@ -2422,6 +2511,13 @@ async function appUpdateCheck() {
     result.warnings.push('当前目录不是可用的 git 仓库，无法自动检测控制台更新。');
     return result;
   }
+
+  const manifestResult = await manifestUpdateCheck(pkg, git);
+  if (manifestResult?.ok) {
+    if (git.dirty) manifestResult.warnings.push('本地工作区有未提交改动，自动升级会被阻止。');
+    return manifestResult;
+  }
+  if (manifestResult?.warnings?.length) result.warnings.push(...manifestResult.warnings);
 
   const branch = git.branch || 'main';
   const remoteTags = await withTimeout(
@@ -2515,7 +2611,7 @@ async function startAppUpdate(options = {}) {
     throw error;
   }
   const target = String(options.target || check.target || '').trim();
-  const mode = ['tag', 'branch'].includes(options.mode) ? options.mode : check.mode || (target.startsWith('origin/') ? 'branch' : 'tag');
+  const mode = ['tag', 'branch', 'bundle'].includes(options.mode) ? options.mode : check.mode || (target.startsWith('origin/') ? 'branch' : 'tag');
   if (!target) {
     const error = new Error('update_not_available');
     error.code = 'update_not_available';
@@ -2547,7 +2643,23 @@ async function startAppUpdate(options = {}) {
   const task = appUpdateTask;
   (async () => {
     try {
-      const steps = [
+      const steps = mode === 'bundle' ? [
+        {
+          label: `apply update bundle ${check.latestTag || target}`,
+          command: 'node',
+          args: [
+            'scripts/apply-release-bundle.mjs',
+            '--url', target,
+            '--sha256', check.bundleSha256 || '',
+            '--tag', check.latestTag || '',
+            '--root', __dirname
+          ],
+          timeoutMs: 180000
+        },
+        { label: 'npm install --omit=dev', command: 'npm', args: ['install', '--omit=dev'], timeoutMs: 120000 },
+        { label: 'node --check server.js', command: 'node', args: ['--check', 'server.js'], timeoutMs: 30000 },
+        { label: 'node --check public/app.js', command: 'node', args: ['--check', 'public/app.js'], timeoutMs: 30000 }
+      ] : [
         { label: 'git fetch --tags origin', command: 'git', args: ['fetch', '--tags', 'origin'], timeoutMs: 30000 },
         mode === 'branch'
           ? { label: `git merge --ff-only ${target}`, command: 'git', args: ['merge', '--ff-only', target], timeoutMs: 30000 }

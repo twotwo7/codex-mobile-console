@@ -1,6 +1,6 @@
 {
   "name": "codex-mobile-console",
-  "version": "1.4.4",
+  "version": "1.4.5",
   "type": "module",
   "description": "Mobile-first Codex control console with persistent sessions",
   "license": "MIT",
@@ -22,6 +22,7 @@
   ],
   "scripts": {
     "start": "node server.js",
+    "release:oss": "node scripts/publish-oss-release.mjs",
     "check:state": "node scripts/state-controller-check.mjs",
     "check:mobile-ui": "node scripts/mobile-ui-check.mjs"
   },

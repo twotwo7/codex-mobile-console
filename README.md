@@ -97,7 +97,32 @@ Environment variables:
 | `CODEX_NODE` | current Node executable | Node runtime when `CODEX_BIN` is a `.js` file |
 | `PROJECTS_ROOT` | `/root/Projects` | Default project browser root |
 | `SKILL_ROOTS` | `$CODEX_HOME/skills,/root/.agents/skills` | Skill scan roots |
+| `APP_UPDATE_MANIFEST_URL` | unset | Preferred update manifest URL, such as an Aliyun OSS `latest.json` |
 | `COOKIE_SECURE=0` | unset | Disable Secure cookies for non-HTTPS local testing |
+
+## Aliyun OSS Update Source
+
+GitHub can stay as the upstream repository while production servers check a domestic OSS release manifest first.
+
+Publish a release bundle:
+
+```bash
+ALI_OSS_ACCESS_KEY_ID=... \
+ALI_OSS_ACCESS_KEY_SECRET=... \
+ALI_OSS_BUCKET=your-bucket \
+ALI_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com \
+ALI_OSS_PREFIX=codex-mobile-console/releases \
+ALI_OSS_PUBLIC_BASE_URL=https://your-bucket.oss-cn-hangzhou.aliyuncs.com \
+npm run release:oss
+```
+
+Configure deployed services to prefer the OSS manifest:
+
+```bash
+APP_UPDATE_MANIFEST_URL=https://your-bucket.oss-cn-hangzhou.aliyuncs.com/codex-mobile-console/releases/latest.json
+```
+
+The updater downloads a Git bundle from OSS, verifies sha256, fetches the release tag locally, then checks out that tag. GitHub remains the fallback source when no manifest URL is configured.
 
 ## Security Model
 

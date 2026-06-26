@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '181';
-const SW_CACHE_VERSION = 'codex-console-v198';
+const APP_ASSET_VERSION = '182';
+const SW_CACHE_VERSION = 'codex-console-v199';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -2586,6 +2586,14 @@ function renderAppUpdate(data = {}) {
   const task = data.updateTask || null;
   const rollback = data.rollback || null;
   const target = latest.target || task?.target || '';
+  const sourceText = latest.source === 'manifest'
+    ? 'OSS'
+    : latest.source === 'github-fallback'
+      ? 'GitHub'
+      : latest.source ? latest.source : 'GitHub';
+  const targetText = latest.mode === 'bundle'
+    ? latest.latestTag || latest.latestVersion || 'OSS bundle'
+    : target || latest.latestTag || latest.latestRemoteCommit?.slice(0, 12) || '-';
   const status = task
     ? `${task.type === 'rollback' ? '回滚' : '升级'} ${task.status || '-'}${task.step ? ` · ${task.step}` : ''}`
     : latest.updateAvailable ? '有更新' : latest.checkedAt ? '已是最新' : '未检查';
@@ -2602,7 +2610,8 @@ function renderAppUpdate(data = {}) {
       <span>Commit <strong>${escapeHtml(git.shortCommit || '-')}</strong></span>
       <span>分支 <strong>${escapeHtml(git.branch || '-')}</strong></span>
       <span>状态 <strong>${escapeHtml(status)}</strong></span>
-      <span>目标 <strong>${escapeHtml(target || latest.latestTag || latest.latestRemoteCommit?.slice(0, 12) || '-')}</strong></span>
+      <span>源 <strong>${escapeHtml(sourceText)}</strong></span>
+      <span>目标 <strong>${escapeHtml(targetText)}</strong></span>
       <span>回滚 <strong>${escapeHtml(rollback?.shortCommit || '-')}</strong></span>
     </div>
     <p>控制台升级只处理本应用代码；会阻止运行中的 Codex 任务和本地未提交改动。</p>
