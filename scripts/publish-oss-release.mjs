@@ -55,10 +55,11 @@ function joinUrl(base, key) {
 }
 
 function ossResource(bucket, key) {
-  return `/${bucket}/${key.replace(/^\/+/, '')}`;
+  const cleanKey = key.replace(/^\/+/, '');
+  return cleanKey ? `/${bucket}/${cleanKey}` : `/${bucket}/`;
 }
 
-async function putOssObject({ key, body, contentType }) {
+async function ossRequest({ method, key = '', body = Buffer.alloc(0), contentType = '', headers = {} }) {
   const accessKeyId = env('ALI_OSS_ACCESS_KEY_ID');
   const accessKeySecret = env('ALI_OSS_ACCESS_KEY_SECRET');
   const bucket = env('ALI_OSS_BUCKET');
@@ -67,22 +68,54 @@ async function putOssObject({ key, body, contentType }) {
 
   const host = `${bucket}.${endpoint.replace(/^https?:\/\//, '').replace(/\/+$/, '')}`;
   const date = new Date().toUTCString();
-  const canonicalHeaders = 'x-oss-object-acl:public-read\n';
+  const ossHeaders = Object.fromEntries(
+    Object.entries(headers)
+      .filter(([name]) => name.toLowerCase().startsWith('x-oss-'))
+      .map(([name, value]) => [name.toLowerCase(), String(value).trim()])
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
+  const canonicalHeaders = Object.entries(ossHeaders)
+    .map(([name, value]) => `${name}:${value}\n`)
+    .join('');
   const resource = ossResource(bucket, key);
-  const stringToSign = ['PUT', '', contentType, date, `${canonicalHeaders}${resource}`].join('\n');
+  const stringToSign = [method, '', contentType, date, `${canonicalHeaders}${resource}`].join('\n');
   const signature = createHmac('sha1', accessKeySecret).update(stringToSign).digest('base64');
-  const response = await fetch(`https://${host}/${key}`, {
-    method: 'PUT',
+  const target = key ? `https://${host}/${key}` : `https://${host}/`;
+  const response = await fetch(target, {
+    method,
     headers: {
       authorization: `OSS ${accessKeyId}:${signature}`,
       date,
-      'content-type': contentType,
+      ...(contentType ? { 'content-type': contentType } : {}),
       'content-length': String(body.length),
-      'x-oss-object-acl': 'public-read'
+      ...headers
     },
     body
   });
-  if (!response.ok) throw new Error(`OSS upload failed ${response.status}: ${await response.text()}`);
+  return { ok: response.ok, status: response.status, text: await response.text() };
+}
+
+async function createBucketIfRequested() {
+  if (env('ALI_OSS_DRY_RUN', '0') === '1') return false;
+  if (env('ALI_OSS_AUTO_CREATE_BUCKET', '0') !== '1') return false;
+  const result = await ossRequest({
+    method: 'PUT',
+    headers: { 'x-oss-acl': env('ALI_OSS_BUCKET_ACL', 'public-read') }
+  });
+  if (result.ok || result.status === 409) return true;
+  throw new Error(`OSS bucket create failed ${result.status}: ${result.text}`);
+}
+
+async function putOssObject({ key, body, contentType }) {
+  if (env('ALI_OSS_DRY_RUN', '0') === '1') return false;
+  const result = await ossRequest({
+    method: 'PUT',
+    key,
+    body,
+    contentType,
+    headers: { 'x-oss-object-acl': 'public-read' }
+  });
+  if (!result.ok) throw new Error(`OSS upload failed ${result.status}: ${result.text}`);
   return true;
 }
 
@@ -120,6 +153,7 @@ const manifest = {
 const manifestBody = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
 await writeFile(path.join(releaseDir, 'latest.json'), manifestBody);
 
+const bucketCreated = await createBucketIfRequested();
 const uploadedBundle = await putOssObject({
   key: bundleKey,
   body: bundle,
@@ -139,5 +173,6 @@ console.log(JSON.stringify({
   bundleSha256,
   manifestPath: path.join(releaseDir, 'latest.json'),
   manifestUrl: publicBase ? joinUrl(publicBase, manifestKey) : '',
+  bucketCreated,
   uploaded: uploadedBundle && uploadedManifest
 }, null, 2));
