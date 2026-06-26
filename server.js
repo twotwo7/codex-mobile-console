@@ -1265,23 +1265,6 @@ function registerSiteLinksFromText(session, text) {
   return mounts.filter((mount) => !before.has(mount.id));
 }
 
-function codexSiteMountCapabilityPrompt(session) {
-  if (!session?.cwd || session.source === 'codex') return '';
-  return [
-    '',
-    '',
-    '<codex-mobile-console-site-preview>',
-    'If you create or build a static web page/site for the user, put the generated site under one of these directories in the current working directory: dist, build, out, site, preview, or web. If the current directory itself is the static site, keep an index.html at the project root.',
-    'After this Codex run completes, the console automatically exposes every detected directory that contains index.html as /sites/<auto-slug>/ and shows jump buttons in the session UI. Do not ask the user to manually enter a preview path unless a static site output is impossible.',
-    '</codex-mobile-console-site-preview>'
-  ].join('\n');
-}
-
-function promptWithConsoleCapabilities(session, prompt) {
-  const capability = codexSiteMountCapabilityPrompt(session);
-  return capability ? `${prompt}${capability}` : prompt;
-}
-
 function sessionActivityAt(session) {
   const messages = Array.isArray(session?.messages) ? session.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -3729,7 +3712,7 @@ function runCodex(session, prompt, options = {}) {
   appendRunEvent(session, 'process.spawned', { summary: `${command} ${commandArgs.slice(0, 6).join(' ')}` }, { runId: run.id });
   broadcastSession(session);
 
-  child.stdin.write(promptWithConsoleCapabilities(session, prompt));
+  child.stdin.write(prompt);
   child.stdin.end();
 
   let stdoutBuffer = '';
