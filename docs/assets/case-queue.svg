@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1050 700" role="img" aria-labelledby="title desc">
+  <title id="title">Codex 消息队列案例</title>
+  <desc id="desc">展示多个需求在手机端排队、置顶和编辑的界面。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#182335"/>
+      <stop offset="1" stop-color="#0c1015"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="24" stdDeviation="22" flood-color="#000000" flood-opacity=".36"/>
+    </filter>
+  </defs>
+  <rect width="1050" height="700" rx="34" fill="url(#bg)"/>
+  <g transform="translate(70 58)">
+    <text x="0" y="0" fill="#61d7c7" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="900">QUEUE WHILE CODEX RUNS</text>
+    <text x="0" y="54" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="46" font-weight="900">不用等当前任务结束，</text>
+    <text x="0" y="108" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="46" font-weight="900">先把下一步排好。</text>
+  </g>
+
+  <g transform="translate(82 220)" filter="url(#shadow)">
+    <rect width="448" height="374" rx="28" fill="#111820" stroke="#ffffff" stroke-opacity=".13"/>
+    <text x="30" y="50" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="19">当前正在运行</text>
+    <rect x="30" y="76" width="388" height="78" rx="20" fill="#0e141b" stroke="#61d7c7" stroke-opacity=".35"/>
+    <circle cx="65" cy="115" r="9" fill="#61d7c7"/>
+    <text x="88" y="109" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="22" font-weight="850">修复消息重复显示</text>
+    <text x="88" y="135" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="15">Codex 正在跑测试...</text>
+    <text x="30" y="197" fill="#82aaff" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="19" font-weight="900">队列 3 条</text>
+    <g transform="translate(30 218)">
+      <rect width="388" height="46" rx="16" fill="#182431"/>
+      <text x="18" y="30" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="17">置顶：优化首次打开速度</text>
+      <text x="344" y="30" fill="#61d7c7" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18">↑</text>
+      <rect y="58" width="388" height="46" rx="16" fill="#151d27"/>
+      <text x="18" y="88" fill="#d9e2dc" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="17">编辑：把回收站说明补完整</text>
+      <text x="344" y="88" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18">✎</text>
+      <rect y="116" width="388" height="46" rx="16" fill="#151d27"/>
+      <text x="18" y="146" fill="#d9e2dc" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="17">稍后：检查移动端滚动体验</text>
+    </g>
+  </g>
+
+  <g transform="translate(600 246)">
+    <rect width="336" height="280" rx="28" fill="#10161d" stroke="#ffffff" stroke-opacity=".12"/>
+    <text x="28" y="48" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="28" font-weight="900">适合这些时刻</text>
+    <g fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="20">
+      <text x="28" y="96">通勤路上想到新需求</text>
+      <text x="28" y="139">开会时只想补一句约束</text>
+      <text x="28" y="182">饭点让 Codex 自己继续跑</text>
+      <text x="28" y="225">睡前排好明早第一件事</text>
+    </g>
+    <rect x="28" y="240" width="154" height="36" rx="18" fill="#61d7c7"/>
+    <text x="51" y="264" fill="#062522" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="16" font-weight="900">不断线，不等人</text>
+  </g>
+</svg>

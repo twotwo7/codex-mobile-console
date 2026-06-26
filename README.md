@@ -2,11 +2,20 @@
 
 Self-hosted mobile control panel for persistent Codex development sessions.
 
-Codex Mobile Console is for developers who run Codex on a server, VPS, NAS, or home lab and want to continue those sessions from a phone without living inside a mobile SSH client. The browser is just the control surface; Codex keeps running on the server.
+Codex Mobile Console lets you control Codex sessions from your phone while Codex keeps running on your own server, VPS, NAS, home lab, or remote development box.
 
-![Mobile chat view](docs/assets/mobile-chat.png)
+![Codex Mobile Console use case](docs/assets/case-remote-control.svg)
 
-## Why This Exists
+## What It Is
+
+This is not a generic AI chat UI and not a mobile SSH replacement. It is a private, mobile-first control surface for developers who already run Codex on a server and want to:
+
+- check progress from a phone
+- send follow-up prompts without reconnecting SSH
+- switch between Codex sessions and projects
+- queue the next instructions while a task is running
+- stop stuck commands and inspect runtime state
+- keep Codex work alive after the terminal or browser disconnects
 
 SSH clients on phones are fine for emergency commands, but they are poor control panels for long-running AI development work. This project is designed around a different workflow:
 
@@ -15,6 +24,12 @@ SSH clients on phones are fine for emergency commands, but they are poor control
 - switch between projects and sessions quickly
 - send follow-up prompts without restarting terminal sessions
 - stop stuck runs and inspect runtime state from the browser
+
+## Use Cases
+
+| Remote control | Prompt queue | Runtime diagnostics |
+| --- | --- | --- |
+| ![Remote Codex control](docs/assets/case-remote-control.svg) | ![Codex prompt queue](docs/assets/case-queue.svg) | ![Codex runtime diagnostics](docs/assets/case-runtime.svg) |
 
 ## Highlights
 
@@ -33,11 +48,11 @@ SSH clients on phones are fine for emergency commands, but they are poor control
 - 30-day login cookie for trusted personal devices
 - Safe restart flow that waits for active Codex child processes
 
-## Screenshots
+## Feature Tour
 
-| Chat | Sessions | Settings |
+| Skill management | Chat | Sessions |
 | --- | --- | --- |
-| ![Chat](docs/assets/mobile-chat.png) | ![Sessions](docs/assets/mobile-sessions.png) | ![Settings](docs/assets/mobile-settings.png) |
+| ![Skill management](docs/assets/case-skills.svg) | ![Chat](docs/assets/mobile-chat.png) | ![Sessions](docs/assets/mobile-sessions.png) |
 
 ## Quick Start
 

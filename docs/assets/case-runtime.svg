@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1050 700" role="img" aria-labelledby="title desc">
+  <title id="title">Codex 运行时诊断案例</title>
+  <desc id="desc">展示 Codex 进程、队列、浏览器缓存和服务状态。</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#211b27"/>
+      <stop offset="0.7" stop-color="#101318"/>
+      <stop offset="1" stop-color="#1f2d26"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="24" stdDeviation="22" flood-color="#000000" flood-opacity=".34"/>
+    </filter>
+  </defs>
+  <rect width="1050" height="700" rx="34" fill="url(#bg)"/>
+
+  <g transform="translate(70 64)">
+    <text x="0" y="0" fill="#ff8d95" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="900">RUNTIME CHECK</text>
+    <text x="0" y="58" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="48" font-weight="900">状态不对时，先看这里。</text>
+    <text x="0" y="102" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="22">进程、端口、队列、缓存和会话状态集中在一个面板里。</text>
+  </g>
+
+  <g transform="translate(88 202)" filter="url(#shadow)">
+    <rect width="874" height="380" rx="30" fill="#10161d" stroke="#ffffff" stroke-opacity=".13"/>
+    <g transform="translate(32 30)">
+      <rect width="810" height="56" rx="18" fill="#151d25"/>
+      <circle cx="32" cy="28" r="10" fill="#61d7c7"/>
+      <text x="54" y="36" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="22" font-weight="900">Codex 运行时</text>
+      <rect x="642" y="12" width="144" height="32" rx="16" fill="#2d1720"/>
+      <text x="674" y="34" fill="#ff8d95" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="15" font-weight="900">停止当前命令</text>
+    </g>
+
+    <g transform="translate(32 116)">
+      <rect width="250" height="96" rx="20" fill="#151d25"/>
+      <text x="20" y="34" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="17">子进程</text>
+      <text x="20" y="70" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="28" font-weight="900">PID 48231</text>
+      <rect x="280" width="250" height="96" rx="20" fill="#151d25"/>
+      <text x="300" y="34" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="17">队列</text>
+      <text x="300" y="70" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="28" font-weight="900">2 条待执行</text>
+      <rect x="560" width="250" height="96" rx="20" fill="#151d25"/>
+      <text x="580" y="34" fill="#aeb7b6" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="17">浏览器缓存</text>
+      <text x="580" y="70" fill="#f5f7f2" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="28" font-weight="900">1,284 消息</text>
+    </g>
+
+    <g transform="translate(32 238)">
+      <rect width="810" height="92" rx="20" fill="#0d1218" stroke="#61d7c7" stroke-opacity=".22"/>
+      <text x="22" y="34" fill="#61d7c7" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="18" font-weight="900">恢复检测</text>
+      <text x="22" y="66" fill="#d9e2dc" font-family="Arial, 'Noto Sans CJK SC', sans-serif" font-size="20">服务重启后发现未完成消息，自动校验 Codex 是否仍在运行并恢复会话状态。</text>
+    </g>
+  </g>
+</svg>

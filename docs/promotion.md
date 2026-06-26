@@ -28,7 +28,8 @@ Chinese:
 
 ## Launch Checklist
 
-- README has screenshots above the fold.
+- README has visual case images above the fold.
+- Official website and README use the same positioning and core visual assets.
 - Install path works on a clean server.
 - HTTPS deployment instructions are clear.
 - Security notes are explicit.
@@ -51,6 +52,21 @@ Chinese:
 - Make the repository public before posting.
 
 Ready-to-use launch copy lives in [launch-posts.md](launch-posts.md).
+
+## Website And README Visuals
+
+Keep the public-facing visuals concrete and product-led. The first impression should show what the tool helps with, not just a blank chat screen.
+
+Primary visual assets:
+
+| Asset | Use |
+| --- | --- |
+| `docs/assets/case-remote-control.svg` | README hero and website hero |
+| `docs/assets/case-queue.svg` | Queue and mobile follow-up prompts |
+| `docs/assets/case-runtime.svg` | Runtime/process/status diagnostics |
+| `docs/assets/case-skills.svg` | Skill management and reusable workflows |
+
+When the website visuals change, copy the updated public assets into `docs/assets/` and update README references in the same commit. This keeps GitHub, launch posts, and the preview site aligned.
 
 ## Suggested Posts
 
