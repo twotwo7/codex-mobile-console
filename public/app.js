@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '172';
-const SW_CACHE_VERSION = 'codex-console-v189';
+const APP_ASSET_VERSION = '173';
+const SW_CACHE_VERSION = 'codex-console-v190';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1289,17 +1289,40 @@ const SITE_REGISTER_PROMPTS = {
   local: [
     '请为当前会话创建并注册一个可预览的完整 Web 服务。',
     '',
-    '要求：',
-    '1. 不要只生成静态目录；请创建或整理成一个能持续运行的本地 Web 服务。',
-    '2. 服务必须监听 127.0.0.1 的空闲端口，不要直接监听公网地址。',
-    '3. 如果项目已有启动方式，请优先使用项目自己的 npm/pnpm/python/go 等启动脚本；没有则补齐最小可运行服务。',
-    '4. 页面需要能在反向代理子路径下工作：优先使用相对资源路径，或读取 X-Forwarded-Prefix；不要把资源硬编码到 /assets、/static 等根路径。',
-    '5. 启动后请确认本机 http://127.0.0.1:<port>/ 可以访问。',
-    '6. 找到可访问地址后，请在回复末尾输出下面这个精确格式，控制台会自动注册成 codex.ai.hehao.pro 的 /sites/<auto-slug>/ 子路径转发：',
+    '核心要求：服务不能是交互式临时进程，当前会话结束后仍必须能通过本机后台服务访问。',
+    '',
+    '执行要求：',
+    '1. 创建/整理项目后，优先使用项目启动脚本；但启动预览服务时不要依赖会随工具会话结束而退出的前台/TTY npm start。',
+    '2. 服务必须绑定 127.0.0.1:<port>，不要绑定公网地址。',
+    '3. 启动方式必须可持续运行：',
+    '   - 优先使用已有守护方式，如 systemd/pm2/supervisor；',
+    '   - 没有时，使用 setsid -f env HOST=127.0.0.1 PORT=<port> node server.js >> service.log 2>&1 或等价方式；',
+    '   - 不要只用普通后台 cmd &、交互式 npm start、仍挂在当前 TTY/session 的进程。',
+    '4. 启动后必须记录实际端口、PID、日志路径、启动命令。',
+    '5. 必须验证进程确实常驻：',
+    '   - ss -ltnp | grep <port> 确认端口监听；',
+    '   - ps -p <pid> -o pid,ppid,cmd 确认进程仍存在；',
+    '   - 优先确认 PPID=1 或由明确守护进程托管，而不是当前 shell/TTY。',
+    '6. 必须验证 HTTP：',
+    '   - curl -I http://127.0.0.1:<port>/ 返回 200；',
+    '   - 主要 CSS/JS/图片资源返回 200；',
+    '   - 页面需要能在 /sites/<slug>/ 子路径反代下工作，优先使用相对资源路径，或读取 X-Forwarded-Prefix；不要把资源硬编码到 /assets、/static 等根路径；',
+    '   - 还要测试 http://127.0.0.1:<port>/sites/test-slug/ 以及子路径下资源。',
+    '7. 如果第一次启动在随机端口，最终注册前要用固定的实际端口重启并验证，避免注册地址指向一次性临时端口。',
+    '8. 最终回复前再做一次端口检查，确保没有“刚启动成功但随后退出”的情况。',
+    '9. 最终必须输出下面这个精确注册块，控制台会自动注册成 codex.ai.hehao.pro 的 /sites/<auto-slug>/ 子路径转发：',
     '<codex-site-services>',
     '[{"title":"站点名称","url":"http://127.0.0.1:3000/"}]',
     '</codex-site-services>',
-    '7. 如果无法启动服务，请简短说明失败原因和缺少什么。'
+    '',
+    '必须避免这些失败模式：',
+    '- 用 npm start 前台跑完就回复；',
+    '- 工具返回 session id 后直接把该 session 当作长期服务；',
+    '- 只验证本机 curl 一次，没有确认进程脱离当前会话；',
+    '- 忽略反代子路径，导致 /sites/<slug>/ 下资源 404；',
+    '- 服务崩了仍输出注册块。',
+    '',
+    '如果无法满足这些要求，请不要输出注册块，先说明阻塞原因和缺少什么。'
   ].join('\n'),
   external: [
     '请把当前会话相关的已有 Web 访问地址注册到本会话的子站点导航页。',
