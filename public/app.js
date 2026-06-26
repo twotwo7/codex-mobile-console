@@ -10,7 +10,7 @@ import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
 import { createSessionStateController } from './session-state.js?v=8';
 import { createSkillView } from './skill-view.js?v=3';
-import { createTopbarView } from './topbar-view.js?v=7';
+import { createTopbarView } from './topbar-view.js?v=8';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '173';
-const SW_CACHE_VERSION = 'codex-console-v190';
+const APP_ASSET_VERSION = '174';
+const SW_CACHE_VERSION = 'codex-console-v191';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1187,7 +1187,11 @@ function openSessionActionSheet(session) {
   if (!session?.id || !el.sessionActionSheet) return;
   state.sessionActionId = session.id;
   el.sessionActionTitle.textContent = session.title || '未命名会话';
-  el.sessionActionMeta.textContent = `${sessionStatusLabel(session)} · ${formatSessionCwd(session.cwd || '')}`;
+  const metaParts = [sessionStatusLabel(session)];
+  if (session.cwd) metaParts.push(formatSessionCwd(session.cwd));
+  if (session.model) metaParts.push(session.model);
+  if (session.profile) metaParts.push(`p:${session.profile}`);
+  el.sessionActionMeta.textContent = metaParts.join(' · ');
   el.sessionActionButtons.textContent = '';
 
   if (session.trashedAt) {
@@ -1254,24 +1258,42 @@ function renderSiteMountStrip(session = getActiveSession()) {
   if (!el.siteMountStrip) return;
   const mounts = Array.isArray(session?.siteMounts) ? session.siteMounts : [];
   if (el.topbar) el.siteMountStrip.style.setProperty('--topbar-height', `${el.topbar.offsetHeight}px`);
-  el.siteMountStrip.hidden = mounts.length === 0;
+  el.siteMountStrip.hidden = !session?.id;
   el.siteMountStrip.textContent = '';
   el.siteMountStrip.classList.toggle('collapsed', state.siteMountStripCollapsed);
-  if (!mounts.length) return;
+  if (!session?.id) return;
 
   const toggle = document.createElement('button');
   toggle.className = 'site-mount-toggle';
   toggle.type = 'button';
-  toggle.textContent = state.siteMountStripCollapsed ? `站点 ${mounts.length}` : '收起站点';
+  toggle.textContent = '';
+  if (mounts.length) toggle.dataset.count = String(mounts.length);
+  else delete toggle.dataset.count;
   toggle.setAttribute('aria-expanded', String(!state.siteMountStripCollapsed));
-  toggle.title = state.siteMountStripCollapsed ? '展开子站点导航' : '收起子站点导航';
-  toggle.addEventListener('click', () => {
+  toggle.setAttribute('aria-label', mounts.length ? `站点 ${mounts.length}` : '注册站点');
+  toggle.title = mounts.length ? `站点 ${mounts.length}` : '注册站点';
+  toggle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeTopMoreMenu();
+    closeTopFilterMenu();
     state.siteMountStripCollapsed = !state.siteMountStripCollapsed;
     storageSet('cmc.siteMountStripCollapsed', state.siteMountStripCollapsed ? '1' : '0');
     renderSiteMountStrip(session);
   });
   el.siteMountStrip.append(toggle);
   if (state.siteMountStripCollapsed) return;
+
+  const register = document.createElement('button');
+  register.className = 'site-mount-register';
+  register.type = 'button';
+  register.textContent = mounts.length ? '新增' : '新增站点';
+  register.title = '注册 Web 服务或已有域名';
+  register.addEventListener('click', (event) => {
+    event.stopPropagation();
+    closeSiteMountStrip();
+    openSiteRegisterDialog();
+  });
+  el.siteMountStrip.append(register);
 
   for (const mount of mounts) {
     const link = document.createElement('a');
@@ -1283,6 +1305,13 @@ function renderSiteMountStrip(session = getActiveSession()) {
     link.title = link.href;
     el.siteMountStrip.append(link);
   }
+}
+
+function closeSiteMountStrip() {
+  if (state.siteMountStripCollapsed) return;
+  state.siteMountStripCollapsed = true;
+  storageSet('cmc.siteMountStripCollapsed', '1');
+  renderSiteMountStrip();
 }
 
 const SITE_REGISTER_PROMPTS = {
@@ -3307,6 +3336,7 @@ function closeRuntimeDialog() {
 }
 
 function setTopMoreMenu(open) {
+  if (open) closeSiteMountStrip();
   topbarView.setTopMoreMenu(open);
   el.topMoreMenu?.closest?.('.topbar')?.classList.toggle('menu-open', Boolean(open));
 }
@@ -3317,6 +3347,7 @@ function closeTopMoreMenu() {
 }
 
 function setTopFilterMenu(open) {
+  if (open) closeSiteMountStrip();
   topbarView.setTopFilterMenu(open);
   el.topFilterMenu?.closest?.('.topbar')?.classList.toggle('menu-open', Boolean(open));
 }
@@ -3328,6 +3359,9 @@ function closeTopFilterMenu() {
 
 function closeTopMenus() {
   topbarView.closeTopMenus();
+  el.topMoreMenu?.closest?.('.topbar')?.classList.remove('menu-open');
+  el.topFilterMenu?.closest?.('.topbar')?.classList.remove('menu-open');
+  closeSiteMountStrip();
 }
 
 function setAttachmentMenu(open) {
@@ -4299,7 +4333,8 @@ el.topMoreMenu.addEventListener('click', (event) => {
 
 el.sessionConfigButton?.addEventListener('click', (event) => {
   event.stopPropagation();
-  openActiveSessionConfigDialog();
+  closeTopMoreMenu();
+  openSessionActionSheet(getActiveSession());
 });
 
 el.siteRegisterButton?.addEventListener('click', (event) => {
@@ -4320,6 +4355,10 @@ el.topFilterMenu.addEventListener('click', (event) => {
   event.stopPropagation();
 });
 
+el.siteMountStrip?.addEventListener('click', (event) => {
+  event.stopPropagation();
+});
+
 el.favoritesButton.addEventListener('click', () => {
   state.showStarredOnly = !state.showStarredOnly;
   storageSet('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
@@ -4336,7 +4375,7 @@ el.messageDisplayButton.addEventListener('click', () => {
 });
 
 el.shareCaptureButton?.addEventListener('click', async () => {
-  closeTopMoreMenu();
+  closeTopMenus();
   if (!allShareableMessages().length && state.activeId) {
     await loadSession(state.activeId, { full: true, showLoading: false });
   }

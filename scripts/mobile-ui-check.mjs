@@ -245,12 +245,16 @@ async function checkLongTitleMenu(page, viewportName) {
   const title = await assertVisibleBox(page, '#activeTitle', 'long title text');
   const arrow = await assertVisibleBox(page, '#topMoreButton', 'title menu arrow');
   const filter = await assertVisibleBox(page, '#topFilterButton', 'view filter button');
+  const share = await assertVisibleBox(page, '#shareCaptureButton', 'share capture button');
   const actions = await assertVisibleBox(page, '.top-actions', 'top actions');
   if (arrow.x <= title.x || arrow.x + arrow.width > actions.x - 2) {
     throw new Error(`title menu arrow is not stable: ${JSON.stringify({ title, arrow, actions })}`);
   }
-  if (filter.x <= title.x || filter.x + filter.width > actions.x - 2 || Math.abs(filter.x - arrow.x) < 20) {
-    throw new Error(`view filter button is not stable: ${JSON.stringify({ arrow, filter, actions })}`);
+  if (filter.y <= arrow.y + arrow.height - 2 || filter.x < 0) {
+    throw new Error(`view filter button is not in the tool row: ${JSON.stringify({ arrow, filter })}`);
+  }
+  if (Math.abs(share.y - filter.y) > 2 || share.x <= filter.x + filter.width) {
+    throw new Error(`share button is not aligned in the tool row: ${JSON.stringify({ filter, share })}`);
   }
   if (titleRow.height > 28) {
     throw new Error(`long title row wrapped: ${JSON.stringify(titleRow)}`);

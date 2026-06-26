@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=148">
+    <link rel="stylesheet" href="/styles.css?v=149">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -288,37 +288,40 @@
 
       <main class="workspace">
         <header class="topbar">
-          <button id="openDrawer" class="icon-button" type="button" aria-label="打开会话列表">☰</button>
-          <div class="top-title">
-            <div class="top-title-row">
-              <strong id="activeTitle">Codex Console</strong>
-              <div class="top-more">
-                <button id="topMoreButton" class="top-more-button" type="button" aria-label="更多会话操作" aria-haspopup="menu" aria-expanded="false">▾</button>
-                <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
-                  <button id="sessionConfigButton" class="top-menu-item" type="button" role="menuitem">会话配置</button>
-                  <button id="siteRegisterButton" class="top-menu-item" type="button" role="menuitem">注册站点</button>
-                  <button id="shareCaptureButton" class="top-menu-item" type="button" role="menuitem">分享截图</button>
-                  <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
+          <div class="top-main-row">
+            <button id="openDrawer" class="icon-button" type="button" aria-label="打开会话列表">☰</button>
+            <div class="top-title">
+              <div class="top-title-row">
+                <strong id="activeTitle">Codex Console</strong>
+                <div class="top-more">
+                  <button id="topMoreButton" class="top-more-button" type="button" aria-label="会话详情与配置" aria-haspopup="menu" aria-expanded="false">▾</button>
+                  <div id="topMoreMenu" class="top-more-menu" role="menu" hidden>
+                    <button id="sessionConfigButton" class="top-menu-item" type="button" role="menuitem">会话详情</button>
+                    <button id="runtimeButton" class="top-menu-item" type="button" role="menuitem">运行时信息</button>
+                  </div>
                 </div>
               </div>
-              <div class="top-more top-filter">
-                <button id="topFilterButton" class="top-more-button top-filter-button" type="button" aria-label="视图筛选" aria-haspopup="menu" aria-expanded="false"></button>
-                <div id="topFilterMenu" class="top-more-menu top-filter-menu" role="menu" hidden>
-                  <button id="favoritesButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">只看收藏</button>
-                  <button id="messageDisplayButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">结论视图</button>
-                  <button id="collapseMessagesButton" class="top-menu-item" type="button" role="menuitem">折叠对话</button>
-                  <button id="expandMessagesButton" class="top-menu-item" type="button" role="menuitem">展开对话</button>
-                </div>
+              <span id="activeMeta">未选择会话</span>
+            </div>
+            <div class="top-actions">
+              <span id="connectionBadge" class="connection-badge" role="status" aria-label="离线" title="离线" data-icon="offline"></span>
+              <button id="stopButton" class="top-stop-button" type="button" aria-label="停止当前任务" title="停止当前任务" hidden>
+                <span aria-hidden="true"></span>
+              </button>
+            </div>
+          </div>
+          <div class="top-tool-row" aria-label="会话工具">
+            <div class="top-more top-filter">
+              <button id="topFilterButton" class="top-tool-button top-filter-button" type="button" aria-label="会话视图筛选" aria-haspopup="menu" aria-expanded="false"></button>
+              <div id="topFilterMenu" class="top-more-menu top-filter-menu" role="menu" hidden>
+                <button id="favoritesButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">只看收藏</button>
+                <button id="messageDisplayButton" class="top-menu-item" type="button" role="menuitemcheckbox" aria-checked="false">结论视图</button>
+                <button id="collapseMessagesButton" class="top-menu-item" type="button" role="menuitem">折叠对话</button>
+                <button id="expandMessagesButton" class="top-menu-item" type="button" role="menuitem">展开对话</button>
               </div>
             </div>
-            <span id="activeMeta">未选择会话</span>
-          </div>
-          <div class="top-actions">
             <nav id="siteMountStrip" class="site-mount-strip" aria-label="子站点" hidden></nav>
-            <span id="connectionBadge" class="connection-badge" role="status" aria-label="离线" title="离线" data-icon="offline"></span>
-            <button id="stopButton" class="top-stop-button" type="button" aria-label="停止当前任务" title="停止当前任务" hidden>
-              <span aria-hidden="true"></span>
-            </button>
+            <button id="shareCaptureButton" class="top-tool-button top-share-button" type="button" aria-label="生成分享截图" title="生成分享截图"></button>
           </div>
         </header>
 
@@ -689,6 +692,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=173" type="module"></script>
+    <script src="/app.js?v=174" type="module"></script>
   </body>
 </html>
