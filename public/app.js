@@ -10,7 +10,7 @@ import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
 import { createSessionStateController } from './session-state.js?v=8';
 import { createSkillView } from './skill-view.js?v=3';
-import { createTopbarView } from './topbar-view.js?v=8';
+import { createTopbarView } from './topbar-view.js?v=9';
 
 const storedExpandedCwds = (() => {
   const value = storageJsonGet('cmc.expandedCwds', []);
@@ -94,8 +94,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '176';
-const SW_CACHE_VERSION = 'codex-console-v193';
+const APP_ASSET_VERSION = '177';
+const SW_CACHE_VERSION = 'codex-console-v194';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1187,11 +1187,7 @@ function openSessionActionSheet(session) {
   if (!session?.id || !el.sessionActionSheet) return;
   state.sessionActionId = session.id;
   el.sessionActionTitle.textContent = session.title || '未命名会话';
-  const metaParts = [sessionStatusLabel(session)];
-  if (session.cwd) metaParts.push(formatSessionCwd(session.cwd));
-  if (session.model) metaParts.push(session.model);
-  if (session.profile) metaParts.push(`p:${session.profile}`);
-  el.sessionActionMeta.textContent = metaParts.join(' · ');
+  el.sessionActionMeta.textContent = `${sessionStatusLabel(session)} · ${formatSessionCwd(session.cwd || '')}`;
   el.sessionActionButtons.textContent = '';
 
   if (session.trashedAt) {
@@ -1258,22 +1254,18 @@ function renderSiteMountStrip(session = getActiveSession()) {
   if (!el.siteMountStrip) return;
   const mounts = Array.isArray(session?.siteMounts) ? session.siteMounts : [];
   if (el.topbar) el.siteMountStrip.style.setProperty('--topbar-height', `${el.topbar.offsetHeight}px`);
-  el.siteMountStrip.hidden = !session?.id;
+  el.siteMountStrip.hidden = mounts.length === 0;
   el.siteMountStrip.textContent = '';
   el.siteMountStrip.classList.toggle('collapsed', state.siteMountStripCollapsed);
-  if (!session?.id) return;
+  if (!mounts.length) return;
 
   const toggle = document.createElement('button');
   toggle.className = 'site-mount-toggle';
   toggle.type = 'button';
-  toggle.textContent = '';
+  toggle.textContent = state.siteMountStripCollapsed ? `站点 ${mounts.length}` : '收起站点';
   toggle.setAttribute('aria-expanded', String(!state.siteMountStripCollapsed));
-  toggle.setAttribute('aria-label', mounts.length ? `站点 ${mounts.length}` : '注册站点');
-  toggle.title = mounts.length ? `站点 ${mounts.length}` : '注册站点';
-  toggle.addEventListener('click', (event) => {
-    event.stopPropagation();
-    closeTopMoreMenu();
-    closeTopFilterMenu();
+  toggle.title = state.siteMountStripCollapsed ? '展开子站点导航' : '收起子站点导航';
+  toggle.addEventListener('click', () => {
     state.siteMountStripCollapsed = !state.siteMountStripCollapsed;
     storageSet('cmc.siteMountStripCollapsed', state.siteMountStripCollapsed ? '1' : '0');
     renderSiteMountStrip(session);
@@ -1281,42 +1273,16 @@ function renderSiteMountStrip(session = getActiveSession()) {
   el.siteMountStrip.append(toggle);
   if (state.siteMountStripCollapsed) return;
 
-  const popover = document.createElement('div');
-  popover.className = 'site-mount-popover';
-  popover.setAttribute('role', 'menu');
-
-  const register = document.createElement('button');
-  register.className = 'site-mount-register';
-  register.type = 'button';
-  register.setAttribute('role', 'menuitem');
-  register.textContent = mounts.length ? '新增' : '新增站点';
-  register.title = '注册 Web 服务或已有域名';
-  register.addEventListener('click', (event) => {
-    event.stopPropagation();
-    closeSiteMountStrip();
-    openSiteRegisterDialog();
-  });
-  popover.append(register);
-
   for (const mount of mounts) {
     const link = document.createElement('a');
     link.className = 'site-mount-link';
-    link.setAttribute('role', 'menuitem');
     link.href = mount.url || `/sites/${mount.slug}/`;
     link.target = '_blank';
     link.rel = 'noopener';
     link.textContent = mount.title || mount.slug || '站点';
     link.title = link.href;
-    popover.append(link);
+    el.siteMountStrip.append(link);
   }
-  el.siteMountStrip.append(popover);
-}
-
-function closeSiteMountStrip() {
-  if (state.siteMountStripCollapsed) return;
-  state.siteMountStripCollapsed = true;
-  storageSet('cmc.siteMountStripCollapsed', '1');
-  renderSiteMountStrip();
 }
 
 const SITE_REGISTER_PROMPTS = {
@@ -1639,7 +1605,6 @@ function selectedShareMessages() {
 
 function setShareMode(enabled) {
   state.shareMode = Boolean(enabled);
-  el.shareCaptureButton?.setAttribute('aria-pressed', String(state.shareMode));
   if (!state.shareMode) state.shareSelectedKeys.clear();
   messageView.closeMessageMenus();
   closeTopMenus();
@@ -1665,9 +1630,6 @@ function selectRecentShareMessages(count = 6) {
 }
 
 function updateShareBar() {
-  if (el.shareCaptureButton) {
-    el.shareCaptureButton.setAttribute('aria-pressed', String(Boolean(state.shareMode)));
-  }
   el.shareBar?.remove();
   el.shareBar = null;
   if (!state.shareMode || !state.activeId || !el.promptForm) return;
@@ -3345,7 +3307,6 @@ function closeRuntimeDialog() {
 }
 
 function setTopMoreMenu(open) {
-  if (open) closeSiteMountStrip();
   topbarView.setTopMoreMenu(open);
   el.topMoreMenu?.closest?.('.topbar')?.classList.toggle('menu-open', Boolean(open));
 }
@@ -3356,7 +3317,6 @@ function closeTopMoreMenu() {
 }
 
 function setTopFilterMenu(open) {
-  if (open) closeSiteMountStrip();
   topbarView.setTopFilterMenu(open);
   el.topFilterMenu?.closest?.('.topbar')?.classList.toggle('menu-open', Boolean(open));
 }
@@ -3368,9 +3328,6 @@ function closeTopFilterMenu() {
 
 function closeTopMenus() {
   topbarView.closeTopMenus();
-  el.topMoreMenu?.closest?.('.topbar')?.classList.remove('menu-open');
-  el.topFilterMenu?.closest?.('.topbar')?.classList.remove('menu-open');
-  closeSiteMountStrip();
 }
 
 function setAttachmentMenu(open) {
@@ -4342,8 +4299,7 @@ el.topMoreMenu.addEventListener('click', (event) => {
 
 el.sessionConfigButton?.addEventListener('click', (event) => {
   event.stopPropagation();
-  closeTopMoreMenu();
-  openSessionActionSheet(getActiveSession());
+  openActiveSessionConfigDialog();
 });
 
 el.siteRegisterButton?.addEventListener('click', (event) => {
@@ -4364,10 +4320,6 @@ el.topFilterMenu.addEventListener('click', (event) => {
   event.stopPropagation();
 });
 
-el.siteMountStrip?.addEventListener('click', (event) => {
-  event.stopPropagation();
-});
-
 el.favoritesButton.addEventListener('click', () => {
   state.showStarredOnly = !state.showStarredOnly;
   storageSet('cmc.showStarredOnly', state.showStarredOnly ? '1' : '0');
@@ -4384,7 +4336,7 @@ el.messageDisplayButton.addEventListener('click', () => {
 });
 
 el.shareCaptureButton?.addEventListener('click', async () => {
-  closeTopMenus();
+  closeTopMoreMenu();
   if (!allShareableMessages().length && state.activeId) {
     await loadSession(state.activeId, { full: true, showLoading: false });
   }
@@ -4393,7 +4345,6 @@ el.shareCaptureButton?.addEventListener('click', async () => {
     return;
   }
   state.shareMode = true;
-  el.shareCaptureButton?.setAttribute('aria-pressed', 'true');
   if (!state.shareSelectedKeys.size) selectRecentShareMessages(4);
   else renderActive({ stickToBottom: false });
 });

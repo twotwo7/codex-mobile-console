@@ -8,6 +8,7 @@ function statusIconMode(mode = '') {
 function sessionMetaText(session) {
   if (!session) return '未选择会话';
   const parts = [];
+  if (session.cwd) parts.push(session.cwd);
   if (session.model) parts.push(session.model);
   if (session.profile) parts.push(`p:${session.profile}`);
   if (session.goal?.objective) {
