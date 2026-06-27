@@ -167,6 +167,7 @@ async function init() {
     state.hiddenCodexSessions ||= {};
     state.codexSessionTitles ||= {};
     state.codexSessionTags ||= {};
+    state.codexSessionProjects ||= {};
     state.starredMessages ||= {};
     state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
@@ -176,6 +177,7 @@ async function init() {
     state.hiddenCodexSessions ||= {};
     state.codexSessionTitles ||= {};
     state.codexSessionTags ||= {};
+    state.codexSessionProjects ||= {};
     state.starredMessages ||= {};
     state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
@@ -1335,6 +1337,7 @@ function publicSession(session) {
     source: session.source || 'web',
     title: session.title,
     cwd: session.cwd,
+    linkedProjectPath: session.linkedProjectPath || '',
     model: session.model || '',
     profile: session.profile || '',
     reasoningEffort: session.reasoningEffort || '',
@@ -1751,11 +1754,13 @@ function sessionView(session) {
 function publicExternalSession(session) {
   const codexSessionId = session.codexSessionId;
   state.codexSessionTags ||= {};
+  state.codexSessionProjects ||= {};
   return {
     id: `codex:${codexSessionId}`,
     source: 'codex',
     title: state.codexSessionTitles?.[codexSessionId] || session.title,
     cwd: session.cwd,
+    linkedProjectPath: state.codexSessionProjects[codexSessionId] || '',
     model: '',
     profile: '',
     reasoningEffort: '',
@@ -2594,6 +2599,19 @@ async function projectGitSummary(projectPath) {
 async function resolveEvolutionProject(projectId) {
   const projects = await listEvolutionProjects({ includeDetails: false });
   return projects.find((project) => project.id === projectId) || null;
+}
+
+async function normalizeLinkedProjectPath(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  const resolved = path.resolve(raw);
+  const real = await realpath(resolved).catch(() => '');
+  if (!real || !isInsidePath(PROJECTS_ROOT, real)) {
+    const error = new Error('关联项目必须在项目根目录下。');
+    error.code = 'invalid_linked_project';
+    throw error;
+  }
+  return real;
 }
 
 async function publicEvolutionProject(projectPath, options = {}) {
@@ -4844,10 +4862,17 @@ async function handleApi(req, res, url) {
     const cwd = path.resolve(body.cwd || '/root/Projects');
     const title = String(body.title || path.basename(cwd) || 'Codex session').slice(0, 80);
     const sessionConfig = normalizeSessionConfig(body);
+    let linkedProjectPath = '';
+    try {
+      linkedProjectPath = await normalizeLinkedProjectPath(body.linkedProjectPath || '');
+    } catch (error) {
+      return json(res, 400, { error: error.code || 'invalid_linked_project', message: error.message || '关联项目无效' });
+    }
     state.sessions[id] = {
       id,
       title,
       cwd,
+      linkedProjectPath,
       ...sessionConfig,
       tags: normalizeSessionTags(body.tags || []),
       codexSessionId: '',
@@ -4926,8 +4951,9 @@ async function handleApi(req, res, url) {
     const body = await readJson(req);
     const hasConfigPatch = body.config && typeof body.config === 'object';
     const hasTagsPatch = body.tags !== undefined;
+    const hasProjectPatch = body.linkedProjectPath !== undefined;
     const title = body.title === undefined ? '' : String(body.title || '').trim().slice(0, 80);
-    if (!hasConfigPatch && !hasTagsPatch && !title) return json(res, 400, { error: 'empty_patch' });
+    if (!hasConfigPatch && !hasTagsPatch && !hasProjectPatch && !title) return json(res, 400, { error: 'empty_patch' });
 
     if (sessionId.startsWith('codex:')) {
       if (hasConfigPatch) return json(res, 400, { error: 'external_session_config_readonly' });
@@ -4946,6 +4972,14 @@ async function handleApi(req, res, url) {
         state.codexSessionTags ||= {};
         state.codexSessionTags[codexSessionId] = normalizeSessionTags(body.tags || []);
       }
+      if (hasProjectPatch) {
+        state.codexSessionProjects ||= {};
+        try {
+          state.codexSessionProjects[codexSessionId] = await normalizeLinkedProjectPath(body.linkedProjectPath);
+        } catch (error) {
+          return json(res, 400, { error: error.code || 'invalid_linked_project', message: error.message || '关联项目无效' });
+        }
+      }
       scheduleSave();
       const external = await findCodexSession(codexSessionId);
       return json(res, 200, {
@@ -4958,7 +4992,14 @@ async function handleApi(req, res, url) {
     if (title) session.title = title;
     if (hasConfigPatch) Object.assign(session, normalizeSessionConfig(body.config, session));
     if (hasTagsPatch) session.tags = normalizeSessionTags(body.tags || []);
-    if (title || hasConfigPatch) session.updatedAt = nowIso();
+    if (hasProjectPatch) {
+      try {
+        session.linkedProjectPath = await normalizeLinkedProjectPath(body.linkedProjectPath);
+      } catch (error) {
+        return json(res, 400, { error: error.code || 'invalid_linked_project', message: error.message || '关联项目无效' });
+      }
+    }
+    if (title || hasConfigPatch || hasProjectPatch) session.updatedAt = nowIso();
     scheduleSave();
     return json(res, 200, { session: publicSession(session) });
   }

@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=157">
+    <link rel="stylesheet" href="/styles.css?v=158">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -488,6 +488,13 @@
             <input name="profile" placeholder="例如 work">
           </label>
         </div>
+        <label>
+          关联项目
+          <select name="linkedProjectPath">
+            <option value="">未关联项目</option>
+          </select>
+          <small>用于项目进化、目标和巡检；不会改变会话工作目录。</small>
+        </label>
         <div class="field-grid">
           <label>
             沙箱
@@ -703,6 +710,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=185" type="module"></script>
+    <script src="/app.js?v=186" type="module"></script>
   </body>
 </html>

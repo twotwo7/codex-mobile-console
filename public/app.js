@@ -99,8 +99,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '185';
-const SW_CACHE_VERSION = 'codex-console-v202';
+const APP_ASSET_VERSION = '186';
+const SW_CACHE_VERSION = 'codex-console-v203';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1199,6 +1199,24 @@ function formatSessionCwd(cwd = '') {
   return cwd.replace(/^\/root\/Projects\/?/, '~/Projects/');
 }
 
+function projectNameFromPath(projectPath = '') {
+  if (!projectPath) return '';
+  const project = state.evolutionProjects.find((item) => item.path === projectPath);
+  return project?.name || projectPath.split('/').filter(Boolean).pop() || projectPath;
+}
+
+function sessionProjectLabel(session) {
+  return session?.linkedProjectPath ? `项目 ${projectNameFromPath(session.linkedProjectPath)}` : '';
+}
+
+function sessionMetaText(session) {
+  return [
+    sessionStatusLabel(session),
+    sessionProjectLabel(session),
+    formatSessionCwd(session.cwd || '')
+  ].filter(Boolean).join(' · ');
+}
+
 function sessionTagsHtml(session) {
   const tags = Array.isArray(session.tags) ? session.tags.slice(0, 3) : [];
   if (!tags.length) return '';
@@ -1227,7 +1245,7 @@ function openSessionActionSheet(session) {
   if (!session?.id || !el.sessionActionSheet) return;
   state.sessionActionId = session.id;
   el.sessionActionTitle.textContent = session.title || '未命名会话';
-  el.sessionActionMeta.textContent = `${sessionStatusLabel(session)} · ${formatSessionCwd(session.cwd || '')}`;
+  el.sessionActionMeta.textContent = sessionMetaText(session);
   el.sessionActionButtons.textContent = '';
 
   if (session.trashedAt) {
@@ -1237,7 +1255,7 @@ function openSessionActionSheet(session) {
     appendSessionActionButton('任务详情', () => openTaskDetailDialog(session));
     appendSessionActionButton('重命名', () => renameSession(session));
     appendSessionActionButton('编辑标签', () => editSessionTags(session));
-    if (session.source !== 'codex') appendSessionActionButton('配置', () => openSessionConfigDialog(session));
+    appendSessionActionButton('配置', () => openSessionConfigDialog(session));
     appendSessionActionButton('Fork', () => forkSession(session));
     appendSessionActionButton('删除', () => deleteSession(session), { danger: true });
   }
@@ -1258,7 +1276,7 @@ function renderSessionButton(session) {
       <strong>${escapeHtml(session.title || '未命名会话')}</strong>
       <time>${escapeHtml(formatTime(session.trashedAt || session.activityAt || session.updatedAt))}</time>
     </span>
-    <span class="session-meta-row">${escapeHtml(sessionStatusLabel(session))} · ${escapeHtml(formatSessionCwd(session.cwd || ''))}</span>
+    <span class="session-meta-row">${escapeHtml(sessionMetaText(session))}</span>
     ${sessionTagsHtml(session)}
   `;
   if (!session.trashedAt) button.addEventListener('click', () => selectSession(session.id));
@@ -3725,6 +3743,7 @@ function renderEvolutionProjects() {
     const commands = project.config?.checkCommands || [];
     const candidates = audit?.candidates || [];
     const checkRows = check?.results || [];
+    const linkedCount = state.sessions.filter((session) => session.linkedProjectPath === project.path).length;
     return `
       <article class="evolution-card" data-project-id="${escapeHtml(project.id)}">
         <div class="evolution-card-head">
@@ -3752,6 +3771,7 @@ function renderEvolutionProjects() {
         `}
         <div class="evolution-meta">
           <span>检查 ${escapeHtml(String(commands.length || 0))} 项</span>
+          ${linkedCount ? `<span>关联会话 ${escapeHtml(String(linkedCount))}</span>` : ''}
           ${audit?.checkedAt ? `<span>巡检 ${escapeHtml(formatTime(audit.checkedAt))}</span>` : ''}
           ${check?.checkedAt ? `<span>检查 ${escapeHtml(formatTime(check.checkedAt))}</span>` : ''}
         </div>
@@ -4430,16 +4450,70 @@ async function renameSession(session) {
   }
 }
 
-function openSessionConfigDialog(session) {
-  if (!session?.id || !el.sessionConfigDialog || !el.sessionConfigForm) return;
-  if (session.source === 'codex') {
-    alert('全局 Codex 历史会话不能在控制台里修改运行模型。请 Fork 成本应用会话后再配置。');
-    return;
+function setSessionRunConfigDisabled(disabled) {
+  if (!el.sessionConfigForm) return;
+  const names = [
+    'model',
+    'modelCustom',
+    'profile',
+    'sandbox',
+    'approval',
+    'reasoningEffort',
+    'addDirs',
+    'configOverrides',
+    'strictConfig',
+    'ignoreUserConfig',
+    'ignoreRules'
+  ];
+  for (const name of names) {
+    const field = el.sessionConfigForm.elements[name];
+    if (field) field.disabled = disabled;
   }
+}
+
+function renderSessionProjectOptions(selectedPath = '') {
+  const select = el.sessionConfigForm?.elements.linkedProjectPath;
+  if (!select) return;
+  const current = String(selectedPath || '');
+  const options = ['<option value="">未关联项目</option>'];
+  for (const project of state.evolutionProjects) {
+    const selected = project.path === current ? ' selected' : '';
+    const label = `${project.name || project.relativePath} · ${project.relativePath || project.path}`;
+    options.push(`<option value="${escapeHtml(project.path)}"${selected}>${escapeHtml(label)}</option>`);
+  }
+  if (current && !state.evolutionProjects.some((project) => project.path === current)) {
+    options.push(`<option value="${escapeHtml(current)}" selected>${escapeHtml(projectNameFromPath(current))} · ${escapeHtml(formatSessionCwd(current))}</option>`);
+  }
+  select.innerHTML = options.join('');
+}
+
+async function ensureSessionProjectOptions(selectedPath = '') {
+  const select = el.sessionConfigForm?.elements.linkedProjectPath;
+  if (!select) return;
+  select.innerHTML = '<option value="">读取项目列表...</option>';
+  try {
+    await loadEvolutionProjects();
+  } catch {
+    // A stale selected project can still be saved as empty if project loading fails.
+  }
+  renderSessionProjectOptions(selectedPath);
+}
+
+async function openSessionConfigDialog(session) {
+  if (!session?.id || !el.sessionConfigDialog || !el.sessionConfigForm) return;
   el.sessionConfigForm.dataset.sessionId = session.id;
+  el.sessionConfigForm.dataset.sessionSource = session.source || 'web';
   applyRunConfigToForm(el.sessionConfigForm, session);
-  el.sessionConfigState.textContent = '保存后下一次发送生效。';
+  setSessionRunConfigDisabled(session.source === 'codex');
+  if (session.source !== 'codex') {
+    syncModelCustomInput(el.sessionConfigForm.elements.model, el.sessionConfigForm.elements.modelCustom);
+  }
+  renderSessionProjectOptions(session.linkedProjectPath || '');
+  el.sessionConfigState.textContent = session.source === 'codex'
+    ? '全局 Codex 历史会话只保存关联项目；运行配置请 Fork 后修改。'
+    : '保存后下一次发送生效。';
   openModal(el.sessionConfigDialog);
+  await ensureSessionProjectOptions(session.linkedProjectPath || '');
 }
 
 function openActiveSessionConfigDialog() {
@@ -4455,19 +4529,23 @@ function openActiveSessionConfigDialog() {
 async function saveSessionConfig(event) {
   event.preventDefault();
   const sessionId = el.sessionConfigForm?.dataset.sessionId || '';
+  const sessionSource = el.sessionConfigForm?.dataset.sessionSource || '';
   if (!sessionId) return;
   el.sessionConfigState.textContent = '保存中...';
   try {
-    const config = runConfigFromForm(el.sessionConfigForm);
+    const payload = {
+      linkedProjectPath: el.sessionConfigForm?.elements.linkedProjectPath?.value || ''
+    };
+    if (sessionSource !== 'codex') payload.config = runConfigFromForm(el.sessionConfigForm);
     const data = await api(`/api/sessions/${encodeURIComponent(sessionId)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ config })
+      body: JSON.stringify(payload)
     });
     if (data.session) mergeSessionSnapshot(data.session);
     saveSessionCache();
     renderSessions();
     renderActive({ messages: false });
-    el.sessionConfigState.textContent = '已保存，下一次发送生效。';
+    el.sessionConfigState.textContent = sessionSource === 'codex' ? '关联项目已保存。' : '已保存，下一次发送生效。';
     closeModal(el.sessionConfigDialog);
   } catch (error) {
     el.sessionConfigState.textContent = error.message || '保存失败';
