@@ -81,7 +81,8 @@ const state = {
   evolutionProjects: [],
   evolutionAudits: new Map(),
   evolutionChecks: new Map(),
-  evolutionLoadedAt: 0
+  evolutionLoadedAt: 0,
+  evolutionEditingId: ''
 };
 
 let sessionState;
@@ -98,8 +99,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '184';
-const SW_CACHE_VERSION = 'codex-console-v201';
+const APP_ASSET_VERSION = '185';
+const SW_CACHE_VERSION = 'codex-console-v202';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -3720,6 +3721,7 @@ function renderEvolutionProjects() {
     const audit = state.evolutionAudits.get(project.id);
     const check = state.evolutionChecks.get(project.id);
     const objective = project.config?.objective || '未填写目标';
+    const editingObjective = state.evolutionEditingId === project.id;
     const commands = project.config?.checkCommands || [];
     const candidates = audit?.candidates || [];
     const checkRows = check?.results || [];
@@ -3734,7 +3736,20 @@ function renderEvolutionProjects() {
             ${evolutionBadge(project).map((badge) => `<span>${escapeHtml(badge)}</span>`).join('')}
           </div>
         </div>
-        <p class="evolution-objective">${escapeHtml(objective)}</p>
+        ${editingObjective ? `
+          <form class="evolution-objective-form" data-evolution-objective-form>
+            <textarea name="objective" rows="3" maxlength="500" placeholder="例如：持续提升手机端 Codex 控制台的稳定性、性能和远程开发体验。">${escapeHtml(project.config?.objective || '')}</textarea>
+            <div>
+              <button class="ghost-button inline" type="button" data-evolution-action="save-objective">保存</button>
+              <button class="ghost-button inline" type="button" data-evolution-action="cancel-objective">取消</button>
+            </div>
+          </form>
+        ` : `
+          <div class="evolution-objective-row">
+            <p class="evolution-objective">${escapeHtml(objective)}</p>
+            <button class="evolution-icon-button" type="button" data-evolution-action="edit-objective" aria-label="编辑项目目标" title="编辑目标">✎</button>
+          </div>
+        `}
         <div class="evolution-meta">
           <span>检查 ${escapeHtml(String(commands.length || 0))} 项</span>
           ${audit?.checkedAt ? `<span>巡检 ${escapeHtml(formatTime(audit.checkedAt))}</span>` : ''}
@@ -3825,6 +3840,20 @@ async function checkEvolutionProject(id) {
   renderEvolutionProjects();
 }
 
+async function saveEvolutionObjective(id, objective) {
+  el.evolutionStatus.textContent = '正在保存项目目标...';
+  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/config`, {
+    method: 'PATCH',
+    timeoutMs: 20000,
+    body: JSON.stringify({ objective })
+  });
+  mergeEvolutionProject(data.project);
+  state.evolutionEditingId = '';
+  state.evolutionAudits.delete(id);
+  el.evolutionStatus.textContent = objective.trim() ? '项目目标已保存。建议重新巡检一次。' : '项目目标已清空。';
+  renderEvolutionProjects();
+}
+
 async function copyEvolutionPrompt(id) {
   let audit = state.evolutionAudits.get(id);
   if (!audit?.prompt) audit = await auditEvolutionProject(id);
@@ -3838,12 +3867,28 @@ async function handleEvolutionAction(event) {
   const card = button.closest('[data-project-id]');
   const id = card?.dataset.projectId;
   if (!id) return;
+  const action = button.dataset.evolutionAction;
+  if (action === 'edit-objective') {
+    state.evolutionEditingId = id;
+    renderEvolutionProjects();
+    el.evolutionList.querySelector(`[data-project-id="${CSS.escape(id)}"] textarea[name="objective"]`)?.focus();
+    return;
+  }
+  if (action === 'cancel-objective') {
+    state.evolutionEditingId = '';
+    renderEvolutionProjects();
+    return;
+  }
   button.disabled = true;
   try {
-    if (button.dataset.evolutionAction === 'init') await initEvolutionProject(id);
-    if (button.dataset.evolutionAction === 'audit') await auditEvolutionProject(id);
-    if (button.dataset.evolutionAction === 'check') await checkEvolutionProject(id);
-    if (button.dataset.evolutionAction === 'copy') await copyEvolutionPrompt(id);
+    if (action === 'save-objective') {
+      const textarea = card.querySelector('textarea[name="objective"]');
+      await saveEvolutionObjective(id, textarea?.value || '');
+    }
+    if (action === 'init') await initEvolutionProject(id);
+    if (action === 'audit') await auditEvolutionProject(id);
+    if (action === 'check') await checkEvolutionProject(id);
+    if (action === 'copy') await copyEvolutionPrompt(id);
   } catch (error) {
     el.evolutionStatus.textContent = error.message || '操作失败';
   } finally {

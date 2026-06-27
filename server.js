@@ -2634,6 +2634,20 @@ async function initEvolutionProject(projectId) {
   return publicEvolutionProject(project.path);
 }
 
+async function updateEvolutionConfig(projectId, patch = {}) {
+  const project = await resolveEvolutionProject(projectId);
+  if (!project) return null;
+  const full = await publicEvolutionProject(project.path);
+  const nextPatch = {};
+  if ('objective' in patch) nextPatch.objective = String(patch.objective || '').trim().slice(0, 500);
+  const nextConfig = normalizeEvolutionConfig({
+    ...full.config,
+    ...nextPatch
+  }, project.path, full.package);
+  await writeFile(path.join(project.path, 'evolution.json'), `${JSON.stringify(nextConfig, null, 2)}\n`, { mode: 0o644 });
+  return publicEvolutionProject(project.path);
+}
+
 function evolutionPrompt(project, audit = {}) {
   return [
     '你是本项目的维护代理。请基于项目自演进配置进行一轮低风险优化。',
@@ -4770,24 +4784,30 @@ async function handleApi(req, res, url) {
     return json(res, 200, { projects: await listEvolutionProjects({ includeDetails: false }) });
   }
 
-  const evolutionMatch = url.pathname.match(/^\/api\/evolution\/projects\/([^/]+)\/(init|audit|check)$/);
-  if (evolutionMatch && req.method === 'POST') {
+  const evolutionMatch = url.pathname.match(/^\/api\/evolution\/projects\/([^/]+)\/(init|audit|check|config)$/);
+  if (evolutionMatch && (req.method === 'POST' || req.method === 'PATCH')) {
     const projectId = decodeURIComponent(evolutionMatch[1]);
     const action = evolutionMatch[2];
-    if (action === 'init') {
+    if (action === 'init' && req.method === 'POST') {
       const project = await initEvolutionProject(projectId);
       if (!project) return json(res, 404, { error: 'project_not_found' });
       return json(res, 200, { project });
     }
-    if (action === 'audit') {
+    if (action === 'audit' && req.method === 'POST') {
       const audit = await auditEvolutionProject(projectId);
       if (!audit) return json(res, 404, { error: 'project_not_found' });
       return json(res, 200, audit);
     }
-    if (action === 'check') {
+    if (action === 'check' && req.method === 'POST') {
       const result = await runEvolutionChecks(projectId);
       if (!result) return json(res, 404, { error: 'project_not_found' });
       return json(res, 200, result);
+    }
+    if (action === 'config' && req.method === 'PATCH') {
+      const body = await readJson(req).catch(() => ({}));
+      const project = await updateEvolutionConfig(projectId, body);
+      if (!project) return json(res, 404, { error: 'project_not_found' });
+      return json(res, 200, { project });
     }
   }
 
