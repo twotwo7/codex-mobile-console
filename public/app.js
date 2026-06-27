@@ -81,6 +81,7 @@ const state = {
   evolutionProjects: [],
   evolutionAudits: new Map(),
   evolutionChecks: new Map(),
+  evolutionObjectiveSuggestions: new Map(),
   evolutionLoadedAt: 0,
   evolutionEditingId: ''
 };
@@ -99,8 +100,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '187';
-const SW_CACHE_VERSION = 'codex-console-v204';
+const APP_ASSET_VERSION = '188';
+const SW_CACHE_VERSION = 'codex-console-v205';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -3745,6 +3746,7 @@ function renderEvolutionProjects() {
     const candidates = audit?.candidates || [];
     const checkRows = check?.results || [];
     const linkedCount = state.sessions.filter((session) => session.linkedProjectPath === project.path).length;
+    const objectiveSuggestions = state.evolutionObjectiveSuggestions.get(project.id) || [];
     return `
       <article class="evolution-card" data-project-id="${escapeHtml(project.id)}">
         <div class="evolution-card-head">
@@ -3796,8 +3798,19 @@ function renderEvolutionProjects() {
             `).join('')}
           </div>
         ` : ''}
+        ${objectiveSuggestions.length ? `
+          <div class="evolution-suggestions">
+            ${objectiveSuggestions.map((item, index) => `
+              <div>
+                <span>${escapeHtml(item)}</span>
+                <button class="ghost-button inline" type="button" data-evolution-action="use-objective-suggestion" data-suggestion-index="${escapeHtml(String(index))}">使用</button>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
         <div class="evolution-actions">
           <button class="ghost-button inline" type="button" data-evolution-action="init">${project.hasConfig ? '更新配置' : '初始化'}</button>
+          <button class="ghost-button inline" type="button" data-evolution-action="suggest-objectives">目标建议</button>
           <button class="ghost-button inline" type="button" data-evolution-action="audit">巡检</button>
           <button class="ghost-button inline" type="button" data-evolution-action="check">检查</button>
           <button class="ghost-button inline" type="button" data-evolution-action="copy">复制提示词</button>
@@ -3902,6 +3915,20 @@ async function saveEvolutionObjective(id, objective) {
   renderEvolutionProjects();
 }
 
+async function suggestEvolutionObjectives(id) {
+  el.evolutionStatus.textContent = '正在分析关联会话并生成目标建议...';
+  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/objective-suggestions`, {
+    method: 'POST',
+    timeoutMs: 45000
+  });
+  mergeEvolutionProject(data.project);
+  state.evolutionObjectiveSuggestions.set(id, data.suggestions || []);
+  el.evolutionStatus.textContent = data.suggestions?.length
+    ? `已生成 ${data.suggestions.length} 条目标建议，分析关联会话 ${data.linkedSessionCount || 0} 个。`
+    : '暂时没有生成目标建议。';
+  renderEvolutionProjects();
+}
+
 async function copyEvolutionPrompt(id) {
   let audit = state.evolutionAudits.get(id);
   if (!audit?.prompt) audit = await auditEvolutionProject(id);
@@ -3929,10 +3956,17 @@ async function handleEvolutionAction(event) {
   }
   button.disabled = true;
   try {
+    if (action === 'use-objective-suggestion') {
+      const suggestions = state.evolutionObjectiveSuggestions.get(id) || [];
+      const index = Number(button.dataset.suggestionIndex || -1);
+      const objective = suggestions[index] || '';
+      if (objective) await saveEvolutionObjective(id, objective);
+    }
     if (action === 'save-objective') {
       const textarea = card.querySelector('textarea[name="objective"]');
       await saveEvolutionObjective(id, textarea?.value || '');
     }
+    if (action === 'suggest-objectives') await suggestEvolutionObjectives(id);
     if (action === 'init') await initEvolutionProject(id);
     if (action === 'audit') await auditEvolutionProject(id);
     if (action === 'check') await checkEvolutionProject(id);

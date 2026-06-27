@@ -2666,6 +2666,82 @@ async function updateEvolutionConfig(projectId, patch = {}) {
   return publicEvolutionProject(project.path);
 }
 
+async function linkedSessionsForProject(projectPath) {
+  const external = await listCodexSessions();
+  return [
+    ...Object.values(state.sessions || {}),
+    ...external
+  ].filter((session) => session.linkedProjectPath === projectPath && !session.trashedAt);
+}
+
+async function projectLinkedHistoryText(projectPath) {
+  const sessions = await linkedSessionsForProject(projectPath);
+  const chunks = [];
+  for (const session of sessions.slice(0, 8)) {
+    chunks.push(`${session.title || ''} ${session.cwd || ''}`);
+    chunks.push(await sessionHistoryMatchText(session));
+  }
+  return chunks.join('\n').slice(-60000);
+}
+
+function hasAnyText(text, words) {
+  return words.some((word) => text.includes(word));
+}
+
+function uniqueObjectiveSuggestions(items) {
+  const seen = new Set();
+  const out = [];
+  for (const item of items) {
+    const text = String(item || '').replace(/\s+/g, ' ').trim();
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    out.push(text);
+  }
+  return out.slice(0, 5);
+}
+
+async function suggestEvolutionObjectives(projectId) {
+  const project = await resolveEvolutionProject(projectId);
+  if (!project) return null;
+  const full = await publicEvolutionProject(project.path, { includeDetails: false });
+  const name = full.name || path.basename(full.path);
+  const history = normalizeProjectMatchText([
+    full.config.objective,
+    full.package?.name,
+    full.relativePath,
+    await projectLinkedHistoryText(full.path)
+  ].join('\n'));
+  const suggestions = [];
+
+  if (hasAnyText(history, ['手机', 'mobile', 'ui', '界面', '卡顿', '滚动', '侧边栏', '按钮', '交互'])) {
+    suggestions.push(`持续提升 ${name} 的移动端使用体验，重点优化界面密度、交互流畅度、状态反馈和低卡顿操作。`);
+  }
+  if (hasAnyText(history, ['会话', 'session', '队列', '停止', '运行', '状态', '恢复', '重启', '上下文'])) {
+    suggestions.push(`完善 ${name} 的会话生命周期管理，确保运行状态准确、任务可恢复、队列可控、历史上下文可追踪。`);
+  }
+  if (hasAnyText(history, ['进化', '目标', '关联', '项目', '巡检', '推荐', '自演进', 'loop'])) {
+    suggestions.push(`为 ${name} 建立项目自演进能力，围绕目标、会话关联、巡检建议和低风险优化形成可持续迭代流程。`);
+  }
+  if (hasAnyText(history, ['部署', '发布', '版本', '更新', 'github', 'oss', 'release', '自动升级'])) {
+    suggestions.push(`提升 ${name} 的部署和更新可靠性，确保版本检查、发布分发、自动升级和回滚流程清晰可验证。`);
+  }
+  if (hasAnyText(history, ['图片', '附件', '文件', 'markdown', '表格', '截图', '复制', '分享'])) {
+    suggestions.push(`增强 ${name} 的富内容输入输出能力，让图片、文件、Markdown、表格和分享内容在手机端稳定易用。`);
+  }
+  if (hasAnyText(history, ['skill', '技能', '工具', 'runtime', '运行时', '日志', '诊断'])) {
+    suggestions.push(`强化 ${name} 的工具化和诊断能力，让 Skill、运行时信息、日志和异常排查更容易被发现和使用。`);
+  }
+
+  suggestions.push(`持续提升 ${name} 的稳定性、可维护性和可验证性，优先保障核心流程可靠运行并降低后续迭代风险。`);
+  suggestions.push(`围绕真实使用场景优化 ${name}，把高频操作做得更顺手，把异常状态做得更可诊断。`);
+
+  return {
+    project: full,
+    linkedSessionCount: (await linkedSessionsForProject(full.path)).length,
+    suggestions: uniqueObjectiveSuggestions(suggestions)
+  };
+}
+
 function evolutionPrompt(project, audit = {}) {
   return [
     '你是本项目的维护代理。请基于项目自演进配置进行一轮低风险优化。',
@@ -4929,7 +5005,7 @@ async function handleApi(req, res, url) {
     return json(res, 200, await inferEvolutionSessionLinks({ apply: body.apply !== false }));
   }
 
-  const evolutionMatch = url.pathname.match(/^\/api\/evolution\/projects\/([^/]+)\/(init|audit|check|config)$/);
+  const evolutionMatch = url.pathname.match(/^\/api\/evolution\/projects\/([^/]+)\/(init|audit|check|config|objective-suggestions)$/);
   if (evolutionMatch && (req.method === 'POST' || req.method === 'PATCH')) {
     const projectId = decodeURIComponent(evolutionMatch[1]);
     const action = evolutionMatch[2];
@@ -4953,6 +5029,11 @@ async function handleApi(req, res, url) {
       const project = await updateEvolutionConfig(projectId, body);
       if (!project) return json(res, 404, { error: 'project_not_found' });
       return json(res, 200, { project });
+    }
+    if (action === 'objective-suggestions' && req.method === 'POST') {
+      const result = await suggestEvolutionObjectives(projectId);
+      if (!result) return json(res, 404, { error: 'project_not_found' });
+      return json(res, 200, result);
     }
   }
 
