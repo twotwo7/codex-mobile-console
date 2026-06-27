@@ -2747,9 +2747,50 @@ function projectAliases(project) {
     .filter(Boolean);
 }
 
-function inferLinkedProjectForSession(session, projects) {
+async function sessionHistoryMatchText(session) {
+  try {
+    const messages = await displayMessages(session, 140);
+    return messages
+      .slice(-140)
+      .map((message) => [
+        message.role || '',
+        message.text || '',
+        ...(message.files || []).map((file) => file.name || file.path || ''),
+        ...(message.images || []).map((image) => image.name || '')
+      ].join(' '))
+      .join('\n')
+      .slice(-28000);
+  } catch {
+    return '';
+  }
+}
+
+function bestProjectAliasMatch(projects, text, baseConfidence, reasonPrefix) {
+  const normalizedText = normalizeProjectMatchText(text);
+  if (!normalizedText) return null;
+  let best = null;
+  for (const project of projects) {
+    for (const alias of projectAliases(project)) {
+      const normalizedAlias = normalizeProjectMatchText(alias);
+      if (normalizedAlias.length < 4) continue;
+      if (!normalizedText.includes(normalizedAlias)) continue;
+      const confidence = Math.min(96, baseConfidence + Math.min(8, Math.floor(normalizedAlias.length / 4)));
+      if (!best || confidence > best.confidence || normalizedAlias.length > best.aliasLength) {
+        best = {
+          project,
+          confidence,
+          reason: `${reasonPrefix} ${alias}`,
+          aliasLength: normalizedAlias.length
+        };
+      }
+    }
+  }
+  return best ? { project: best.project, confidence: best.confidence, reason: best.reason } : null;
+}
+
+async function inferLinkedProjectForSession(session, projects) {
   if (session.linkedProjectPath) return null;
-  const cwd = path.resolve(session.cwd || '');
+  const cwd = session.cwd ? path.resolve(session.cwd) : '';
   const cwdProject = projects
     .filter((project) => cwd && cwd !== PROJECTS_ROOT && (cwd === project.path || cwd.startsWith(`${project.path}${path.sep}`)))
     .sort((a, b) => b.path.length - a.path.length)[0];
@@ -2757,33 +2798,25 @@ function inferLinkedProjectForSession(session, projects) {
     return { project: cwdProject, confidence: 100, reason: '工作目录在项目目录内' };
   }
 
-  const titleText = normalizeProjectMatchText(`${session.title || ''} ${session.cwd || ''}`);
-  if (!titleText) return null;
-  let best = null;
-  for (const project of projects) {
-    for (const alias of projectAliases(project)) {
-      const normalizedAlias = normalizeProjectMatchText(alias);
-      if (normalizedAlias.length < 3) continue;
-      if (!titleText.includes(normalizedAlias)) continue;
-      const confidence = normalizedAlias.length >= 8 ? 92 : 84;
-      if (!best || confidence > best.confidence || normalizedAlias.length > best.aliasLength) {
-        best = { project, confidence, reason: `标题匹配 ${alias}`, aliasLength: normalizedAlias.length };
-      }
-    }
-  }
-  return best ? { project: best.project, confidence: best.confidence, reason: best.reason } : null;
+  const titleMatch = bestProjectAliasMatch(projects, `${session.title || ''} ${session.cwd || ''}`, 84, '标题匹配');
+  if (titleMatch) return titleMatch;
+
+  const historyText = await sessionHistoryMatchText(session);
+  const historyMatch = bestProjectAliasMatch(projects, historyText, 80, '历史上下文匹配');
+  if (historyMatch) return historyMatch;
+  return null;
 }
 
 async function inferEvolutionSessionLinks({ apply = false } = {}) {
   const projects = await listEvolutionProjects({ includeDetails: false });
   const sessions = [
-    ...Object.values(state.sessions || {}).map(publicSession),
+    ...Object.values(state.sessions || {}),
     ...(await listCodexSessions())
   ].filter((session) => !session.trashedAt);
   const suggestions = [];
   let applied = 0;
   for (const session of sessions) {
-    const match = inferLinkedProjectForSession(session, projects);
+    const match = await inferLinkedProjectForSession(session, projects);
     if (!match) continue;
     const suggestion = {
       sessionId: session.id,
@@ -2795,7 +2828,7 @@ async function inferEvolutionSessionLinks({ apply = false } = {}) {
       reason: match.reason,
       applied: false
     };
-    if (apply && match.confidence >= 84) {
+    if (apply && match.confidence >= 82) {
       if (session.id.startsWith('codex:')) {
         state.codexSessionProjects ||= {};
         state.codexSessionProjects[session.codexSessionId] = match.project.path;
