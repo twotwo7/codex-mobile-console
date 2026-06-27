@@ -1875,7 +1875,7 @@ function resolveReplyImagePath(session, rawPath) {
   } catch {
     // Keep the original value when it is not URI encoded.
   }
-  const cwd = path.resolve(session.cwd || '');
+  const cwd = session.cwd ? path.resolve(session.cwd) : '';
   if (!cwd || cwd === path.resolve('.')) return '';
   const resolved = path.resolve(path.isAbsolute(value) ? value : path.join(cwd, value));
   const uploadRoot = path.resolve(UPLOAD_DIR);
@@ -2728,6 +2728,95 @@ async function runEvolutionChecks(projectId) {
     if (!result.ok) break;
   }
   return { project: full, results, ok: results.every((item) => item.ok), checkedAt: nowIso() };
+}
+
+function normalizeProjectMatchText(value = '') {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '');
+}
+
+function projectAliases(project) {
+  return [
+    project.name,
+    project.relativePath,
+    path.basename(project.path || ''),
+    project.package?.name
+  ]
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
+function inferLinkedProjectForSession(session, projects) {
+  if (session.linkedProjectPath) return null;
+  const cwd = path.resolve(session.cwd || '');
+  const cwdProject = projects
+    .filter((project) => cwd && cwd !== PROJECTS_ROOT && (cwd === project.path || cwd.startsWith(`${project.path}${path.sep}`)))
+    .sort((a, b) => b.path.length - a.path.length)[0];
+  if (cwdProject) {
+    return { project: cwdProject, confidence: 100, reason: '工作目录在项目目录内' };
+  }
+
+  const titleText = normalizeProjectMatchText(`${session.title || ''} ${session.cwd || ''}`);
+  if (!titleText) return null;
+  let best = null;
+  for (const project of projects) {
+    for (const alias of projectAliases(project)) {
+      const normalizedAlias = normalizeProjectMatchText(alias);
+      if (normalizedAlias.length < 3) continue;
+      if (!titleText.includes(normalizedAlias)) continue;
+      const confidence = normalizedAlias.length >= 8 ? 92 : 84;
+      if (!best || confidence > best.confidence || normalizedAlias.length > best.aliasLength) {
+        best = { project, confidence, reason: `标题匹配 ${alias}`, aliasLength: normalizedAlias.length };
+      }
+    }
+  }
+  return best ? { project: best.project, confidence: best.confidence, reason: best.reason } : null;
+}
+
+async function inferEvolutionSessionLinks({ apply = false } = {}) {
+  const projects = await listEvolutionProjects({ includeDetails: false });
+  const sessions = [
+    ...Object.values(state.sessions || {}).map(publicSession),
+    ...(await listCodexSessions())
+  ].filter((session) => !session.trashedAt);
+  const suggestions = [];
+  let applied = 0;
+  for (const session of sessions) {
+    const match = inferLinkedProjectForSession(session, projects);
+    if (!match) continue;
+    const suggestion = {
+      sessionId: session.id,
+      sessionTitle: session.title || '',
+      sessionCwd: session.cwd || '',
+      projectName: match.project.name,
+      projectPath: match.project.path,
+      confidence: match.confidence,
+      reason: match.reason,
+      applied: false
+    };
+    if (apply && match.confidence >= 84) {
+      if (session.id.startsWith('codex:')) {
+        state.codexSessionProjects ||= {};
+        state.codexSessionProjects[session.codexSessionId] = match.project.path;
+      } else if (state.sessions[session.id]) {
+        state.sessions[session.id].linkedProjectPath = match.project.path;
+        state.sessions[session.id].updatedAt = nowIso();
+      }
+      suggestion.applied = true;
+      applied += 1;
+    }
+    suggestions.push(suggestion);
+  }
+  if (applied > 0) scheduleSave();
+  return {
+    ok: true,
+    apply,
+    applied,
+    suggested: suggestions.length,
+    suggestions: suggestions.slice(0, 200),
+    sessions: sortPublicSessions([...Object.values(state.sessions || {}).map(publicSession), ...(await listCodexSessions())])
+  };
 }
 
 async function appUpdateCheck() {
@@ -4800,6 +4889,11 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === '/api/evolution/projects' && req.method === 'GET') {
     return json(res, 200, { projects: await listEvolutionProjects({ includeDetails: false }) });
+  }
+
+  if (url.pathname === '/api/evolution/session-links/infer' && req.method === 'POST') {
+    const body = await readJson(req).catch(() => ({}));
+    return json(res, 200, await inferEvolutionSessionLinks({ apply: body.apply !== false }));
   }
 
   const evolutionMatch = url.pathname.match(/^\/api\/evolution\/projects\/([^/]+)\/(init|audit|check|config)$/);

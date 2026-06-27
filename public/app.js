@@ -99,8 +99,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '186';
-const SW_CACHE_VERSION = 'codex-console-v203';
+const APP_ASSET_VERSION = '187';
+const SW_CACHE_VERSION = 'codex-console-v204';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -294,6 +294,7 @@ const el = {
   drawerSkillStatus: document.querySelector('#drawerSkillStatus'),
   drawerSkillList: document.querySelector('#drawerSkillList'),
   evolutionSearch: document.querySelector('#evolutionSearch'),
+  autoLinkSessionsButton: document.querySelector('#autoLinkSessionsButton'),
   refreshEvolutionButton: document.querySelector('#refreshEvolutionButton'),
   evolutionStatus: document.querySelector('#evolutionStatus'),
   evolutionList: document.querySelector('#evolutionList'),
@@ -3822,6 +3823,33 @@ async function loadEvolutionProjects(force = false) {
   renderEvolutionProjects();
 }
 
+async function autoLinkEvolutionSessions() {
+  if (!el.autoLinkSessionsButton) return;
+  el.autoLinkSessionsButton.disabled = true;
+  el.evolutionStatus.textContent = '正在推荐并应用会话关联...';
+  try {
+    const data = await api('/api/evolution/session-links/infer', {
+      method: 'POST',
+      timeoutMs: 30000,
+      body: JSON.stringify({ apply: true })
+    });
+    if (Array.isArray(data.sessions)) {
+      state.sessions = data.sessions;
+      saveSessionCache();
+    }
+    el.evolutionStatus.textContent = data.applied
+      ? `已自动关联 ${data.applied} 个会话，推荐 ${data.suggested || data.applied} 条。`
+      : `没有新的高置信度关联；推荐 ${data.suggested || 0} 条。`;
+    renderSessions({ force: true });
+    renderEvolutionProjects();
+    renderActive({ messages: false });
+  } catch (error) {
+    el.evolutionStatus.textContent = error.message || '推荐关联失败';
+  } finally {
+    el.autoLinkSessionsButton.disabled = false;
+  }
+}
+
 function mergeEvolutionProject(project) {
   if (!project?.id) return;
   const index = state.evolutionProjects.findIndex((item) => item.id === project.id);
@@ -4874,6 +4902,9 @@ el.drawerRefreshSkillsButton.addEventListener('click', () => {
   refreshSkillsInBackground();
 });
 el.evolutionSearch?.addEventListener('input', renderEvolutionProjects);
+el.autoLinkSessionsButton?.addEventListener('click', () => {
+  autoLinkEvolutionSessions();
+});
 el.refreshEvolutionButton?.addEventListener('click', () => {
   loadEvolutionProjects(true).catch((error) => {
     if (el.evolutionStatus) el.evolutionStatus.textContent = error.message || '刷新失败';

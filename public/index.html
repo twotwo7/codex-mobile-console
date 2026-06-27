@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=158">
+    <link rel="stylesheet" href="/styles.css?v=159">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -74,8 +74,9 @@
           <div id="drawerSkillList" class="skill-list drawer-skill-list">加载中...</div>
         </section>
         <section id="drawerEvolutionPanel" class="drawer-panel drawer-evolution-panel" role="tabpanel" aria-labelledby="evolutionManagerButton">
-          <div class="drawer-skill-toolbar">
+          <div class="drawer-skill-toolbar evolution-toolbar">
             <input id="evolutionSearch" type="search" placeholder="搜索项目..." autocomplete="off">
+            <button id="autoLinkSessionsButton" class="ghost-button inline" type="button">推荐</button>
             <button id="refreshEvolutionButton" class="ghost-button inline" type="button">刷新</button>
           </div>
           <p id="evolutionStatus" class="skill-status">项目自演进：先巡检和生成提示词，再由你决定是否执行。</p>
@@ -710,6 +711,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=186" type="module"></script>
+    <script src="/app.js?v=187" type="module"></script>
   </body>
 </html>

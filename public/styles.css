@@ -509,6 +509,10 @@ button:disabled {
   min-width: 0;
 }
 
+.drawer-evolution-panel .evolution-toolbar {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
 .session-group {
   display: grid;
   gap: 4px;
