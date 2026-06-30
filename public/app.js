@@ -76,6 +76,7 @@ const state = {
   installStatus: '',
   shareMode: false,
   shareSelectedKeys: new Set(),
+  shareSelectedMessages: new Map(),
   shareImageBlob: null,
   shareImageUrl: '',
   evolutionProjects: [],
@@ -100,8 +101,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '189';
-const SW_CACHE_VERSION = 'codex-console-v206';
+const APP_ASSET_VERSION = '190';
+const SW_CACHE_VERSION = 'codex-console-v207';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -876,6 +877,7 @@ function setActiveSessionId(id = '') {
   if (previous !== state.activeId) {
     state.shareMode = false;
     state.shareSelectedKeys.clear();
+    state.shareSelectedMessages.clear();
     recordFrontendEvent('session.switch', state.activeId || 'none');
   }
   return state.activeId;
@@ -1687,20 +1689,51 @@ function shareableMessages(sessionId = state.activeId) {
 }
 
 function allShareableMessages(sessionId = state.activeId) {
-  return loadMessages(sessionId)
+  return displayMessages(sessionId)
     .filter((message) => ['user', 'assistant', 'system'].includes(message.role || '') && !message.variant)
     .sort(compareMessages);
 }
 
+function cloneShareMessage(message) {
+  return {
+    ...message,
+    images: (message.images || []).map((image) => ({ ...image })),
+    files: (message.files || []).map((file) => ({ ...file }))
+  };
+}
+
+function shareMessageCompleteness(message) {
+  if (!message) return -1;
+  return String(message.text || '').length
+    + (message.images || []).length * 500
+    + (message.files || []).length * 200;
+}
+
+function moreCompleteShareMessage(saved, current) {
+  if (!saved && !current) return null;
+  if (!saved) return cloneShareMessage(current);
+  if (!current) return saved;
+  return shareMessageCompleteness(current) > shareMessageCompleteness(saved)
+    ? cloneShareMessage(current)
+    : saved;
+}
+
 function selectedShareMessages() {
   const selected = new Set(state.shareSelectedKeys);
-  return allShareableMessages().filter((message) => selected.has(getShareKey(message)));
+  const currentByKey = new Map(allShareableMessages().map((message) => [getShareKey(message), message]));
+  return [...selected]
+    .map((key) => moreCompleteShareMessage(state.shareSelectedMessages.get(key), currentByKey.get(key)))
+    .filter(Boolean)
+    .sort(compareMessages);
 }
 
 function setShareMode(enabled) {
   state.shareMode = Boolean(enabled);
   el.shareCaptureButton?.setAttribute('aria-pressed', String(state.shareMode));
-  if (!state.shareMode) state.shareSelectedKeys.clear();
+  if (!state.shareMode) {
+    state.shareSelectedKeys.clear();
+    state.shareSelectedMessages.clear();
+  }
   messageView.closeMessageMenus();
   closeTopMenus();
   renderActive();
@@ -1711,8 +1744,13 @@ function toggleShareSelected(message, options = {}) {
   if (!key) return;
   if (options.enterShareMode) state.shareMode = true;
   const selected = options.selected ?? !state.shareSelectedKeys.has(key);
-  if (selected) state.shareSelectedKeys.add(key);
-  else state.shareSelectedKeys.delete(key);
+  if (selected) {
+    state.shareSelectedKeys.add(key);
+    state.shareSelectedMessages.set(key, cloneShareMessage(message));
+  } else {
+    state.shareSelectedKeys.delete(key);
+    state.shareSelectedMessages.delete(key);
+  }
   renderActive({ stickToBottom: false });
 }
 
@@ -1734,6 +1772,7 @@ function updateShareBar() {
   `;
   bar.querySelector('[data-share-action="clear"]').addEventListener('click', () => {
     state.shareSelectedKeys.clear();
+    state.shareSelectedMessages.clear();
     renderActive({ stickToBottom: false });
   });
   bar.querySelector('[data-share-action="cancel"]').addEventListener('click', () => setShareMode(false));
