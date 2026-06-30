@@ -100,8 +100,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '188';
-const SW_CACHE_VERSION = 'codex-console-v205';
+const APP_ASSET_VERSION = '189';
+const SW_CACHE_VERSION = 'codex-console-v206';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -2006,7 +2006,7 @@ function layoutShareTable(ctx, table, maxWidth) {
     return { cells: cellLayouts, header, height: rowHeight };
   };
 
-  const rows = [layoutRow(table.header, true), ...table.rows.slice(0, 40).map((row) => layoutRow(row, false))];
+  const rows = [layoutRow(table.header, true), ...table.rows.map((row) => layoutRow(row, false))];
   return {
     type: 'table',
     widths,
@@ -2026,7 +2026,7 @@ function layoutShareBlocks(ctx, blocks, maxWidth) {
       height += table.height + 18;
       continue;
     }
-    const lines = wrapCanvasRichText(ctx, block.text, maxWidth).slice(0, 80);
+    const lines = wrapCanvasRichText(ctx, block.text, maxWidth);
     layouts.push({ type: 'paragraph', lines, height: lines.length * 36 });
     height += lines.length * 36 + 8;
   }
@@ -2048,7 +2048,7 @@ async function buildShareLayout(messages, session) {
     const textMax = bubbleMax - 44;
     const { blocks, height: textHeight } = layoutShareBlocks(measure, parseShareBlocks(text), textMax);
     const images = [];
-    for (const image of (message.images || []).slice(0, 3)) {
+    for (const image of (message.images || [])) {
       const loaded = await loadShareImage(shareImageSource(image));
       images.push({ loaded, name: image.name || '图片' });
     }
@@ -2062,7 +2062,7 @@ async function buildShareLayout(messages, session) {
   }
 
   const totalHeight = y + 56;
-  if (totalHeight > 14000) {
+  if (totalHeight > 24000) {
     throw new Error('截图太长了，请少选一些消息后再生成。');
   }
   return { width, height: totalHeight, items, session };
@@ -2202,7 +2202,7 @@ async function generateShareImage() {
   img.src = state.shareImageUrl;
   img.alt = '分享截图预览';
   el.sharePreviewBody.append(img);
-  el.sharePreviewState.textContent = `${messages.length} 条消息 · ${formatBytes(blob.size)}`;
+  el.sharePreviewState.textContent = `${messages.length} 条消息 · ${canvas.width}×${canvas.height} · ${formatBytes(blob.size)}`;
 }
 
 async function copyShareImage() {

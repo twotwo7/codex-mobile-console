@@ -2185,23 +2185,31 @@ button:disabled {
   width: min(720px, calc(100% - 18px));
 }
 
+.share-preview-dialog[open] {
+  max-height: min(94svh, 920px);
+  overflow: hidden;
+}
+
 .share-preview-body {
   min-height: 180px;
-  max-height: min(70svh, 720px);
-  overflow-y: auto;
-  overflow-x: hidden;
-  padding: 12px;
+  max-height: min(68svh, 680px);
+  overflow: auto;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-2);
+  overscroll-behavior: contain;
 }
 
 .share-preview-body img {
-  width: 100%;
-  max-width: 420px;
+  width: min(100%, 520px);
+  max-width: none;
   height: auto;
   margin: 0 auto;
   display: block;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #f4f1e9;
 }
 
 .share-preview-loading {
