@@ -101,8 +101,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '192';
-const SW_CACHE_VERSION = 'codex-console-v209';
+const APP_ASSET_VERSION = '193';
+const SW_CACHE_VERSION = 'codex-console-v210';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1092,6 +1092,77 @@ function clipboardTextFromFragment(container) {
   return text;
 }
 
+function normalizeMarkdownClipboardText(text) {
+  return String(text || '')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function markdownFromChildren(node, context = {}) {
+  return [...(node.childNodes || [])].map((child) => markdownFromNode(child, context)).join('');
+}
+
+function markdownTableFromNode(table) {
+  const rows = [...table.querySelectorAll('tr')].map((row) => [...row.children].map((cell) => normalizeMarkdownClipboardText(markdownFromChildren(cell)).replace(/\|/g, '\\|')));
+  if (!rows.length) return '';
+  const width = Math.max(...rows.map((row) => row.length));
+  const fill = (row) => [...row, ...Array(Math.max(0, width - row.length)).fill('')];
+  const out = [];
+  out.push(`| ${fill(rows[0]).join(' | ')} |`);
+  out.push(`| ${Array(width).fill('---').join(' | ')} |`);
+  for (const row of rows.slice(1)) out.push(`| ${fill(row).join(' | ')} |`);
+  return `${out.join('\n')}\n\n`;
+}
+
+function markdownListFromNode(list, ordered) {
+  return [...list.children]
+    .filter((item) => item.tagName?.toLowerCase() === 'li')
+    .map((item, index) => {
+      const prefix = ordered ? `${index + 1}. ` : '- ';
+      const body = normalizeMarkdownClipboardText(markdownFromChildren(item));
+      return `${prefix}${body.replace(/\n/g, `\n${' '.repeat(prefix.length)}`)}`;
+    })
+    .join('\n') + '\n\n';
+}
+
+function markdownFromNode(node, context = {}) {
+  if (!node) return '';
+  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
+  if (node.nodeType !== Node.ELEMENT_NODE) return '';
+  const tag = node.tagName.toLowerCase();
+  if (tag === 'br') return '\n';
+  if (tag === 'strong' || tag === 'b') return `**${markdownFromChildren(node, context).trim()}**`;
+  if (tag === 'em' || tag === 'i') return `*${markdownFromChildren(node, context).trim()}*`;
+  if (tag === 'code') {
+    const text = node.textContent || '';
+    return context.inPre ? text : `\`${text}\``;
+  }
+  if (tag === 'pre') return `\`\`\`\n${node.textContent || ''}\n\`\`\`\n\n`;
+  if (/^h[1-6]$/.test(tag)) return `${'#'.repeat(Number(tag.slice(1)))} ${normalizeMarkdownClipboardText(markdownFromChildren(node, context))}\n\n`;
+  if (tag === 'p') return `${normalizeMarkdownClipboardText(markdownFromChildren(node, context))}\n\n`;
+  if (tag === 'blockquote') {
+    const text = normalizeMarkdownClipboardText(markdownFromChildren(node, context));
+    return `${text.split('\n').map((line) => `> ${line}`).join('\n')}\n\n`;
+  }
+  if (tag === 'ul' || tag === 'ol') return markdownListFromNode(node, tag === 'ol');
+  if (tag === 'table') return markdownTableFromNode(node);
+  if (tag === 'a') {
+    const href = node.getAttribute('href') || '';
+    const label = normalizeMarkdownClipboardText(markdownFromChildren(node, context)) || href;
+    if (!href || href === label) return label;
+    return `[${label}](${href})`;
+  }
+  if (tag === 'img') return node.getAttribute('alt') || '';
+  if (['thead', 'tbody', 'tr', 'th', 'td'].includes(tag)) return markdownFromChildren(node, context);
+  const text = markdownFromChildren(node, { ...context, inPre: context.inPre || tag === 'pre' });
+  return ['div', 'section', 'article'].includes(tag) ? `${normalizeMarkdownClipboardText(text)}\n\n` : text;
+}
+
+function markdownTextFromFragment(container) {
+  return normalizeMarkdownClipboardText(markdownFromChildren(container));
+}
+
 function selectedClipboardPayloadInsideRoot(selection, root) {
   if (!selection?.rangeCount || !root) return null;
   try {
@@ -1105,8 +1176,9 @@ function selectedClipboardPayloadInsideRoot(selection, root) {
     const wrap = document.createElement('div');
     wrap.append(scoped.cloneContents());
     cleanupClipboardFragment(wrap);
+    const markdownText = markdownTextFromFragment(wrap);
     return {
-      text: clipboardTextFromFragment(wrap),
+      text: markdownText || clipboardTextFromFragment(wrap),
       html: wrap.innerHTML.trim()
     };
   } catch {
