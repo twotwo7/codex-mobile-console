@@ -101,8 +101,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '191';
-const SW_CACHE_VERSION = 'codex-console-v208';
+const APP_ASSET_VERSION = '192';
+const SW_CACHE_VERSION = 'codex-console-v209';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1065,8 +1065,35 @@ function messageSelectableRootFromNode(node) {
   return message.querySelector('.message-text[data-loaded="1"], .message-text, .message-summary');
 }
 
-function selectedTextInsideRoot(selection, root) {
-  if (!selection?.rangeCount || !root) return '';
+function cleanupClipboardFragment(container) {
+  container.querySelectorAll('button, input, textarea, select, .code-copy-button, .code-copy-hint').forEach((node) => node.remove());
+  container.querySelectorAll('[class]').forEach((node) => {
+    node.removeAttribute('class');
+  });
+  container.querySelectorAll('[style], [data-loaded], [aria-label], [role]').forEach((node) => {
+    node.removeAttribute('style');
+    node.removeAttribute('data-loaded');
+    node.removeAttribute('aria-label');
+    node.removeAttribute('role');
+  });
+}
+
+function clipboardTextFromFragment(container) {
+  const probe = document.createElement('div');
+  probe.style.position = 'fixed';
+  probe.style.left = '-99999px';
+  probe.style.top = '0';
+  probe.style.width = '680px';
+  probe.style.whiteSpace = 'normal';
+  probe.append(container.cloneNode(true));
+  document.body.append(probe);
+  const text = (probe.innerText || probe.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+  probe.remove();
+  return text;
+}
+
+function selectedClipboardPayloadInsideRoot(selection, root) {
+  if (!selection?.rangeCount || !root) return null;
   try {
     const range = selection.getRangeAt(0);
     const scoped = range.cloneRange();
@@ -1077,24 +1104,31 @@ function selectedTextInsideRoot(selection, root) {
     }
     const wrap = document.createElement('div');
     wrap.append(scoped.cloneContents());
-    return (wrap.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+    cleanupClipboardFragment(wrap);
+    return {
+      text: clipboardTextFromFragment(wrap),
+      html: wrap.innerHTML.trim()
+    };
   } catch {
-    return '';
+    return null;
   }
 }
 
 function handleMessagePaneCopy(event) {
   if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+  if (!event.clipboardData) return;
   const selection = window.getSelection?.();
   if (!selection || selection.isCollapsed || !selection.rangeCount) return;
   const root = messageSelectableRootFromNode(selection.anchorNode)
     || messageSelectableRootFromNode(selection.focusNode)
     || messageSelectableRootFromNode(event.target);
   if (!root) return;
-  const text = selectedTextInsideRoot(selection, root) || (root.textContent || '').trim();
+  const payload = selectedClipboardPayloadInsideRoot(selection, root);
+  const text = payload?.text || (root.innerText || root.textContent || '').trim();
   if (!text) return;
   event.preventDefault();
-  event.clipboardData?.setData('text/plain', text);
+  event.clipboardData.setData('text/plain', text);
+  if (payload?.html) event.clipboardData.setData('text/html', payload.html);
 }
 
 function setBadge(text, mode = '') {
