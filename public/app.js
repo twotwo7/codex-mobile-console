@@ -101,8 +101,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '190';
-const SW_CACHE_VERSION = 'codex-console-v207';
+const APP_ASSET_VERSION = '191';
+const SW_CACHE_VERSION = 'codex-console-v208';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -1048,6 +1048,53 @@ function closeModal(dialog) {
   } else {
     dialog.removeAttribute('open');
   }
+}
+
+function elementFromNode(node) {
+  if (!node) return null;
+  return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+}
+
+function messageSelectableRootFromNode(node) {
+  const element = elementFromNode(node);
+  if (!element || !el.messagePane?.contains(element)) return null;
+  const direct = element.closest('.message-text, .message-summary');
+  if (direct && el.messagePane.contains(direct)) return direct;
+  const message = element.closest('.message');
+  if (!message || !el.messagePane.contains(message)) return null;
+  return message.querySelector('.message-text[data-loaded="1"], .message-text, .message-summary');
+}
+
+function selectedTextInsideRoot(selection, root) {
+  if (!selection?.rangeCount || !root) return '';
+  try {
+    const range = selection.getRangeAt(0);
+    const scoped = range.cloneRange();
+    if (!root.contains(scoped.startContainer)) scoped.setStart(root, 0);
+    if (!root.contains(scoped.endContainer)) {
+      if (root.lastChild) scoped.setEndAfter(root.lastChild);
+      else scoped.setEnd(root, root.childNodes.length);
+    }
+    const wrap = document.createElement('div');
+    wrap.append(scoped.cloneContents());
+    return (wrap.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
+  } catch {
+    return '';
+  }
+}
+
+function handleMessagePaneCopy(event) {
+  if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed || !selection.rangeCount) return;
+  const root = messageSelectableRootFromNode(selection.anchorNode)
+    || messageSelectableRootFromNode(selection.focusNode)
+    || messageSelectableRootFromNode(event.target);
+  if (!root) return;
+  const text = selectedTextInsideRoot(selection, root) || (root.textContent || '').trim();
+  if (!text) return;
+  event.preventDefault();
+  event.clipboardData?.setData('text/plain', text);
 }
 
 function setBadge(text, mode = '') {
@@ -5165,6 +5212,7 @@ function autoSizePrompt() {
 }
 
 el.promptInput.addEventListener('input', autoSizePrompt);
+document.addEventListener('copy', handleMessagePaneCopy, true);
 
 el.messagePane.addEventListener('scroll', () => {
   if (state.suppressScrollTracking) return;

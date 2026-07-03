@@ -1265,6 +1265,8 @@ button:disabled {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .message {
@@ -1277,6 +1279,8 @@ button:disabled {
   border-radius: var(--radius);
   background: var(--surface);
   animation: message-in 0.18s ease-out;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .message.menu-open {
@@ -1335,6 +1339,8 @@ button:disabled {
   font-size: 11px;
   font-weight: 800;
   text-transform: uppercase;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 .message-head span:nth-child(2) {
@@ -1405,6 +1411,8 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .message-text {
@@ -1414,6 +1422,15 @@ button:disabled {
   font-size: 13px;
   line-height: 1.55;
   word-break: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+  -webkit-touch-callout: default;
+}
+
+.message-text *,
+.message-summary * {
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 .message-text > * {
