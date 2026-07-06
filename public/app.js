@@ -21,6 +21,7 @@ const state = {
   sessions: [],
   activeId: storageGet('cmc.activeId'),
   sessionViewMode: storageGet('cmc.sessionViewMode', 'recent') === 'flat' ? 'recent' : storageGet('cmc.sessionViewMode', 'recent'),
+  sessionSearch: storageGet('cmc.sessionSearch', ''),
   theme: storageGet('cmc.theme', 'graphite'),
   autoFollowBottom: storageGet('cmc.autoFollowBottom', '1') === '1',
   elevated: storageGet('cmc.elevated') === '1',
@@ -101,8 +102,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '193';
-const SW_CACHE_VERSION = 'codex-console-v210';
+const APP_ASSET_VERSION = '194';
+const SW_CACHE_VERSION = 'codex-console-v211';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -176,6 +177,8 @@ const el = {
   drawerSettingsPanel: document.querySelector('#drawerSettingsPanel'),
   drawerSettingsButton: document.querySelector('#drawerSettingsButton'),
   sessionList: document.querySelector('#sessionList'),
+  sessionSearchInput: document.querySelector('#sessionSearchInput'),
+  clearSessionSearchButton: document.querySelector('#clearSessionSearchButton'),
   sessionViewButtons: [...document.querySelectorAll('[data-session-view]')],
   sessionActionSheet: document.querySelector('#sessionActionSheet'),
   closeSessionActionSheet: document.querySelector('#closeSessionActionSheet'),
@@ -1207,6 +1210,48 @@ function setBadge(text, mode = '') {
   topbarView.setBadge(text, mode);
 }
 
+function normalizeSearchText(value = '') {
+  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+function sessionSearchHaystack(session) {
+  return normalizeSearchText([
+    session.title,
+    session.cwd,
+    formatSessionCwd(session.cwd || ''),
+    session.linkedProjectPath,
+    sessionProjectLabel(session),
+    session.model,
+    session.profile,
+    session.source,
+    session.codexSessionId,
+    session.id,
+    sessionStatusLabel(session),
+    ...(Array.isArray(session.tags) ? session.tags : [])
+  ].filter(Boolean).join(' '));
+}
+
+function sessionMatchesSearch(session, query = state.sessionSearch) {
+  const normalized = normalizeSearchText(query);
+  if (!normalized) return true;
+  const haystack = sessionSearchHaystack(session);
+  return normalized.split(' ').every((token) => haystack.includes(token));
+}
+
+function sessionSearchActive() {
+  return Boolean(normalizeSearchText(state.sessionSearch));
+}
+
+function setSessionSearch(value = '') {
+  state.sessionSearch = String(value || '');
+  storageSet('cmc.sessionSearch', state.sessionSearch);
+  state.sessionRenderLimit = state.sessionViewMode === 'recent' ? 20 : SESSION_RENDER_STEP;
+  if (el.sessionSearchInput && el.sessionSearchInput.value !== state.sessionSearch) {
+    el.sessionSearchInput.value = state.sessionSearch;
+  }
+  renderSessions({ force: true });
+}
+
 function renderSessions(options = {}) {
   if (!options.force && isMobileViewport() && !state.drawerOpen) {
     state.sessionListDirty = true;
@@ -1215,19 +1260,23 @@ function renderSessions(options = {}) {
   state.sessionListDirty = false;
   el.sessionList.innerHTML = '';
   const fragment = document.createDocumentFragment();
+  const searching = sessionSearchActive();
+  if (el.sessionSearchInput && el.sessionSearchInput.value !== state.sessionSearch) el.sessionSearchInput.value = state.sessionSearch;
+  if (el.clearSessionSearchButton) el.clearSessionSearchButton.hidden = !searching;
 
   const sessions = [...state.sessions]
     .filter((session) => state.sessionViewMode === 'trash' ? Boolean(session.trashedAt) : !session.trashedAt)
+    .filter((session) => sessionMatchesSearch(session))
     .sort((a, b) => String(b.activityAt || b.updatedAt || '').localeCompare(String(a.activityAt || a.updatedAt || '')));
   const limit = state.sessionViewMode === 'recent'
-    ? 20
+    ? (searching ? Math.max(SESSION_RENDER_STEP, state.sessionRenderLimit || SESSION_RENDER_STEP) : 20)
     : Math.max(SESSION_RENDER_STEP, state.sessionRenderLimit || SESSION_RENDER_STEP);
   const visible = sessions.slice(0, limit);
 
   if (!visible.length) {
     const empty = document.createElement('div');
     empty.className = 'session-empty';
-    empty.textContent = state.sessionViewMode === 'trash' ? '回收站为空' : '暂无会话';
+    empty.textContent = searching ? '没有匹配的会话' : state.sessionViewMode === 'trash' ? '回收站为空' : '暂无会话';
     fragment.append(empty);
     el.sessionList.append(fragment);
     return;
@@ -1243,7 +1292,7 @@ function renderSessions(options = {}) {
     for (const [cwd, group] of groups) {
       const section = document.createElement('section');
       section.className = 'session-group';
-      const expanded = state.expandedCwds.has(cwd);
+      const expanded = searching || state.expandedCwds.has(cwd);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'session-group-toggle';
@@ -1254,6 +1303,7 @@ function renderSessions(options = {}) {
         <strong>${expanded ? '收起' : '展开'} · ${group.length}</strong>
       `;
       button.addEventListener('click', () => {
+        if (searching) return;
         if (state.expandedCwds.has(cwd)) state.expandedCwds.delete(cwd);
         else state.expandedCwds.add(cwd);
         saveExpandedCwds();
@@ -1287,7 +1337,7 @@ function renderSessions(options = {}) {
     for (const [tag, group] of sortedGroups) {
       const section = document.createElement('section');
       section.className = 'session-group tag-group';
-      const expanded = state.expandedTags.has(tag);
+      const expanded = searching || state.expandedTags.has(tag);
       const button = document.createElement('button');
       button.type = 'button';
       button.className = 'session-group-toggle';
@@ -1297,6 +1347,7 @@ function renderSessions(options = {}) {
         <strong>${expanded ? '收起' : '展开'} · ${group.length}</strong>
       `;
       button.addEventListener('click', () => {
+        if (searching) return;
         if (state.expandedTags.has(tag)) state.expandedTags.delete(tag);
         else state.expandedTags.add(tag);
         saveExpandedTags();
@@ -1324,7 +1375,7 @@ function renderSessions(options = {}) {
 }
 
 function appendSessionListMore(fragment, total, visibleCount) {
-  if (state.sessionViewMode === 'recent' || visibleCount >= total) return;
+  if ((state.sessionViewMode === 'recent' && !sessionSearchActive()) || visibleCount >= total) return;
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'session-more-button';
@@ -5068,6 +5119,12 @@ el.sessionViewMode.addEventListener('change', () => {
 for (const button of el.sessionViewButtons) {
   button.addEventListener('click', () => setSessionViewMode(button.dataset.sessionView));
 }
+
+el.sessionSearchInput?.addEventListener('input', () => setSessionSearch(el.sessionSearchInput.value));
+el.clearSessionSearchButton?.addEventListener('click', () => {
+  setSessionSearch('');
+  el.sessionSearchInput?.focus();
+});
 
 el.newSessionForm.addEventListener('submit', async (event) => {
   event.preventDefault();

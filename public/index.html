@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=163">
+    <link rel="stylesheet" href="/styles.css?v=164">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -62,6 +62,10 @@
               <button id="smartTagSessionsButton" class="drawer-add-button" type="button" aria-label="智能分类标签" title="智能分类标签">#</button>
               <button id="newSessionButton" class="drawer-add-button" type="button" aria-label="新建会话" title="新建会话">+</button>
             </div>
+          </div>
+          <div class="session-search-row" role="search">
+            <input id="sessionSearchInput" type="search" placeholder="搜索会话、目录、标签..." autocomplete="off">
+            <button id="clearSessionSearchButton" class="drawer-tool-button" type="button" aria-label="清空会话搜索" title="清空搜索">×</button>
           </div>
           <div id="sessionList" class="session-list"></div>
         </section>
@@ -711,6 +715,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=193" type="module"></script>
+    <script src="/app.js?v=194" type="module"></script>
   </body>
 </html>

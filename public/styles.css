@@ -351,6 +351,35 @@ button:disabled {
   gap: 6px;
 }
 
+.session-search-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+  gap: 6px;
+  align-items: center;
+}
+
+.session-search-row input {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 11px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+}
+
+.session-search-row input:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 44%, transparent);
+  outline-offset: 1px;
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+}
+
+.session-search-row .drawer-tool-button[hidden] {
+  display: none;
+}
+
 .drawer-add-button {
   width: 34px;
   min-width: 34px;
