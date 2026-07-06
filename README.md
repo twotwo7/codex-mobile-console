@@ -65,10 +65,10 @@ Prerequisites:
 One-command install on a Linux server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash
 ```
 
-This installs the app under `/opt/codex-mobile-console`, creates a systemd service, starts it on `127.0.0.1:7072`, and prints the generated admin password.
+This installs the latest release bundle from the OSS release channel, stores the app under `/opt/codex-mobile-console`, creates a systemd service, starts it on `127.0.0.1:7072`, configures the OSS update source, and prints the generated admin password.
 
 The service runs as the user who executed the installer, so Codex should already be authenticated for that user.
 
@@ -115,9 +115,17 @@ Environment variables:
 | `APP_UPDATE_MANIFEST_URL` | unset | Preferred update manifest URL, such as an Aliyun OSS `latest.json` |
 | `COOKIE_SECURE=0` | unset | Disable Secure cookies for non-HTTPS local testing |
 
-## Aliyun OSS Update Source
+## Aliyun OSS Install And Update Source
 
-GitHub can stay as the upstream repository while production servers check a domestic OSS release manifest first.
+The recommended public installer uses the OSS release channel:
+
+```bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash
+```
+
+New installs are configured with the OSS update manifest, so app update checks use OSS by default. Users can disable automatic updates in the console settings.
+
+GitHub stays as the upstream repository while production servers can check a domestic OSS release manifest first.
 
 Publish a release bundle:
 

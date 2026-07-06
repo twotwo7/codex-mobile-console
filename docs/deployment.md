@@ -21,7 +21,7 @@ Make sure Codex is already authenticated and works from the same user that will 
 For a fresh Linux server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash
 ```
 
 Defaults:
@@ -37,7 +37,7 @@ Defaults:
 Override values:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | \
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | \
   INSTALL_DIR=/srv/codex-mobile-console \
   PORT=7072 \
   PROJECTS_ROOT=/root/Projects \
@@ -57,7 +57,7 @@ The systemd service runs as the user who executed the installer. This is importa
 If Codex is authenticated as a different user, either run the installer as that user or pass explicit values:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | \
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | \
   CODEX_HOME=/root/.codex \
   PROJECTS_ROOT=/root/Projects \
   bash

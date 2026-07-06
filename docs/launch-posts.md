@@ -21,7 +21,7 @@ The intended workflow is personal/self-hosted: run Codex on a VPS, home lab, NAS
 
 Install:
 
-curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash
 
 It is intended to sit behind HTTPS, VPN, Tailscale, Cloudflare Access, or another trusted access layer. It is not a hosted SaaS or multi-user team product.
 
@@ -67,7 +67,7 @@ Post:
 
 安装：
 
-curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash
 
 建议只放在 HTTPS/VPN/Tailscale/Cloudflare Access 后面自用。
 

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Mobile Console - 手机里的 Codex 控制台</title>
     <meta name="description" content="Self-hosted mobile control panel for persistent Codex development sessions.">
-    <link rel="stylesheet" href="styles.css?v=20260706-oss">
+    <link rel="stylesheet" href="styles.css?v=20260706-oss-install">
   </head>
   <body>
     <header class="site-header" aria-label="站点导航">
@@ -31,7 +31,7 @@
             <a class="primary" href="https://github.com/twotwo7/codex-mobile-console" target="_blank" rel="noreferrer">查看 GitHub</a>
             <button id="copyInstall" type="button">复制安装命令</button>
           </div>
-          <pre><code>curl -fsSL https://raw.githubusercontent.com/twotwo7/codex-mobile-console/main/scripts/install.sh | bash</code></pre>
+          <pre><code>curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash</code></pre>
         </div>
         <figure class="hero-visual">
           <img src="assets/case-remote-control.svg" alt="用手机查看 Codex 正在修复线上问题的案例界面">
@@ -126,41 +126,41 @@
       <section id="updates" class="update-flow">
         <div class="section-head">
           <p class="eyebrow">Install and update</p>
-          <h2>首次安装走 GitHub，后续更新可以优先走 OSS。</h2>
-          <p>适合国内服务器：GitHub 保持主仓库，OSS 提供更稳定的版本清单和发布包下载，更新前会做校验并避开正在运行的 Codex 任务。</p>
+          <h2>OSS 安装，后续自动更新。</h2>
+          <p>适合国内服务器：复制命令到服务器执行，安装完成后把服务放到自己的 HTTPS 域名后面即可。</p>
         </div>
 
         <div class="flow-lanes" aria-label="安装和 OSS 更新流程">
           <div class="flow-lane">
             <span>01</span>
-            <strong>一条命令安装</strong>
-            <p>安装脚本从 GitHub 克隆项目，安装依赖，创建 systemd 服务，并绑定到 <code>127.0.0.1:7072</code>。</p>
+            <strong>复制安装命令</strong>
+            <p><code>curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash</code></p>
           </div>
           <div class="flow-lane">
             <span>02</span>
-            <strong>发布到 OSS</strong>
-            <p>维护者执行 <code>npm run release:oss</code>，生成 git bundle、sha256 和 <code>latest.json</code> 清单上传到阿里云 OSS。</p>
+            <strong>自动完成部署</strong>
+            <p>脚本会从 OSS 获取最新版本，安装依赖，创建 systemd 服务，并绑定到 <code>127.0.0.1:7072</code>。</p>
           </div>
           <div class="flow-lane">
             <span>03</span>
-            <strong>服务器检查更新</strong>
-            <p>部署端配置 <code>APP_UPDATE_MANIFEST_URL</code> 后，控制台优先读取 OSS 清单；不可用时再回退 GitHub 标签和分支检查。</p>
+            <strong>默认自动更新</strong>
+            <p>安装器会写入 OSS 更新源。后续有新版本时，控制台默认自动检查并安全升级。</p>
           </div>
           <div class="flow-lane">
             <span>04</span>
-            <strong>安全应用版本</strong>
-            <p>升级会阻止运行中的 Codex 任务和脏工作区；下载包通过 sha256 与 git bundle 校验后，checkout tag、安装依赖、检查语法，再请求安全重启。</p>
+            <strong>需要时可关闭</strong>
+            <p>如果你更想手动控制版本，可以在控制台设置里关闭自动更新。</p>
           </div>
         </div>
 
         <div class="update-config">
           <div>
-            <span>部署端配置</span>
-            <code>APP_UPDATE_MANIFEST_URL=https://your-bucket.oss-cn-hangzhou.aliyuncs.com/codex-mobile-console/releases/latest.json</code>
+            <span>推荐安装命令</span>
+            <code>curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash</code>
           </div>
           <div>
-            <span>发布端命令</span>
-            <code>ALI_OSS_BUCKET=your-bucket ALI_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com npm run release:oss</code>
+            <span>安装后访问</span>
+            <code>http://127.0.0.1:7072</code>
           </div>
         </div>
       </section>
@@ -180,6 +180,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260706-oss" type="module"></script>
+    <script src="app.js?v=20260706-oss-install" type="module"></script>
   </body>
 </html>
