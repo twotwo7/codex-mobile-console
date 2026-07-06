@@ -13,7 +13,7 @@ button?.addEventListener('click', async () => {
   }
 });
 
-const revealTargets = document.querySelectorAll('.proof, .section-head, .case-item, .feature-list, .install');
+const revealTargets = document.querySelectorAll('.proof, .section-head, .case-item, .feature-list, .flow-lanes, .update-config, .install');
 
 if ('IntersectionObserver' in window) {
   revealTargets.forEach((node) => node.classList.add('reveal'));

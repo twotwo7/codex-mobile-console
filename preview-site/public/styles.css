@@ -97,6 +97,7 @@ img {
   text-decoration: none;
   font-size: 14px;
   font-weight: 750;
+  white-space: nowrap;
   transition: color 0.18s ease, background 0.18s ease;
 }
 
@@ -163,6 +164,7 @@ h3 {
 .section-head p,
 .case-item p,
 .feature-list p,
+.update-flow p,
 .install p {
   color: var(--muted);
   line-height: 1.65;
@@ -274,6 +276,7 @@ pre {
 
 .section,
 .feature-band,
+.update-flow,
 .install {
   padding: clamp(62px, 9vw, 118px) clamp(18px, 6vw, 92px);
 }
@@ -355,6 +358,72 @@ pre {
   display: block;
   margin-top: 28px;
   font-size: 22px;
+}
+
+.update-flow {
+  border-bottom: 1px solid var(--line);
+}
+
+.flow-lanes {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--line);
+  background: var(--line);
+}
+
+.flow-lane {
+  min-width: 0;
+  min-height: 288px;
+  padding: 24px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.flow-lane span {
+  color: var(--accent);
+  font-weight: 950;
+}
+
+.flow-lane strong {
+  display: block;
+  margin-top: 28px;
+  font-size: 22px;
+}
+
+.flow-lane code,
+.update-config code {
+  color: var(--soft);
+  overflow-wrap: anywhere;
+}
+
+.update-config {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  margin-top: 1px;
+  border: 1px solid var(--line);
+  border-top: 0;
+  background: var(--line);
+}
+
+.update-config div {
+  min-width: 0;
+  padding: 22px 24px;
+  background: rgba(10, 14, 18, 0.86);
+}
+
+.update-config span {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--blue);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.update-config code {
+  display: block;
+  font-size: 14px;
+  line-height: 1.55;
 }
 
 .install {
@@ -439,7 +508,9 @@ pre {
   }
 
   .proof,
-  .feature-list {
+  .feature-list,
+  .flow-lanes,
+  .update-config {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -475,7 +546,7 @@ pre {
   }
 
   .brand span:last-child {
-    max-width: 168px;
+    max-width: 126px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -487,7 +558,7 @@ pre {
 
   .site-header nav a {
     min-height: 34px;
-    padding: 0 8px;
+    padding: 0 6px;
     font-size: 12px;
   }
 
@@ -536,6 +607,7 @@ pre {
 
   .section,
   .feature-band,
+  .update-flow,
   .install {
     padding: 56px 16px;
   }
@@ -545,6 +617,15 @@ pre {
   }
 
   .feature-list div {
+    min-height: auto;
+  }
+
+  .flow-lanes,
+  .update-config {
+    grid-template-columns: 1fr;
+  }
+
+  .flow-lane {
     min-height: auto;
   }
 }

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Mobile Console - 手机里的 Codex 控制台</title>
     <meta name="description" content="Self-hosted mobile control panel for persistent Codex development sessions.">
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=20260706-oss">
   </head>
   <body>
     <header class="site-header" aria-label="站点导航">
@@ -16,6 +16,7 @@
       <nav>
         <a href="#cases">案例</a>
         <a href="#features">功能</a>
+        <a href="#updates">更新</a>
         <a href="#install">部署</a>
       </nav>
     </header>
@@ -122,6 +123,48 @@
         </div>
       </section>
 
+      <section id="updates" class="update-flow">
+        <div class="section-head">
+          <p class="eyebrow">Install and update</p>
+          <h2>首次安装走 GitHub，后续更新可以优先走 OSS。</h2>
+          <p>适合国内服务器：GitHub 保持主仓库，OSS 提供更稳定的版本清单和发布包下载，更新前会做校验并避开正在运行的 Codex 任务。</p>
+        </div>
+
+        <div class="flow-lanes" aria-label="安装和 OSS 更新流程">
+          <div class="flow-lane">
+            <span>01</span>
+            <strong>一条命令安装</strong>
+            <p>安装脚本从 GitHub 克隆项目，安装依赖，创建 systemd 服务，并绑定到 <code>127.0.0.1:7072</code>。</p>
+          </div>
+          <div class="flow-lane">
+            <span>02</span>
+            <strong>发布到 OSS</strong>
+            <p>维护者执行 <code>npm run release:oss</code>，生成 git bundle、sha256 和 <code>latest.json</code> 清单上传到阿里云 OSS。</p>
+          </div>
+          <div class="flow-lane">
+            <span>03</span>
+            <strong>服务器检查更新</strong>
+            <p>部署端配置 <code>APP_UPDATE_MANIFEST_URL</code> 后，控制台优先读取 OSS 清单；不可用时再回退 GitHub 标签和分支检查。</p>
+          </div>
+          <div class="flow-lane">
+            <span>04</span>
+            <strong>安全应用版本</strong>
+            <p>升级会阻止运行中的 Codex 任务和脏工作区；下载包通过 sha256 与 git bundle 校验后，checkout tag、安装依赖、检查语法，再请求安全重启。</p>
+          </div>
+        </div>
+
+        <div class="update-config">
+          <div>
+            <span>部署端配置</span>
+            <code>APP_UPDATE_MANIFEST_URL=https://your-bucket.oss-cn-hangzhou.aliyuncs.com/codex-mobile-console/releases/latest.json</code>
+          </div>
+          <div>
+            <span>发布端命令</span>
+            <code>ALI_OSS_BUCKET=your-bucket ALI_OSS_ENDPOINT=oss-cn-hangzhou.aliyuncs.com npm run release:oss</code>
+          </div>
+        </div>
+      </section>
+
       <section id="install" class="install">
         <div>
           <p class="eyebrow">Deploy once, use anywhere</p>
@@ -137,6 +180,6 @@
       </section>
     </main>
 
-    <script src="app.js" type="module"></script>
+    <script src="app.js?v=20260706-oss" type="module"></script>
   </body>
 </html>
