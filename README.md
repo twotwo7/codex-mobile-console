@@ -80,6 +80,14 @@ curl -fsSL https://welcome.ai.hehao.pro/install.sh | DOMAIN=codex.example.com SE
 
 Point the domain A record to the server first. With `DOMAIN` set, the installer installs/enables Caddy when needed and writes a reverse proxy from `https://codex.example.com` to `127.0.0.1:7072`.
 
+Optional bare public-IP setup:
+
+```bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | PUBLIC_BIND=1 bash
+```
+
+This binds the app directly to `0.0.0.0:7072`. Use firewall/security group rules if you choose this mode.
+
 Clone and run:
 
 ```bash

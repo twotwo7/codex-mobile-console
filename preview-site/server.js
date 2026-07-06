@@ -75,6 +75,7 @@ INSTALL_DIR="\${INSTALL_DIR:-/opt/codex-mobile-console}"
 SERVICE_NAME="\${SERVICE_NAME:-codex-mobile-console}"
 HOST="\${HOST:-127.0.0.1}"
 PORT="\${PORT:-7072}"
+PUBLIC_BIND="\${PUBLIC_BIND:-}"
 CODEX_BIN="\${CODEX_BIN:-$(command -v codex || true)}"
 NODE_BIN="\${NODE_BIN:-$(command -v node || true)}"
 SUDO_BIN=""
@@ -87,6 +88,11 @@ DOMAIN="\${DOMAIN:-}"
 SETUP_CADDY="\${SETUP_CADDY:-}"
 if [[ -n "$DOMAIN" && -z "$SETUP_CADDY" ]]; then
   SETUP_CADDY=1
+fi
+if [[ -n "$DOMAIN" && "$SETUP_CADDY" != "0" ]]; then
+  HOST="127.0.0.1"
+elif [[ "$PUBLIC_BIND" == "1" || "$PUBLIC_BIND" == "true" ]]; then
+  HOST="0.0.0.0"
 fi
 
 log() { printf '[codex-mobile-console] %s\\n' "$*"; }
@@ -326,6 +332,13 @@ printf '\\nVersion: %s\\n' "\${version:-$tag}"
 printf 'Local URL: http://127.0.0.1:%s\\n' "$PORT"
 if [[ -n "$DOMAIN" && "$SETUP_CADDY" != "0" ]]; then
   printf 'Public URL: https://%s\\n' "$DOMAIN"
+elif [[ "$HOST" == "0.0.0.0" ]]; then
+  public_ip="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  if [[ -n "$public_ip" ]]; then
+    printf 'Public URL: http://%s:%s\\n' "$public_ip" "$PORT"
+  else
+    printf 'Public URL: http://SERVER_IP:%s\\n' "$PORT"
+  fi
 fi
 printf 'Password: %s\\n' "$($SUDO_BIN tr -d '\\r\\n' < "$PASSWORD_FILE")"
 cat <<MSG
@@ -335,6 +348,7 @@ Next steps:
 2. Keep HOST=127.0.0.1 when using a reverse proxy.
 3. Future app updates use the OSS manifest by default.
 4. Make sure Codex is authenticated for service user: $INSTALL_USER
+5. If PUBLIC_BIND=1 was used, restrict access with firewall/security group rules.
 
 Useful commands:
   systemctl status $SERVICE_NAME --no-pager

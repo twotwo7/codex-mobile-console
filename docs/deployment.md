@@ -71,6 +71,14 @@ curl -fsSL https://welcome.ai.hehao.pro/install.sh | DOMAIN=codex.example.com SE
 
 Before running it, point `codex.example.com` to the server's public IP. The installer keeps the app bound to `127.0.0.1:7072`, installs Caddy when possible, writes a managed Caddyfile block, validates the config, and reloads Caddy. If port `80` or `443` is already owned by another non-Caddy service, the installer stops with a clear error instead of replacing that service.
 
+Optional bare public-IP setup:
+
+```bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | PUBLIC_BIND=1 bash
+```
+
+This mode binds the app directly to `0.0.0.0:7072` and skips Caddy. It is useful for quick testing on a server IP, but you should restrict access with firewall/security group rules and move to HTTPS when possible.
+
 ## 3. Clone And Run Locally
 
 ```bash

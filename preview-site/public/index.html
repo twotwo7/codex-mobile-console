@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Mobile Console - 手机里的 Codex 控制台</title>
     <meta name="description" content="Self-hosted mobile control panel for persistent Codex development sessions.">
-    <link rel="stylesheet" href="styles.css?v=20260706-domain">
+    <link rel="stylesheet" href="styles.css?v=20260706-public-bind">
   </head>
   <body>
     <header class="site-header" aria-label="站点导航">
@@ -17,7 +17,7 @@
         <a href="#cases">案例</a>
         <a href="#features">功能</a>
         <a href="#updates">更新</a>
-        <a href="#install">部署</a>
+        <a href="#deploy">部署</a>
       </nav>
     </header>
 
@@ -32,6 +32,20 @@
             <button id="copyInstall" type="button">复制安装命令</button>
           </div>
           <pre><code>curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash</code></pre>
+          <div id="deploy" class="install-builder">
+            <p class="eyebrow">Install command</p>
+            <div class="install-modes" role="radiogroup" aria-label="部署方式">
+              <label><input type="radio" name="installMode" value="local" checked> 本机/反代</label>
+              <label><input type="radio" name="installMode" value="domain"> 域名+Caddy</label>
+              <label><input type="radio" name="installMode" value="public"> 裸公网 IP</label>
+            </div>
+            <div id="domainField" class="domain-field" hidden>
+              <label for="domainInput">你的域名</label>
+              <input id="domainInput" type="text" inputmode="url" autocomplete="off" placeholder="codex.example.com">
+            </div>
+            <code id="domainCommand">curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash</code>
+            <button id="copyDomainInstall" type="button">复制部署命令</button>
+          </div>
         </div>
         <figure class="hero-visual">
           <img src="assets/case-remote-control.svg" alt="用手机查看 Codex 正在修复线上问题的案例界面">
@@ -163,20 +177,6 @@
             <code>http://127.0.0.1:7072</code>
           </div>
         </div>
-
-        <div class="domain-builder">
-          <div>
-            <p class="eyebrow">Optional domain setup</p>
-            <h3>有域名的话，生成一条带 Caddy 反代的安装命令。</h3>
-            <p>先把域名 A 记录解析到服务器公网 IP，再执行生成的命令。脚本会安装 Caddy 并配置 HTTPS 反代。</p>
-          </div>
-          <div class="domain-command">
-            <label for="domainInput">你的域名</label>
-            <input id="domainInput" type="text" inputmode="url" autocomplete="off" placeholder="codex.example.com">
-            <code id="domainCommand">curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash</code>
-            <button id="copyDomainInstall" type="button">复制命令</button>
-          </div>
-        </div>
       </section>
 
       <section id="install" class="install">
@@ -194,6 +194,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260706-domain" type="module"></script>
+    <script src="app.js?v=20260706-public-bind" type="module"></script>
   </body>
 </html>

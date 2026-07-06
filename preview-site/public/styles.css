@@ -392,6 +392,7 @@ pre {
 
 .flow-lane code,
 .update-config code,
+.install-builder code,
 .domain-command code {
   color: var(--soft);
   overflow-wrap: anywhere;
@@ -425,6 +426,89 @@ pre {
   display: block;
   font-size: 14px;
   line-height: 1.55;
+}
+
+.install-builder {
+  display: grid;
+  gap: 12px;
+  margin-top: 18px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.install-builder .eyebrow {
+  margin-bottom: 0;
+}
+
+.install-modes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.install-modes label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--muted);
+  background: rgba(0, 0, 0, 0.2);
+  font-size: 14px;
+  font-weight: 850;
+  white-space: nowrap;
+}
+
+.install-modes input {
+  width: 14px;
+  height: 14px;
+  margin: 0 6px 0 0;
+  accent-color: var(--accent);
+}
+
+.domain-field {
+  display: grid;
+  gap: 8px;
+}
+
+.domain-field[hidden] {
+  display: none;
+}
+
+.domain-field label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.domain-field input {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 14px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.26);
+  font: inherit;
+  outline: none;
+}
+
+.domain-field input:focus {
+  border-color: rgba(97, 215, 199, 0.62);
+}
+
+.install-builder code {
+  display: block;
+  padding: 13px 14px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.32);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .domain-builder {
@@ -625,6 +709,10 @@ pre {
   h2 { font-size: 38px; }
   h3 { font-size: 28px; }
   .lead { font-size: 17px; }
+
+  .install-modes {
+    grid-template-columns: 1fr;
+  }
 
   .actions {
     gap: 10px;
