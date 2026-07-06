@@ -391,7 +391,8 @@ pre {
 }
 
 .flow-lane code,
-.update-config code {
+.update-config code,
+.domain-command code {
   color: var(--soft);
   overflow-wrap: anywhere;
 }
@@ -424,6 +425,59 @@ pre {
   display: block;
   font-size: 14px;
   line-height: 1.55;
+}
+
+.domain-builder {
+  display: grid;
+  grid-template-columns: minmax(0, 0.86fr) minmax(300px, 0.64fr);
+  gap: clamp(24px, 5vw, 72px);
+  align-items: start;
+  margin-top: clamp(34px, 6vw, 72px);
+}
+
+.domain-builder h3 {
+  max-width: 720px;
+}
+
+.domain-command {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.domain-command label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.domain-command input {
+  width: 100%;
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0 14px;
+  color: var(--text);
+  background: rgba(0, 0, 0, 0.26);
+  font: inherit;
+  outline: none;
+}
+
+.domain-command input:focus {
+  border-color: rgba(97, 215, 199, 0.62);
+}
+
+.domain-command code {
+  display: block;
+  padding: 14px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.32);
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .install {
@@ -498,6 +552,7 @@ pre {
   .hero,
   .case-item,
   .case-item.reverse,
+  .domain-builder,
   .install {
     grid-template-columns: 1fr;
   }

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Codex Mobile Console - 手机里的 Codex 控制台</title>
     <meta name="description" content="Self-hosted mobile control panel for persistent Codex development sessions.">
-    <link rel="stylesheet" href="styles.css?v=20260706-oss-install">
+    <link rel="stylesheet" href="styles.css?v=20260706-domain">
   </head>
   <body>
     <header class="site-header" aria-label="站点导航">
@@ -163,6 +163,20 @@
             <code>http://127.0.0.1:7072</code>
           </div>
         </div>
+
+        <div class="domain-builder">
+          <div>
+            <p class="eyebrow">Optional domain setup</p>
+            <h3>有域名的话，生成一条带 Caddy 反代的安装命令。</h3>
+            <p>先把域名 A 记录解析到服务器公网 IP，再执行生成的命令。脚本会安装 Caddy 并配置 HTTPS 反代。</p>
+          </div>
+          <div class="domain-command">
+            <label for="domainInput">你的域名</label>
+            <input id="domainInput" type="text" inputmode="url" autocomplete="off" placeholder="codex.example.com">
+            <code id="domainCommand">curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash</code>
+            <button id="copyDomainInstall" type="button">复制命令</button>
+          </div>
+        </div>
       </section>
 
       <section id="install" class="install">
@@ -180,6 +194,6 @@
       </section>
     </main>
 
-    <script src="app.js?v=20260706-oss-install" type="module"></script>
+    <script src="app.js?v=20260706-domain" type="module"></script>
   </body>
 </html>

@@ -63,6 +63,14 @@ curl -fsSL https://welcome.ai.hehao.pro/install.sh | \
   bash
 ```
 
+Optional Caddy reverse proxy and HTTPS setup:
+
+```bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | DOMAIN=codex.example.com SETUP_CADDY=1 bash
+```
+
+Before running it, point `codex.example.com` to the server's public IP. The installer keeps the app bound to `127.0.0.1:7072`, installs Caddy when possible, writes a managed Caddyfile block, validates the config, and reloads Caddy. If port `80` or `443` is already owned by another non-Caddy service, the installer stops with a clear error instead of replacing that service.
+
 ## 3. Clone And Run Locally
 
 ```bash

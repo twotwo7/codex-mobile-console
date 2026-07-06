@@ -1,5 +1,8 @@
 const button = document.querySelector('#copyInstall');
 const command = 'curl -fsSL https://welcome.ai.hehao.pro/install.sh | bash';
+const domainInput = document.querySelector('#domainInput');
+const domainCommand = document.querySelector('#domainCommand');
+const copyDomainInstall = document.querySelector('#copyDomainInstall');
 
 button?.addEventListener('click', async () => {
   try {
@@ -13,7 +16,42 @@ button?.addEventListener('click', async () => {
   }
 });
 
-const revealTargets = document.querySelectorAll('.proof, .section-head, .case-item, .feature-list, .flow-lanes, .update-config, .install');
+function normalizedDomain(value) {
+  return String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9.-]/g, '')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^-+|-+$/g, '');
+}
+
+function domainInstallCommand() {
+  const domain = normalizedDomain(domainInput?.value);
+  if (!domain || !domain.includes('.')) return command;
+  return `curl -fsSL https://welcome.ai.hehao.pro/install.sh | DOMAIN=${domain} SETUP_CADDY=1 bash`;
+}
+
+function updateDomainCommand() {
+  if (!domainCommand) return;
+  domainCommand.textContent = domainInstallCommand();
+}
+
+domainInput?.addEventListener('input', updateDomainCommand);
+copyDomainInstall?.addEventListener('click', async () => {
+  const text = domainInstallCommand();
+  try {
+    await navigator.clipboard.writeText(text);
+    copyDomainInstall.textContent = '已复制';
+    setTimeout(() => {
+      copyDomainInstall.textContent = '复制命令';
+    }, 1600);
+  } catch {
+    domainCommand.textContent = text;
+  }
+});
+updateDomainCommand();
+
+const revealTargets = document.querySelectorAll('.proof, .section-head, .case-item, .feature-list, .flow-lanes, .update-config, .domain-builder, .install');
 
 if ('IntersectionObserver' in window) {
   revealTargets.forEach((node) => node.classList.add('reveal'));

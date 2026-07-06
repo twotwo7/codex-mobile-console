@@ -72,6 +72,14 @@ This installs the latest release bundle from the OSS release channel, stores the
 
 The service runs as the user who executed the installer, so Codex should already be authenticated for that user.
 
+Optional domain and HTTPS setup:
+
+```bash
+curl -fsSL https://welcome.ai.hehao.pro/install.sh | DOMAIN=codex.example.com SETUP_CADDY=1 bash
+```
+
+Point the domain A record to the server first. With `DOMAIN` set, the installer installs/enables Caddy when needed and writes a reverse proxy from `https://codex.example.com` to `127.0.0.1:7072`.
+
 Clone and run:
 
 ```bash

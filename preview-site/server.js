@@ -83,14 +83,112 @@ INSTALL_GROUP="$(id -gn)"
 INSTALL_HOME="\${HOME:-$(getent passwd "$INSTALL_USER" | cut -d: -f6)}"
 CODEX_HOME="\${CODEX_HOME:-$INSTALL_HOME/.codex}"
 PROJECTS_ROOT="\${PROJECTS_ROOT:-$INSTALL_HOME/Projects}"
+DOMAIN="\${DOMAIN:-}"
+SETUP_CADDY="\${SETUP_CADDY:-}"
+if [[ -n "$DOMAIN" && -z "$SETUP_CADDY" ]]; then
+  SETUP_CADDY=1
+fi
 
 log() { printf '[codex-mobile-console] %s\\n' "$*"; }
 fail() { printf '[codex-mobile-console] error: %s\\n' "$*" >&2; exit 1; }
 need_command() { command -v "$1" >/dev/null 2>&1 || fail "$1 is required."; }
 
+validate_domain() {
+  if [[ -z "$DOMAIN" ]]; then return 0; fi
+  if [[ "$DOMAIN" == .* || "$DOMAIN" == *..* || "$DOMAIN" != *.* || "$DOMAIN" =~ [^A-Za-z0-9.-] ]]; then
+    fail "invalid DOMAIN: $DOMAIN"
+  fi
+}
+
+install_caddy_if_needed() {
+  if command -v caddy >/dev/null 2>&1; then return 0; fi
+  log "installing Caddy"
+  if command -v apt-get >/dev/null 2>&1; then
+    $SUDO_BIN apt-get update
+    $SUDO_BIN apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
+    $SUDO_BIN rm -f /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/gpg.key \\
+      | $SUDO_BIN gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+    curl -fsSL https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \\
+      | $SUDO_BIN tee /etc/apt/sources.list.d/caddy-stable.list >/dev/null
+    $SUDO_BIN apt-get update
+    $SUDO_BIN apt-get install -y caddy
+  elif command -v dnf >/dev/null 2>&1; then
+    $SUDO_BIN dnf install -y caddy || fail "Caddy install failed. Install Caddy manually, then rerun with DOMAIN=$DOMAIN."
+  elif command -v yum >/dev/null 2>&1; then
+    $SUDO_BIN yum install -y caddy || fail "Caddy install failed. Install Caddy manually, then rerun with DOMAIN=$DOMAIN."
+  else
+    fail "No supported package manager found for automatic Caddy install."
+  fi
+  command -v caddy >/dev/null 2>&1 || fail "Caddy was not installed successfully."
+}
+
+check_public_ports_for_caddy() {
+  if ! command -v ss >/dev/null 2>&1; then return 0; fi
+  local occupied
+  occupied="$(ss -ltnp 2>/dev/null | awk '$4 ~ /:(80|443)$/ && $0 !~ /caddy/ {print}' || true)"
+  if [[ -n "$occupied" ]]; then
+    printf '%s\\n' "$occupied" >&2
+    fail "port 80/443 is already used by a non-Caddy process. Stop or migrate that service before enabling automatic reverse proxy."
+  fi
+}
+
+configure_caddy_reverse_proxy() {
+  if [[ -z "$DOMAIN" || "$SETUP_CADDY" == "0" ]]; then return 0; fi
+  validate_domain
+  install_caddy_if_needed
+  check_public_ports_for_caddy
+
+  local public_ip resolved_ip
+  public_ip="$(curl -fsSL --max-time 5 https://api.ipify.org 2>/dev/null || true)"
+  resolved_ip="$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk 'NR == 1 {print $1}' || true)"
+  if [[ -n "$public_ip" && -n "$resolved_ip" && "$public_ip" != "$resolved_ip" ]]; then
+    log "warning: $DOMAIN resolves to $resolved_ip, current server public IP appears to be $public_ip."
+  fi
+
+  local caddyfile="/etc/caddy/Caddyfile"
+  local backup="$caddyfile.bak.codex-mobile-console.$(date +%Y%m%d%H%M%S)"
+  local tmp_caddy="$tmp_dir/Caddyfile"
+  local marker_begin="# BEGIN Codex Mobile Console $SERVICE_NAME"
+  local marker_end="# END Codex Mobile Console $SERVICE_NAME"
+
+  log "configuring Caddy reverse proxy for $DOMAIN"
+  $SUDO_BIN mkdir -p /etc/caddy
+  $SUDO_BIN touch "$caddyfile"
+  $SUDO_BIN cp "$caddyfile" "$backup"
+  $SUDO_BIN awk -v begin="$marker_begin" -v end="$marker_end" '
+    $0 == begin { skip = 1; next }
+    $0 == end { skip = 0; next }
+    !skip { print }
+  ' "$caddyfile" > "$tmp_caddy"
+  cat >> "$tmp_caddy" <<CADDY
+
+$marker_begin
+$DOMAIN {
+	encode gzip
+	reverse_proxy 127.0.0.1:$PORT
+}
+$marker_end
+CADDY
+  $SUDO_BIN cp "$tmp_caddy" "$caddyfile"
+  if ! $SUDO_BIN caddy fmt --overwrite "$caddyfile" >/dev/null; then
+    $SUDO_BIN cp "$backup" "$caddyfile"
+    fail "caddy fmt failed; restored previous Caddyfile."
+  fi
+  if ! $SUDO_BIN caddy validate --config "$caddyfile" >/dev/null; then
+    $SUDO_BIN cp "$backup" "$caddyfile"
+    fail "caddy validate failed; restored previous Caddyfile."
+  fi
+  $SUDO_BIN systemctl enable --now caddy
+  $SUDO_BIN systemctl reload caddy || $SUDO_BIN systemctl restart caddy
+  log "Caddy reverse proxy ready: https://$DOMAIN"
+}
+
 if [[ "$(uname -s)" != "Linux" ]]; then
   fail "this installer currently supports Linux servers only."
 fi
+
+validate_domain
 
 if [[ "$(id -u)" != "0" ]]; then
   need_command sudo
@@ -220,15 +318,20 @@ done
 curl -fsS "http://127.0.0.1:$PORT/api/healthz" >/dev/null \\
   || fail "service did not pass health check. Run: systemctl status $SERVICE_NAME --no-pager"
 
+configure_caddy_reverse_proxy
+
 PASSWORD_FILE="$INSTALL_DIR/data/admin-password.txt"
 log "installed successfully from OSS"
 printf '\\nVersion: %s\\n' "\${version:-$tag}"
 printf 'Local URL: http://127.0.0.1:%s\\n' "$PORT"
+if [[ -n "$DOMAIN" && "$SETUP_CADDY" != "0" ]]; then
+  printf 'Public URL: https://%s\\n' "$DOMAIN"
+fi
 printf 'Password: %s\\n' "$($SUDO_BIN tr -d '\\r\\n' < "$PASSWORD_FILE")"
 cat <<MSG
 
 Next steps:
-1. Put the app behind HTTPS before phone access.
+1. Put the app behind HTTPS before phone access if DOMAIN was not configured.
 2. Keep HOST=127.0.0.1 when using a reverse proxy.
 3. Future app updates use the OSS manifest by default.
 4. Make sure Codex is authenticated for service user: $INSTALL_USER
