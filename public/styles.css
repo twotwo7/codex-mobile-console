@@ -464,6 +464,10 @@ button:disabled {
   flex: 1;
 }
 
+#drawerSessionsPanel.active {
+  grid-template-rows: auto auto minmax(0, 1fr);
+}
+
 .drawer-skills-panel.active {
   grid-template-rows: auto auto minmax(0, 1fr);
 }

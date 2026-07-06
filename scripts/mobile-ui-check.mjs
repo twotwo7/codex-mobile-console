@@ -217,6 +217,36 @@ async function checkDrawerSwitchStability(page, viewportName) {
   await waitForDrawerSettled(page, false);
 }
 
+async function checkSessionSearchLayout(page, viewportName) {
+  await page.click('#openDrawer');
+  await page.waitForSelector('#sessionDrawer.open', { timeout: 5000 });
+  await waitForDrawerSettled(page, true);
+  await page.click('#drawerSessionsButton');
+  await page.waitForSelector('#drawerSessionsPanel.active', { timeout: 5000 });
+
+  const controls = await assertVisibleBox(page, '.drawer-session-controls', 'session view controls');
+  const search = await assertVisibleBox(page, '.session-search-row', 'session search row');
+  const list = await assertVisibleBox(page, '#sessionList', 'session list');
+  if (search.y < controls.y + controls.height - 1) {
+    throw new Error(`session search overlaps controls: ${JSON.stringify({ controls, search })}`);
+  }
+  if (list.y < search.y + search.height - 1) {
+    throw new Error(`session list overlaps search row: ${JSON.stringify({ search, list })}`);
+  }
+
+  await page.fill('#sessionSearchInput', 'codex');
+  await page.waitForFunction(() => document.querySelector('#sessionSearchInput')?.value === 'codex', null, { timeout: 5000 });
+  const firstEntry = await page.locator('#sessionList .session-entry, #sessionList .session-empty').first().boundingBox();
+  if (!firstEntry || firstEntry.y < search.y + search.height - 1) {
+    throw new Error(`session search result overlaps search row: ${JSON.stringify({ search, firstEntry })}`);
+  }
+  await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-session-search.png`), fullPage: false });
+  await page.fill('#sessionSearchInput', '');
+  await page.click('#closeDrawer');
+  await page.waitForSelector('#sessionDrawer:not(.open)', { timeout: 5000 });
+  await waitForDrawerSettled(page, false);
+}
+
 async function checkRunSettingsPanel(page, viewportName) {
   await page.click('#openDrawer');
   await page.waitForSelector('#sessionDrawer.open', { timeout: 5000 });
@@ -317,6 +347,7 @@ async function run() {
       const page = await context.newPage();
       await loginSmoke(page);
       await checkDrawerSwitchStability(page, viewport.name);
+      await checkSessionSearchLayout(page, viewport.name);
       await checkRunSettingsPanel(page, viewport.name);
       await checkLongTitleMenu(page, viewport.name);
       await checkSkillDialog(page);
