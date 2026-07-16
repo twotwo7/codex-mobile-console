@@ -23,6 +23,9 @@
   "scripts": {
     "start": "node server.js",
     "release:oss": "node scripts/publish-oss-release.mjs",
+    "check:frontend-utils": "node scripts/frontend-utils-check.mjs",
+    "check:server-concurrency": "node scripts/server-concurrency-check.mjs",
+    "check:server-import": "node scripts/server-import-integration-check.mjs",
     "check:state": "node scripts/state-controller-check.mjs",
     "check:mobile-ui": "node scripts/mobile-ui-check.mjs"
   },

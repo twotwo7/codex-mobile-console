@@ -25,15 +25,31 @@ async function api(page, pathName, options = {}) {
 }
 
 async function loginSmoke(page) {
-  await page.goto(APP_URL, { waitUntil: 'networkidle' });
+  await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
   const loginVisible = await page.locator('#loginView:not([hidden])').count();
   if (loginVisible) {
     const password = (await readFile('data/admin-password.txt', 'utf8')).trim();
-    await page.fill('#password', password);
-    await page.click('#loginButton');
+    await page.evaluate(async (password) => {
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ password, client: 'mobile-ui-check' })
+      });
+      if (!response.ok) throw new Error(`test login failed: HTTP ${response.status}`);
+      await window.cmcAfterLogin?.();
+    }, password);
   }
   await page.waitForSelector('#appView:not([hidden])', { timeout: 10000 });
   await page.waitForSelector('#messagePane', { timeout: 5000 });
+}
+
+async function webSessionIds(page) {
+  const data = await api(page, '/api/sessions');
+  return (data.sessions || [])
+    .filter((session) => session.source !== 'codex')
+    .map((session) => session.id)
+    .sort();
 }
 
 async function waitForActiveSession(page, sessionId) {
@@ -234,8 +250,8 @@ async function checkSessionSearchLayout(page, viewportName) {
     throw new Error(`session list overlaps search row: ${JSON.stringify({ search, list })}`);
   }
 
-  await page.fill('#sessionSearchInput', 'codex');
-  await page.waitForFunction(() => document.querySelector('#sessionSearchInput')?.value === 'codex', null, { timeout: 5000 });
+  await page.fill('#sessionSearchInput', '__cmc_no_match_9f8e__');
+  await page.waitForFunction(() => document.querySelector('#sessionList .session-empty')?.textContent.includes('没有匹配'), null, { timeout: 5000 });
   const firstEntry = await page.locator('#sessionList .session-entry, #sessionList .session-empty').first().boundingBox();
   if (!firstEntry || firstEntry.y < search.y + search.height - 1) {
     throw new Error(`session search result overlaps search row: ${JSON.stringify({ search, firstEntry })}`);
@@ -245,6 +261,50 @@ async function checkSessionSearchLayout(page, viewportName) {
   await page.click('#closeDrawer');
   await page.waitForSelector('#sessionDrawer:not(.open)', { timeout: 5000 });
   await waitForDrawerSettled(page, false);
+}
+
+async function checkMessageCopyModule(page) {
+  await page.setContent(`<!doctype html>
+    <html lang="zh-CN">
+      <body>
+        <section id="messagePane">
+          <article class="message">
+            <div class="message-text"><p>第一段 <strong>重点</strong></p><ul><li>条目一</li><li>条目二</li></ul><pre>const answer = 42;</pre><table><thead><tr><th>项目</th><th>状态</th></tr></thead><tbody><tr><td>复制</td><td>通过</td></tr></tbody></table></div>
+          </article>
+          <article class="message"><div class="message-text"><p>不应被复制</p></div></article>
+        </section>
+      </body>
+    </html>`, { waitUntil: 'domcontentloaded' });
+  const result = await page.evaluate(async (appUrl) => {
+    const module = await import(`${appUrl}/message-copy.js?v=1&t=${Date.now()}`);
+    const pane = document.querySelector('#messagePane');
+    const root = pane.querySelector('.message-text');
+    module.installMessageCopyGuard({ messagePane: pane });
+    const range = document.createRange();
+    range.selectNodeContents(root);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const clipboardData = new DataTransfer();
+    const event = new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData });
+    document.dispatchEvent(event);
+    return {
+      prevented: event.defaultPrevented,
+      text: clipboardData.getData('text/plain'),
+      html: clipboardData.getData('text/html')
+    };
+  }, APP_URL);
+  if (!result.prevented) throw new Error('message copy guard did not handle the selection');
+  if (!result.text.includes('**重点**')
+    || !result.text.includes('- 条目一')
+    || !result.text.includes('```\nconst answer = 42;\n```')
+    || !result.text.includes('| 项目 | 状态 |')
+    || result.text.includes('不应被复制')) {
+    throw new Error(`message copy markdown is invalid: ${JSON.stringify(result)}`);
+  }
+  if (!result.html.includes('<strong>重点</strong>') || result.html.includes('不应被复制')) {
+    throw new Error(`message copy html is invalid: ${JSON.stringify(result)}`);
+  }
 }
 
 async function checkRunSettingsPanel(page, viewportName) {
@@ -345,42 +405,54 @@ async function run() {
     for (const viewport of viewports) {
       const context = await browser.newContext({ viewport, isMobile: true, deviceScaleFactor: 2 });
       const page = await context.newPage();
-      await loginSmoke(page);
-      await checkDrawerSwitchStability(page, viewport.name);
-      await checkSessionSearchLayout(page, viewport.name);
-      await checkRunSettingsPanel(page, viewport.name);
-      await checkLongTitleMenu(page, viewport.name);
-      await checkSkillDialog(page);
-      await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-app.png`), fullPage: true });
+      try {
+        await loginSmoke(page);
+        const sessionsBefore = await webSessionIds(page);
+        await checkDrawerSwitchStability(page, viewport.name);
+        await checkSessionSearchLayout(page, viewport.name);
+        await checkRunSettingsPanel(page, viewport.name);
+        await checkLongTitleMenu(page, viewport.name);
+        await checkSkillDialog(page);
+        await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-app.png`), fullPage: true });
 
-      await setFixture(page);
-      await assertVisibleBox(page, '.prompt-bar', 'prompt bar');
-      await assertVisibleBox(page, '.bottom-follow-toggle', 'follow toggle');
-      await assertVisibleBox(page, '.queue-select input', 'queue merge checkbox');
-      await assertVisibleBox(page, '.queue-merge-button', 'queue merge button');
-      await assertVisibleBox(page, '.message-menu-popover', 'message menu');
-      await assertVisibleBox(page, '.image-viewer img', 'image viewer');
-      await assertVisibleBox(page, '.image-viewer-close', 'image close button');
-      await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-fixture.png`), fullPage: true });
-      await page.evaluate(() => {
-        document.querySelector('.image-viewer')?.setAttribute('hidden', '');
-        document.querySelector('.top-more-menu')?.setAttribute('hidden', '');
-        document.querySelector('.attachment-menu')?.setAttribute('hidden', '');
-        document.body.insertAdjacentHTML('beforeend', `
-          <dialog class="session-dialog queue-edit-dialog" open>
-            <form>
-              <div class="dialog-head"><h2>编辑排队输入</h2><button class="icon-button" type="button">×</button></div>
-              <label>内容<textarea rows="8">请继续分析客户截图，并把结论整理成三条。</textarea></label>
-              <div class="queue-edit-meta">22 字 · 图片 1 · 文件 1</div>
-              <div class="queue-edit-actions"><button class="ghost-button inline" type="button">取消</button><button type="submit">保存</button></div>
-            </form>
-          </dialog>
-        `);
-      });
-      await assertVisibleBox(page, '.queue-edit-dialog', 'queue edit dialog');
-      await assertVisibleBox(page, '.queue-edit-dialog textarea', 'queue edit textarea');
-      await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-queue-edit.png`), fullPage: false });
-      await context.close();
+        await checkMessageCopyModule(page);
+        await setFixture(page);
+        await assertVisibleBox(page, '.prompt-bar', 'prompt bar');
+        await assertVisibleBox(page, '.bottom-follow-toggle', 'follow toggle');
+        await assertVisibleBox(page, '.queue-select input', 'queue merge checkbox');
+        await assertVisibleBox(page, '.queue-merge-button', 'queue merge button');
+        await assertVisibleBox(page, '.message-menu-popover', 'message menu');
+        await assertVisibleBox(page, '.image-viewer img', 'image viewer');
+        await assertVisibleBox(page, '.image-viewer-close', 'image close button');
+        await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-fixture.png`), fullPage: true });
+        await page.evaluate(() => {
+          document.querySelector('.image-viewer')?.setAttribute('hidden', '');
+          document.querySelector('.top-more-menu')?.setAttribute('hidden', '');
+          document.querySelector('.attachment-menu')?.setAttribute('hidden', '');
+          document.body.insertAdjacentHTML('beforeend', `
+            <dialog class="session-dialog queue-edit-dialog" open>
+              <form>
+                <div class="dialog-head"><h2>编辑排队输入</h2><button class="icon-button" type="button">×</button></div>
+                <label>内容<textarea rows="8">请继续分析客户截图，并把结论整理成三条。</textarea></label>
+                <div class="queue-edit-meta">22 字 · 图片 1 · 文件 1</div>
+                <div class="queue-edit-actions"><button class="ghost-button inline" type="button">取消</button><button type="submit">保存</button></div>
+              </form>
+            </dialog>
+          `);
+        });
+        await assertVisibleBox(page, '.queue-edit-dialog', 'queue edit dialog');
+        await assertVisibleBox(page, '.queue-edit-dialog textarea', 'queue edit textarea');
+        await page.screenshot({ path: path.join(OUT_DIR, `${viewport.name}-queue-edit.png`), fullPage: false });
+        await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
+        await page.waitForSelector('#appView:not([hidden])', { timeout: 10000 });
+        const sessionsAfter = await webSessionIds(page);
+        if (JSON.stringify(sessionsAfter) !== JSON.stringify(sessionsBefore)) {
+          throw new Error(`mobile UI check changed web sessions: ${JSON.stringify({ sessionsBefore, sessionsAfter })}`);
+        }
+      } finally {
+        await api(page, '/api/logout', { method: 'POST', body: '{}' }).catch(() => {});
+        await context.close();
+      }
     }
   } finally {
     await browser.close();

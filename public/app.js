@@ -3,11 +3,13 @@ import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, s
 import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
+import { installMessageCopyGuard } from './message-copy.js?v=1';
 import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
 import { createMessageView } from './message-view.js?v=17';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
+import { compileTextSearch, createSearchTextCache } from './session-search.js?v=1';
 import { createSessionStateController } from './session-state.js?v=8';
 import { createSkillView } from './skill-view.js?v=3';
 import { createTopbarView } from './topbar-view.js?v=9';
@@ -22,6 +24,7 @@ const state = {
   activeId: storageGet('cmc.activeId'),
   sessionViewMode: storageGet('cmc.sessionViewMode', 'recent') === 'flat' ? 'recent' : storageGet('cmc.sessionViewMode', 'recent'),
   sessionSearch: storageGet('cmc.sessionSearch', ''),
+  sessionSearchFrame: 0,
   theme: storageGet('cmc.theme', 'graphite'),
   autoFollowBottom: storageGet('cmc.autoFollowBottom', '1') === '1',
   elevated: storageGet('cmc.elevated') === '1',
@@ -102,8 +105,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '195';
-const SW_CACHE_VERSION = 'codex-console-v212';
+const APP_ASSET_VERSION = '196';
+const SW_CACHE_VERSION = 'codex-console-v213';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -119,6 +122,7 @@ const DEFAULT_RUN_CONFIG = {
 };
 
 const MODEL_OPTIONS = new Set(['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-4.1']);
+const getSessionSearchText = createSearchTextCache();
 
 const frontendEvents = createFrontendEvents({
   limit: 50,
@@ -1053,169 +1057,12 @@ function closeModal(dialog) {
   }
 }
 
-function elementFromNode(node) {
-  if (!node) return null;
-  return node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
-}
-
-function messageSelectableRootFromNode(node) {
-  const element = elementFromNode(node);
-  if (!element || !el.messagePane?.contains(element)) return null;
-  const direct = element.closest('.message-text, .message-summary');
-  if (direct && el.messagePane.contains(direct)) return direct;
-  const message = element.closest('.message');
-  if (!message || !el.messagePane.contains(message)) return null;
-  return message.querySelector('.message-text[data-loaded="1"], .message-text, .message-summary');
-}
-
-function cleanupClipboardFragment(container) {
-  container.querySelectorAll('button, input, textarea, select, .code-copy-button, .code-copy-hint').forEach((node) => node.remove());
-  container.querySelectorAll('[class]').forEach((node) => {
-    node.removeAttribute('class');
-  });
-  container.querySelectorAll('[style], [data-loaded], [aria-label], [role]').forEach((node) => {
-    node.removeAttribute('style');
-    node.removeAttribute('data-loaded');
-    node.removeAttribute('aria-label');
-    node.removeAttribute('role');
-  });
-}
-
-function clipboardTextFromFragment(container) {
-  const probe = document.createElement('div');
-  probe.style.position = 'fixed';
-  probe.style.left = '-99999px';
-  probe.style.top = '0';
-  probe.style.width = '680px';
-  probe.style.whiteSpace = 'normal';
-  probe.append(container.cloneNode(true));
-  document.body.append(probe);
-  const text = (probe.innerText || probe.textContent || '').replace(/\n{3,}/g, '\n\n').trim();
-  probe.remove();
-  return text;
-}
-
-function normalizeMarkdownClipboardText(text) {
-  return String(text || '')
-    .replace(/[ \t]+\n/g, '\n')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim();
-}
-
-function markdownFromChildren(node, context = {}) {
-  return [...(node.childNodes || [])].map((child) => markdownFromNode(child, context)).join('');
-}
-
-function markdownTableFromNode(table) {
-  const rows = [...table.querySelectorAll('tr')].map((row) => [...row.children].map((cell) => normalizeMarkdownClipboardText(markdownFromChildren(cell)).replace(/\|/g, '\\|')));
-  if (!rows.length) return '';
-  const width = Math.max(...rows.map((row) => row.length));
-  const fill = (row) => [...row, ...Array(Math.max(0, width - row.length)).fill('')];
-  const out = [];
-  out.push(`| ${fill(rows[0]).join(' | ')} |`);
-  out.push(`| ${Array(width).fill('---').join(' | ')} |`);
-  for (const row of rows.slice(1)) out.push(`| ${fill(row).join(' | ')} |`);
-  return `${out.join('\n')}\n\n`;
-}
-
-function markdownListFromNode(list, ordered) {
-  return [...list.children]
-    .filter((item) => item.tagName?.toLowerCase() === 'li')
-    .map((item, index) => {
-      const prefix = ordered ? `${index + 1}. ` : '- ';
-      const body = normalizeMarkdownClipboardText(markdownFromChildren(item));
-      return `${prefix}${body.replace(/\n/g, `\n${' '.repeat(prefix.length)}`)}`;
-    })
-    .join('\n') + '\n\n';
-}
-
-function markdownFromNode(node, context = {}) {
-  if (!node) return '';
-  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue || '';
-  if (node.nodeType !== Node.ELEMENT_NODE) return '';
-  const tag = node.tagName.toLowerCase();
-  if (tag === 'br') return '\n';
-  if (tag === 'strong' || tag === 'b') return `**${markdownFromChildren(node, context).trim()}**`;
-  if (tag === 'em' || tag === 'i') return `*${markdownFromChildren(node, context).trim()}*`;
-  if (tag === 'code') {
-    const text = node.textContent || '';
-    return context.inPre ? text : `\`${text}\``;
-  }
-  if (tag === 'pre') return `\`\`\`\n${node.textContent || ''}\n\`\`\`\n\n`;
-  if (/^h[1-6]$/.test(tag)) return `${'#'.repeat(Number(tag.slice(1)))} ${normalizeMarkdownClipboardText(markdownFromChildren(node, context))}\n\n`;
-  if (tag === 'p') return `${normalizeMarkdownClipboardText(markdownFromChildren(node, context))}\n\n`;
-  if (tag === 'blockquote') {
-    const text = normalizeMarkdownClipboardText(markdownFromChildren(node, context));
-    return `${text.split('\n').map((line) => `> ${line}`).join('\n')}\n\n`;
-  }
-  if (tag === 'ul' || tag === 'ol') return markdownListFromNode(node, tag === 'ol');
-  if (tag === 'table') return markdownTableFromNode(node);
-  if (tag === 'a') {
-    const href = node.getAttribute('href') || '';
-    const label = normalizeMarkdownClipboardText(markdownFromChildren(node, context)) || href;
-    if (!href || href === label) return label;
-    return `[${label}](${href})`;
-  }
-  if (tag === 'img') return node.getAttribute('alt') || '';
-  if (['thead', 'tbody', 'tr', 'th', 'td'].includes(tag)) return markdownFromChildren(node, context);
-  const text = markdownFromChildren(node, { ...context, inPre: context.inPre || tag === 'pre' });
-  return ['div', 'section', 'article'].includes(tag) ? `${normalizeMarkdownClipboardText(text)}\n\n` : text;
-}
-
-function markdownTextFromFragment(container) {
-  return normalizeMarkdownClipboardText(markdownFromChildren(container));
-}
-
-function selectedClipboardPayloadInsideRoot(selection, root) {
-  if (!selection?.rangeCount || !root) return null;
-  try {
-    const range = selection.getRangeAt(0);
-    const scoped = range.cloneRange();
-    if (!root.contains(scoped.startContainer)) scoped.setStart(root, 0);
-    if (!root.contains(scoped.endContainer)) {
-      if (root.lastChild) scoped.setEndAfter(root.lastChild);
-      else scoped.setEnd(root, root.childNodes.length);
-    }
-    const wrap = document.createElement('div');
-    wrap.append(scoped.cloneContents());
-    cleanupClipboardFragment(wrap);
-    const markdownText = markdownTextFromFragment(wrap);
-    return {
-      text: markdownText || clipboardTextFromFragment(wrap),
-      html: wrap.innerHTML.trim()
-    };
-  } catch {
-    return null;
-  }
-}
-
-function handleMessagePaneCopy(event) {
-  if (event.target?.closest?.('input, textarea, [contenteditable="true"]')) return;
-  if (!event.clipboardData) return;
-  const selection = window.getSelection?.();
-  if (!selection || selection.isCollapsed || !selection.rangeCount) return;
-  const root = messageSelectableRootFromNode(selection.anchorNode)
-    || messageSelectableRootFromNode(selection.focusNode)
-    || messageSelectableRootFromNode(event.target);
-  if (!root) return;
-  const payload = selectedClipboardPayloadInsideRoot(selection, root);
-  const text = payload?.text || (root.innerText || root.textContent || '').trim();
-  if (!text) return;
-  event.preventDefault();
-  event.clipboardData.setData('text/plain', text);
-  if (payload?.html) event.clipboardData.setData('text/html', payload.html);
-}
-
 function setBadge(text, mode = '') {
   topbarView.setBadge(text, mode);
 }
 
-function normalizeSearchText(value = '') {
-  return String(value || '').toLowerCase().replace(/\s+/g, ' ').trim();
-}
-
-function sessionSearchHaystack(session) {
-  return normalizeSearchText([
+function sessionSearchValues(session) {
+  return [
     session.title,
     session.cwd,
     formatSessionCwd(session.cwd || ''),
@@ -1228,28 +1075,23 @@ function sessionSearchHaystack(session) {
     session.id,
     sessionStatusLabel(session),
     ...(Array.isArray(session.tags) ? session.tags : [])
-  ].filter(Boolean).join(' '));
+  ].filter(Boolean);
 }
 
-function sessionMatchesSearch(session, query = state.sessionSearch) {
-  const normalized = normalizeSearchText(query);
-  if (!normalized) return true;
-  const haystack = sessionSearchHaystack(session);
-  return normalized.split(' ').every((token) => haystack.includes(token));
-}
-
-function sessionSearchActive() {
-  return Boolean(normalizeSearchText(state.sessionSearch));
-}
-
-function setSessionSearch(value = '') {
+function setSessionSearch(value = '', options = {}) {
   state.sessionSearch = String(value || '');
-  storageSet('cmc.sessionSearch', state.sessionSearch);
   state.sessionRenderLimit = state.sessionViewMode === 'recent' ? 20 : SESSION_RENDER_STEP;
   if (el.sessionSearchInput && el.sessionSearchInput.value !== state.sessionSearch) {
     el.sessionSearchInput.value = state.sessionSearch;
   }
-  renderSessions({ force: true });
+  if (state.sessionSearchFrame) cancelAnimationFrame(state.sessionSearchFrame);
+  const apply = () => {
+    state.sessionSearchFrame = 0;
+    storageSet('cmc.sessionSearch', state.sessionSearch);
+    renderSessions({ force: true });
+  };
+  if (options.defer) state.sessionSearchFrame = requestAnimationFrame(apply);
+  else apply();
 }
 
 function renderSessions(options = {}) {
@@ -1260,13 +1102,14 @@ function renderSessions(options = {}) {
   state.sessionListDirty = false;
   el.sessionList.innerHTML = '';
   const fragment = document.createDocumentFragment();
-  const searching = sessionSearchActive();
+  const search = compileTextSearch(state.sessionSearch);
+  const searching = search.active;
   if (el.sessionSearchInput && el.sessionSearchInput.value !== state.sessionSearch) el.sessionSearchInput.value = state.sessionSearch;
   if (el.clearSessionSearchButton) el.clearSessionSearchButton.hidden = !searching;
 
   const sessions = [...state.sessions]
     .filter((session) => state.sessionViewMode === 'trash' ? Boolean(session.trashedAt) : !session.trashedAt)
-    .filter((session) => sessionMatchesSearch(session))
+    .filter((session) => search.matches(getSessionSearchText(session, sessionSearchValues(session))))
     .sort((a, b) => String(b.activityAt || b.updatedAt || '').localeCompare(String(a.activityAt || a.updatedAt || '')));
   const limit = state.sessionViewMode === 'recent'
     ? (searching ? Math.max(SESSION_RENDER_STEP, state.sessionRenderLimit || SESSION_RENDER_STEP) : 20)
@@ -1315,7 +1158,7 @@ function renderSessions(options = {}) {
       }
       fragment.append(section);
     }
-    appendSessionListMore(fragment, sessions.length, visible.length);
+    appendSessionListMore(fragment, sessions.length, visible.length, searching);
     el.sessionList.append(fragment);
     return;
   }
@@ -1364,18 +1207,18 @@ function renderSessions(options = {}) {
       }
       fragment.append(section);
     }
-    appendSessionListMore(fragment, sessions.length, visible.length);
+    appendSessionListMore(fragment, sessions.length, visible.length, searching);
     el.sessionList.append(fragment);
     return;
   }
 
   for (const session of visible) fragment.append(renderSessionButton(session));
-  appendSessionListMore(fragment, sessions.length, visible.length);
+  appendSessionListMore(fragment, sessions.length, visible.length, searching);
   el.sessionList.append(fragment);
 }
 
-function appendSessionListMore(fragment, total, visibleCount) {
-  if ((state.sessionViewMode === 'recent' && !sessionSearchActive()) || visibleCount >= total) return;
+function appendSessionListMore(fragment, total, visibleCount, searching) {
+  if ((state.sessionViewMode === 'recent' && !searching) || visibleCount >= total) return;
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'session-more-button';
@@ -5120,7 +4963,7 @@ for (const button of el.sessionViewButtons) {
   button.addEventListener('click', () => setSessionViewMode(button.dataset.sessionView));
 }
 
-el.sessionSearchInput?.addEventListener('input', () => setSessionSearch(el.sessionSearchInput.value));
+el.sessionSearchInput?.addEventListener('input', () => setSessionSearch(el.sessionSearchInput.value, { defer: true }));
 el.clearSessionSearchButton?.addEventListener('click', () => {
   setSessionSearch('');
   el.sessionSearchInput?.focus();
@@ -5375,7 +5218,7 @@ function autoSizePrompt() {
 }
 
 el.promptInput.addEventListener('input', autoSizePrompt);
-document.addEventListener('copy', handleMessagePaneCopy, true);
+installMessageCopyGuard({ messagePane: el.messagePane });
 
 el.messagePane.addEventListener('scroll', () => {
   if (state.suppressScrollTracking) return;

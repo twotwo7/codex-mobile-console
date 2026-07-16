@@ -5,6 +5,7 @@ import { appendFile, copyFile, mkdir, readFile, writeFile, stat, rename, readdir
 import { chmodSync, copyFileSync, createReadStream, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createSerialExecutor, createSingleFlight } from './server-concurrency.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '127.0.0.1';
@@ -92,6 +93,8 @@ const clients = new Map();
 const running = new Map();
 const codexUsageCache = new Map();
 const codexMessagesCache = new Map();
+const runCodexImportSingleFlight = createSingleFlight();
+const runStateWriteSerial = createSerialExecutor();
 const clockTick = Number(process.env.CLK_TCK || 100);
 let totalRequests = 0;
 let activeRequests = 0;
@@ -952,19 +955,26 @@ function reconcileSessionRunState(session, reason = 'snapshot') {
 
 let saveTimer = null;
 let restartRequested = false;
+let shuttingDown = false;
 function scheduleSave() {
+  if (shuttingDown) return;
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => saveState().catch(console.error), 100);
 }
 
 async function saveState() {
-  const tmp = `${STATE_FILE}.tmp`;
-  await writeFile(tmp, JSON.stringify(state, null, 2), { mode: 0o600 });
-  await rename(tmp, STATE_FILE);
+  return runStateWriteSerial(async () => {
+    const snapshot = JSON.stringify(state, null, 2);
+    const tmp = `${STATE_FILE}.${process.pid}.${randomUUID()}.tmp`;
+    await writeFile(tmp, snapshot, { mode: 0o600 });
+    await rename(tmp, STATE_FILE);
+  });
 }
 
 async function prepareForShutdown(reason = 'signal') {
   if (running.size > 0) await writeRestartMarker(reason);
+  clearTimeout(saveTimer);
+  saveTimer = null;
   await saveState();
 }
 
@@ -1030,7 +1040,8 @@ function cookieHeader(token, maxAgeSeconds) {
 function pruneAuthSessions() {
   const now = Date.now();
   for (const [token, session] of Object.entries(state.authSessions)) {
-    if (!session || session.expiresAt <= now) delete state.authSessions[token];
+    const testSessionExpired = session?.client === 'mobile-ui-check' && session.createdAt + 60 * 60 * 1000 <= now;
+    if (!session || session.expiresAt <= now || testSessionExpired) delete state.authSessions[token];
   }
 }
 
@@ -4055,11 +4066,21 @@ async function listCodexSessions() {
 }
 
 async function importCodexSession(codexSessionId, options = {}) {
+  const normalizedId = String(codexSessionId || '').trim();
+  const existing = Object.values(state.sessions || {}).find((session) => session.codexSessionId === normalizedId);
+  if (existing) return existing;
+
+  return runCodexImportSingleFlight(normalizedId, () => createImportedCodexSession(normalizedId, options));
+}
+
+async function createImportedCodexSession(codexSessionId, options = {}) {
   const existing = Object.values(state.sessions || {}).find((session) => session.codexSessionId === codexSessionId);
   if (existing) return existing;
 
   const external = await findCodexSession(codexSessionId);
   if (!external) return null;
+  const importedDuringRead = Object.values(state.sessions || {}).find((session) => session.codexSessionId === codexSessionId);
+  if (importedDuringRead) return importedDuringRead;
   delete state.hiddenCodexSessions?.[codexSessionId];
 
   const id = randomUUID();
@@ -4815,7 +4836,8 @@ async function handleApi(req, res, url) {
     state.authSessions[token] = {
       createdAt: Date.now(),
       lastSeenAt: Date.now(),
-      expiresAt: Date.now() + THIRTY_DAYS
+      expiresAt: Date.now() + THIRTY_DAYS,
+      client: body.client === 'mobile-ui-check' ? 'mobile-ui-check' : ''
     };
     scheduleSave();
     return json(res, 200, { ok: true, expiresAt: state.authSessions[token].expiresAt }, {
@@ -5687,11 +5709,29 @@ server.listen(PORT, HOST, () => {
   console.log(`codex-mobile-console listening on http://${HOST}:${PORT}`);
 });
 
-let shuttingDown = false;
+function stopAcceptingHttp() {
+  server.close(() => {});
+  for (const responses of clients.values()) {
+    for (const response of responses) {
+      if (!response.writableEnded) response.end();
+    }
+  }
+  clients.clear();
+}
+
+async function waitForRequestsToSettle(timeoutMs = 2000) {
+  const deadline = Date.now() + timeoutMs;
+  while (activeRequests > 0 && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   try {
+    stopAcceptingHttp();
+    await waitForRequestsToSettle();
     await prepareForShutdown(signal.toLowerCase());
   } catch (error) {
     console.error(error);
