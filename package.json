@@ -26,6 +26,8 @@
     "check:frontend-utils": "node scripts/frontend-utils-check.mjs",
     "check:server-concurrency": "node scripts/server-concurrency-check.mjs",
     "check:server-import": "node scripts/server-import-integration-check.mjs",
+    "check:state-store": "node scripts/state-store-check.mjs",
+    "backup": "node scripts/backup-state.mjs",
     "check:state": "node scripts/state-controller-check.mjs",
     "check:mobile-ui": "node scripts/mobile-ui-check.mjs"
   },

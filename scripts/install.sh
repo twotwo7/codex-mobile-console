@@ -48,6 +48,7 @@ need_command git
 need_command npm
 need_command curl
 need_command systemctl
+need_command sqlite3
 [[ -n "$NODE_BIN" ]] || fail "node was not found. Install Node.js 20+ first."
 
 NODE_MAJOR="$("$NODE_BIN" -e "console.log(Number(process.versions.node.split('.')[0]))")"

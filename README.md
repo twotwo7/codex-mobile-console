@@ -179,6 +179,8 @@ The login cookie lasts 30 days so your own phone does not need frequent logins.
 
 ## Documentation
 
+- [State storage, backup, and recovery](docs/state-storage.md)
+
 - [Deployment](docs/deployment.md)
 - [Promotion plan](docs/promotion.md)
 - [Roadmap](docs/roadmap.md)

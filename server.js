@@ -6,6 +6,7 @@ import { chmodSync, copyFileSync, createReadStream, statSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSerialExecutor, createSingleFlight } from './server-concurrency.js';
+import { createSqliteMessageStore, stateMetadataSnapshot } from './state-store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '127.0.0.1';
@@ -13,6 +14,7 @@ const PORT = Number(process.env.PORT || 7072);
 const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const STATE_FILE = path.join(DATA_DIR, 'state.json');
+const MESSAGE_DB_FILE = path.join(DATA_DIR, 'messages.sqlite3');
 const RESTART_MARKER_FILE = path.join(DATA_DIR, 'restart-marker.json');
 const PASSWORD_FILE = path.join(DATA_DIR, 'admin-password.txt');
 const SKILL_REGISTRY_FILE = path.join(DATA_DIR, 'skill-registry.json');
@@ -95,6 +97,7 @@ const codexUsageCache = new Map();
 const codexMessagesCache = new Map();
 const runCodexImportSingleFlight = createSingleFlight();
 const runStateWriteSerial = createSerialExecutor();
+const messageStore = createSqliteMessageStore({ databaseFile: MESSAGE_DB_FILE });
 const clockTick = Number(process.env.CLK_TCK || 100);
 let totalRequests = 0;
 let activeRequests = 0;
@@ -163,6 +166,7 @@ async function init() {
     await writeFile(PASSWORD_FILE, `${password}\n`, { mode: 0o600 });
   }
   adminPassword = (await readFile(PASSWORD_FILE, 'utf8')).trim();
+  await messageStore.initialize();
   if (await exists(STATE_FILE)) {
     state = JSON.parse(await readFile(STATE_FILE, 'utf8'));
     state.authSessions ||= {};
@@ -185,6 +189,10 @@ async function init() {
     state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
+    await saveState();
+  }
+  const hydratedFromSqlite = await messageStore.hydrateState(state);
+  if (!hydratedFromSqlite && Object.values(state.sessions || {}).some((session) => Array.isArray(session.messages) && session.messages.length)) {
     await saveState();
   }
   for (const session of Object.values(state.sessions || {})) ensureSessionHarness(session);
@@ -808,6 +816,7 @@ function updateMessageRunState(session, messageId, runState, extra = {}) {
   message.runState = runState;
   message.completedAt = ['completed', 'failed', 'stopped', 'recovered', 'merged'].includes(runState) ? nowIso() : message.completedAt;
   Object.assign(message, extra);
+  messageStore.markSessionDirty(session.id);
   scheduleSave();
   broadcastEvent(session.id, 'message_update', message);
   return message;
@@ -883,6 +892,7 @@ function mergeQueuedItems(session, selectedIds = []) {
     primaryMessage.files = mergedFiles;
     primaryMessage.elevated = primary.elevated;
     primaryMessage.updatedAt = nowIso();
+    messageStore.markSessionDirty(session.id);
     broadcastEvent(session.id, 'message_update', primaryMessage);
   }
 
@@ -964,10 +974,13 @@ function scheduleSave() {
 
 async function saveState() {
   return runStateWriteSerial(async () => {
-    const snapshot = JSON.stringify(state, null, 2);
+    const generation = Number(state.storageGeneration || 0) + 1;
+    await messageStore.persistMessages(state, { generation });
+    const snapshot = JSON.stringify({ ...stateMetadataSnapshot(state), storageGeneration: generation }, null, 2);
     const tmp = `${STATE_FILE}.${process.pid}.${randomUUID()}.tmp`;
     await writeFile(tmp, snapshot, { mode: 0o600 });
     await rename(tmp, STATE_FILE);
+    state.storageGeneration = generation;
   });
 }
 
@@ -2076,11 +2089,18 @@ async function storageStats() {
     directoryBytes(RUNTIME_DIR)
   ]);
   let stateBytes = 0;
+  let messageDatabaseBytes = 0;
   try {
     stateBytes = (await stat(STATE_FILE)).size;
   } catch {
     stateBytes = 0;
   }
+  try {
+    messageDatabaseBytes = (await stat(MESSAGE_DB_FILE)).size;
+  } catch {
+    messageDatabaseBytes = 0;
+  }
+  const messageDatabase = await messageStore.stats().catch(() => ({ messageCount: 0, sessionCount: 0 }));
   let disk = null;
   try {
     const info = await statfs(__dirname);
@@ -2103,6 +2123,8 @@ async function storageStats() {
     orphanUploadCount: orphanFiles.length,
     runtimeBytes,
     stateBytes,
+    messageDatabaseBytes,
+    messageDatabase,
     disk,
     updatedAt: nowIso()
   };
@@ -4153,6 +4175,7 @@ function addMessage(session, message) {
   if (!entry.runId && run && ['assistant', 'tool', 'system'].includes(entry.role || '')) entry.runId = run.id;
   attachReplyImages(session, entry);
   session.messages.push(entry);
+  messageStore.markSessionDirty(session.id);
   if (run && ['assistant', 'tool'].includes(entry.role || '')) {
     run.outputMessageIds ||= [];
     run.outputMessageIds.push(entry.id);
@@ -5117,6 +5140,7 @@ async function handleApi(req, res, url) {
     };
     auditSession(state.sessions[id], 'session.created', { summary: cwd });
     addMessage(state.sessions[id], { role: 'system', text: `Session created in ${cwd}.` });
+    scheduleSave();
     return json(res, 201, { session: publicSession(state.sessions[id]) });
   }
 
@@ -5494,6 +5518,7 @@ async function handleApi(req, res, url) {
         message.failed = false;
         message.runId = item.runId || message.runId;
         message.updatedAt = nowIso();
+        messageStore.markSessionDirty(session.id);
         broadcastEvent(session.id, 'message_update', message);
       }
       auditSession(session, 'queue.edited', { runId: item.runId || '', messageId: item.messageId || '', prompt });
@@ -5566,6 +5591,7 @@ async function handleApi(req, res, url) {
     message.delivery = message.runState;
     message.runId = run.id;
     message.updatedAt = nowIso();
+    messageStore.markSessionDirty(session.id);
     broadcastEvent(session.id, 'message_update', message);
     if (running.has(session.id)) {
       session.queue ||= [];
@@ -5613,7 +5639,10 @@ async function handleApi(req, res, url) {
     const body = await readJson(req);
     const starred = body.starred === true;
     const message = (session.messages || []).find((item) => item.id === messageId || String(item.seq) === messageId);
-    if (message) message.starred = starred;
+    if (message) {
+      message.starred = starred;
+      messageStore.markSessionDirty(session.id);
+    }
     state.starredMessages ||= {};
     if (starred) state.starredMessages[messageId] = true;
     else delete state.starredMessages[messageId];

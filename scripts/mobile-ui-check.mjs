@@ -4,6 +4,7 @@ import path from 'node:path';
 
 const APP_URL = process.env.APP_URL || 'http://127.0.0.1:7072';
 const CHROME_PATH = process.env.CHROME_PATH || '/bin/google-chrome';
+const PASSWORD_FILE = process.env.PASSWORD_FILE || 'data/admin-password.txt';
 const OUT_DIR = path.resolve('runtime/ui-check');
 const viewports = [
   { name: 'mobile-390', width: 390, height: 844 },
@@ -28,7 +29,7 @@ async function loginSmoke(page) {
   await page.goto(APP_URL, { waitUntil: 'domcontentloaded' });
   const loginVisible = await page.locator('#loginView:not([hidden])').count();
   if (loginVisible) {
-    const password = (await readFile('data/admin-password.txt', 'utf8')).trim();
+    const password = (await readFile(PASSWORD_FILE, 'utf8')).trim();
     await page.evaluate(async (password) => {
       const response = await fetch('/api/login', {
         method: 'POST',

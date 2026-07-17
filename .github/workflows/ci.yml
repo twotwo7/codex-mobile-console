@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install system dependency
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+      - run: npm ci
+      - run: npm run check:frontend-utils
+      - run: npm run check:server-concurrency
+      - run: npm run check:state-store
+      - run: npm run check:server-import
+      - run: npm run check:state
+      - run: node --check server.js
+      - run: node --check public/app.js
+      - run: git diff --check

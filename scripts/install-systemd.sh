@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE_NAME="${SERVICE_NAME:-codex-mobile-console}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+BACKUP_SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}-backup.service"
+BACKUP_TIMER_FILE="/etc/systemd/system/${SERVICE_NAME}-backup.timer"
 NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-7072}"
@@ -60,6 +62,34 @@ RestartSec=2
 WantedBy=multi-user.target
 UNIT
 
+cat >"$BACKUP_SERVICE_FILE" <<UNIT
+[Unit]
+Description=Backup Codex Mobile Console state
+
+[Service]
+Type=oneshot
+$USER_UNIT_LINES
+WorkingDirectory=$ROOT_DIR
+Environment=HOME=$SERVICE_HOME
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=$NODE_BIN $ROOT_DIR/scripts/backup-state.mjs
+UNIT
+
+cat >"$BACKUP_TIMER_FILE" <<UNIT
+[Unit]
+Description=Daily Codex Mobile Console backup
+
+[Timer]
+OnCalendar=*-*-* 03:17:00
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target
+UNIT
+
 systemctl daemon-reload
+systemctl enable --now "${SERVICE_NAME}-backup.timer"
 echo "Installed $SERVICE_FILE"
+echo "Installed $BACKUP_TIMER_FILE"
 echo "Run: systemctl enable --now $SERVICE_NAME"
