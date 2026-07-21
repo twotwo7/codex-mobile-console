@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSerialExecutor, createSingleFlight } from './server-concurrency.js';
 import { createSqliteMessageStore, stateMetadataSnapshot } from './state-store.js';
+import { compactBriefMessages } from './public/brief-view.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '127.0.0.1';
@@ -4051,15 +4052,18 @@ async function displayMessageRange(session, options = {}) {
     start = Math.max(0, end - 1);
     while (start > 0 && sorted[start]?.role !== 'user') start -= 1;
   }
-  const messages = sorted.slice(start, end);
+  const rangeMessages = sorted.slice(start, end);
+  const messages = options.brief === true || options.brief === '1' || options.brief === 'true'
+    ? compactBriefMessages(rangeMessages)
+    : rangeMessages;
   return {
     messages,
     limit,
     total,
     firstSeq,
     latestSeq,
-    beforeSeq: messages[0]?.orderSeq || 0,
-    afterSeq: messages.at(-1)?.orderSeq || 0,
+    beforeSeq: rangeMessages[0]?.orderSeq || 0,
+    afterSeq: rangeMessages.at(-1)?.orderSeq || 0,
     hasMoreBefore: start > 0,
     hasMoreAfter: end < sorted.length
   };
@@ -5029,7 +5033,8 @@ async function handleApi(req, res, url) {
       limit: url.searchParams.get('limit'),
       beforeSeq: url.searchParams.get('beforeSeq'),
       afterSeq: url.searchParams.get('afterSeq'),
-      previousTurn: url.searchParams.get('previousTurn')
+      previousTurn: url.searchParams.get('previousTurn'),
+      brief: url.searchParams.get('brief')
     });
     return json(res, 200, { session: publicSession(session), view: sessionView(session), ...range });
   }

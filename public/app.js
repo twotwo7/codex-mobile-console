@@ -1,5 +1,6 @@
 import { createMessageScheduler } from './message-scheduler.js?v=2';
 import { cancelIdle, scheduleIdle, storageGet, storageJsonGet, storageJsonSet, storageSet } from './browser-utils.js?v=1';
+import { buildBriefRounds, oldestMessageOrderSeq } from './brief-view.js?v=1';
 import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
@@ -40,6 +41,8 @@ const state = {
   expandedTags: new Set(storageJsonGet('cmc.expandedTags', [])),
   messages: new Map(),
   messagePages: new Map(),
+  briefMessages: new Map(),
+  briefPages: new Map(),
   messageRenderLimits: new Map(),
   briefRoundLimits: new Map(),
   messageCollapseStates: new Map(),
@@ -98,6 +101,7 @@ const connectionState = createConnectionState({ online: state.online });
 const MAX_CACHED_SESSIONS = 2;
 const MAX_LOCAL_MESSAGES = 800;
 const MAX_BROWSER_CACHED_MESSAGES = 360;
+const MAX_BROWSER_BRIEF_MESSAGES = 600;
 const DESKTOP_MAX_RENDERED_MESSAGES = 180;
 const MOBILE_MAX_RENDERED_MESSAGES = 120;
 const MOBILE_MESSAGE_CHUNK = 18;
@@ -105,8 +109,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '197';
-const SW_CACHE_VERSION = 'codex-console-v214';
+const APP_ASSET_VERSION = '198';
+const SW_CACHE_VERSION = 'codex-console-v215';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -431,6 +435,14 @@ function pageCacheKey(id) {
   return `cmc.messagePage.${id}`;
 }
 
+function briefCacheKey(id) {
+  return `cmc.briefMessages.${id}`;
+}
+
+function briefPageCacheKey(id) {
+  return `cmc.briefPage.${id}`;
+}
+
 function collapseStateKey(sessionId = state.activeId) {
   return `cmc.messageCollapsed.${sessionId || 'global'}`;
 }
@@ -650,6 +662,35 @@ function saveMessages(id) {
   }
 }
 
+function saveBriefHistory(id) {
+  const allMessages = mergeMessages([], state.briefMessages.get(id) || []);
+  const messages = allMessages.slice(-MAX_BROWSER_BRIEF_MESSAGES);
+  storageJsonSet(briefCacheKey(id), messages.map(cacheSafeMessage));
+  const page = state.briefPages.get(id);
+  if (page) {
+    storageJsonSet(briefPageCacheKey(id), {
+      ...page,
+      beforeSeq: oldestMessageOrderSeq(messages) || page.beforeSeq || 0,
+      hasMore: page.hasMore === true || allMessages.length > messages.length,
+      loading: false
+    });
+  }
+}
+
+function loadBriefHistory(id) {
+  if (state.briefMessages.has(id)) return state.briefMessages.get(id);
+  const cached = storageJsonGet(briefCacheKey(id), []);
+  const messages = mergeMessages([], Array.isArray(cached) ? cached : []);
+  state.briefMessages.set(id, messages);
+  const page = storageJsonGet(briefPageCacheKey(id), null);
+  if (page && typeof page === 'object') state.briefPages.set(id, { ...page, loading: false });
+  return messages;
+}
+
+function briefSourceMessages(id) {
+  return mergeMessages(loadBriefHistory(id), loadMessages(id));
+}
+
 function trimMessagesForStorage(messages) {
   if (!Array.isArray(messages) || messages.length <= MAX_LOCAL_MESSAGES) return messages || [];
   return messages.slice(-MAX_LOCAL_MESSAGES);
@@ -778,6 +819,8 @@ function cleanupIdleResources() {
     state.messages.delete(id);
     state.lastSeq.delete(id);
     state.messagePages.delete(id);
+    state.briefMessages.delete(id);
+    state.briefPages.delete(id);
     state.messageRenderLimits.delete(id);
     state.briefRoundLimits.delete(id);
     state.messageCollapseStates.delete(id);
@@ -2316,14 +2359,19 @@ function closeSharePreview() {
 function renderOlderMessagesControl(sessionId) {
   if (state.showStarredOnly) return null;
   const page = state.messagePages.get(sessionId);
-  if (!page?.hasMore && !hasHiddenBriefRounds(sessionId)) return null;
+  const briefPage = state.briefPages.get(sessionId);
+  const loading = state.messageDisplayMode === 'brief' ? briefPage?.loading === true : page?.loading === true;
+  const canLoadBrief = hasHiddenBriefRounds(sessionId)
+    || briefPage?.hasMore === true
+    || (!briefPage && page?.hasMore === true);
+  if (state.messageDisplayMode === 'brief' ? !canLoadBrief : !page?.hasMore) return null;
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'older-messages-button';
-  button.textContent = page.loading ? '加载上一轮中...' : '加载上一轮对话';
+  button.textContent = loading ? '加载上一轮中...' : '加载上一轮对话';
   button.title = '加载到上一轮对话的开始';
   button.setAttribute('aria-label', button.title);
-  button.disabled = page.loading === true;
+  button.disabled = loading;
   button.addEventListener('click', () => loadOlderMessages(sessionId));
   return button;
 }
@@ -2352,7 +2400,7 @@ function displayMessages(sessionId) {
 }
 
 function buildBriefDisplayMessages(messages, sessionId) {
-  const rounds = buildBriefRounds(messages);
+  const rounds = buildBriefRounds(mergeMessages(loadBriefHistory(sessionId), messages));
   const visibleRounds = rounds.slice(-sessionBriefRoundLimit(sessionId));
   const runningRoundIndex = isSessionRunning(getActiveSession()) && state.activeId === sessionId ? visibleRounds.length - 1 : -1;
   const out = [];
@@ -2365,73 +2413,10 @@ function buildBriefDisplayMessages(messages, sessionId) {
   return mergeDisplayMessages(out);
 }
 
-function buildBriefRounds(messages) {
-  const rounds = [];
-  let current = null;
-
-  const pushCurrent = () => {
-    if (current?.user || current?.conclusion || current?.outputCount) rounds.push(current);
-  };
-
-  for (const message of messages) {
-    if (message.role === 'user') {
-      pushCurrent();
-      current = {
-        user: message,
-        conclusion: null,
-        outputCount: 0,
-        firstSeq: message.orderSeq || message.seq || 0,
-        lastSeq: message.orderSeq || message.seq || 0
-      };
-      continue;
-    }
-
-    if (!current) {
-      current = {
-        user: null,
-        conclusion: null,
-        outputCount: 0,
-        firstSeq: message.orderSeq || message.seq || 0,
-        lastSeq: message.orderSeq || message.seq || 0
-      };
-    }
-
-    current.lastSeq = message.orderSeq || message.seq || current.lastSeq;
-    if (isCodexOutputMessage(message)) current.outputCount += 1;
-    if (isConclusionMessage(message)) current.conclusion = message;
-  }
-  pushCurrent();
-  return rounds;
-}
-
 function hasHiddenBriefRounds(sessionId) {
   if (state.messageDisplayMode !== 'brief') return false;
-  const rounds = buildBriefRounds(loadMessages(sessionId));
+  const rounds = buildBriefRounds(briefSourceMessages(sessionId));
   return rounds.length > sessionBriefRoundLimit(sessionId);
-}
-
-function isCodexOutputMessage(message) {
-  if (!['assistant', 'tool'].includes(message?.role || '')) return false;
-  return String(message.text || '').trim().length > 0;
-}
-
-function isConclusionMessage(message) {
-  if (message?.role !== 'assistant') return false;
-  const text = String(message.text || '').trim();
-  if (!text) return false;
-  return !isStatusOnlyMessage(text);
-}
-
-function isStatusOnlyMessage(text) {
-  return [
-    'Codex run finished.',
-    'Codex run stopped.',
-    'Starting next queued prompt.',
-    'Stop requested.',
-    'Recovered stale run state',
-    'Failed to start Codex',
-    'Codex exited with code'
-  ].some((needle) => text.includes(needle));
 }
 
 function briefProgressMessage(round, sessionId, index) {
@@ -4262,6 +4247,42 @@ async function loadOlderMessages(sessionId) {
   if (state.messageDisplayMode === 'brief' && hasHiddenBriefRounds(sessionId)) {
     expandBriefRoundLimit(sessionId, 1);
     renderActive({ stickToBottom: false, restoreAnchor: firstVisibleMessageAnchor() });
+    return;
+  }
+  if (state.messageDisplayMode === 'brief') {
+    const briefPage = state.briefPages.get(sessionId);
+    const canLoad = briefPage ? briefPage.hasMore === true : page?.hasMore === true;
+    if (!canLoad) return;
+    state.loadingOlder = true;
+    state.briefPages.set(sessionId, { ...(briefPage || {}), loading: true });
+    const previousAnchor = firstVisibleMessageAnchor();
+    renderActive({ messages: false });
+    try {
+      const sourceMessages = briefSourceMessages(sessionId);
+      const beforeSeq = oldestMessageOrderSeq(sourceMessages) || page?.beforeSeq || '';
+      const data = await api(sessionMessagesUrl(sessionId, { previousTurn: 1, brief: 1, beforeSeq }));
+      if (data.session) mergeSessionSnapshot(data.session);
+      const compact = mergeMessages(loadBriefHistory(sessionId), data.messages || []);
+      state.briefMessages.set(sessionId, compact);
+      state.briefPages.set(sessionId, {
+        beforeSeq: Number(data.beforeSeq || beforeSeq || 0),
+        hasMore: data.hasMoreBefore === true,
+        loading: false
+      });
+      expandBriefRoundLimit(sessionId, 1);
+      saveBriefHistory(sessionId);
+      if (state.activeId === sessionId) {
+        renderSessions();
+        renderActive({ stickToBottom: false, restoreAnchor: previousAnchor });
+      }
+    } catch (error) {
+      state.briefPages.set(sessionId, { ...(briefPage || {}), loading: false });
+      recordFrontendEvent('messages.brief_older_failed', error.message || 'failed', 'warn');
+      if (state.activeId === sessionId) renderActive({ messages: false });
+    } finally {
+      state.loadingOlder = false;
+      scheduleResourceCleanup();
+    }
     return;
   }
   if (!page?.hasMore) return;
