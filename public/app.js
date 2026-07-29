@@ -91,7 +91,10 @@ const state = {
   evolutionChecks: new Map(),
   evolutionObjectiveSuggestions: new Map(),
   evolutionLoadedAt: 0,
-  evolutionEditingId: ''
+  evolutionEditingId: '',
+  secretary: null,
+  secretaryPollTimer: null,
+  secretarySeenNotifications: new Set(storageJsonGet('cmc.secretarySeenNotifications', []))
 };
 
 let sessionState;
@@ -109,8 +112,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '199';
-const SW_CACHE_VERSION = 'codex-console-v216';
+const APP_ASSET_VERSION = '201';
+const SW_CACHE_VERSION = 'codex-console-v218';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -180,6 +183,7 @@ const el = {
   drawerModeRow: document.querySelector('#drawerModeRow'),
   drawerSessionsButton: document.querySelector('#drawerSessionsButton'),
   drawerSessionsPanel: document.querySelector('#drawerSessionsPanel'),
+  drawerSecretaryPanel: document.querySelector('#drawerSecretaryPanel'),
   drawerSkillsPanel: document.querySelector('#drawerSkillsPanel'),
   drawerEvolutionPanel: document.querySelector('#drawerEvolutionPanel'),
   drawerSettingsPanel: document.querySelector('#drawerSettingsPanel'),
@@ -198,6 +202,38 @@ const el = {
   taskDetailBody: document.querySelector('#taskDetailBody'),
   newSessionButton: document.querySelector('#newSessionButton'),
   smartTagSessionsButton: document.querySelector('#smartTagSessionsButton'),
+  secretaryManagerButton: document.querySelector('#secretaryManagerButton'),
+  secretaryUnreadBadge: document.querySelector('#secretaryUnreadBadge'),
+  secretaryStatusDot: document.querySelector('#secretaryStatusDot'),
+  secretaryStatus: document.querySelector('#secretaryStatus'),
+  secretarySummary: document.querySelector('#secretarySummary'),
+  secretaryAutonomyToggle: document.querySelector('#secretaryAutonomyToggle'),
+  wakeSecretaryButton: document.querySelector('#wakeSecretaryButton'),
+  secretarySchedule: document.querySelector('#secretarySchedule'),
+  secretaryTaskCount: document.querySelector('#secretaryTaskCount'),
+  secretaryTaskList: document.querySelector('#secretaryTaskList'),
+  secretaryNotificationList: document.querySelector('#secretaryNotificationList'),
+  enableSecretaryNotifications: document.querySelector('#enableSecretaryNotifications'),
+  markSecretaryNotificationsRead: document.querySelector('#markSecretaryNotificationsRead'),
+  secretarySettingsForm: document.querySelector('#secretarySettingsForm'),
+  secretaryCheckInterval: document.querySelector('#secretaryCheckInterval'),
+  secretaryContinuationInterval: document.querySelector('#secretaryContinuationInterval'),
+  secretaryLearningInterval: document.querySelector('#secretaryLearningInterval'),
+  secretaryMaxRuns: document.querySelector('#secretaryMaxRuns'),
+  secretaryBriefTime: document.querySelector('#secretaryBriefTime'),
+  secretaryReviewTime: document.querySelector('#secretaryReviewTime'),
+  secretaryQuietStart: document.querySelector('#secretaryQuietStart'),
+  secretaryQuietEnd: document.querySelector('#secretaryQuietEnd'),
+  secretaryTimezone: document.querySelector('#secretaryTimezone'),
+  secretaryProactiveLearning: document.querySelector('#secretaryProactiveLearning'),
+  secretarySettingsState: document.querySelector('#secretarySettingsState'),
+  secretaryAuditCount: document.querySelector('#secretaryAuditCount'),
+  secretaryAuditList: document.querySelector('#secretaryAuditList'),
+  refreshSecretaryButton: document.querySelector('#refreshSecretaryButton'),
+  openSecretaryButton: document.querySelector('#openSecretaryButton'),
+  resumeSecretaryButton: document.querySelector('#resumeSecretaryButton'),
+  killSecretaryButton: document.querySelector('#killSecretaryButton'),
+  secretaryTaskButtons: [...document.querySelectorAll('[data-secretary-task]')],
   skillManagerButton: document.querySelector('#skillManagerButton'),
   evolutionManagerButton: document.querySelector('#evolutionManagerButton'),
   logoutButton: document.querySelector('#logoutButton'),
@@ -1018,6 +1054,11 @@ function setDrawer(open) {
       el.drawerSkillList.textContent = error.message || '加载失败';
     });
   }
+  if (open && state.drawerPanel === 'secretary') {
+    loadSecretary({ markRead: true }).catch((error) => {
+      if (el.secretarySummary) el.secretarySummary.textContent = error.message || '秘书状态加载失败';
+    });
+  }
   if (open && state.drawerPanel === 'evolution') {
     loadEvolutionProjects().catch((error) => {
       if (el.evolutionList) el.evolutionList.textContent = error.message || '加载失败';
@@ -1049,25 +1090,33 @@ function setSessionViewMode(mode) {
 }
 
 function setDrawerPanel(panel) {
-  state.drawerPanel = ['skills', 'evolution', 'settings'].includes(panel) ? panel : 'sessions';
+  state.drawerPanel = ['secretary', 'skills', 'evolution', 'settings'].includes(panel) ? panel : 'sessions';
+  const secretaryActive = state.drawerPanel === 'secretary';
   const skillsActive = state.drawerPanel === 'skills';
   const evolutionActive = state.drawerPanel === 'evolution';
   const settingsActive = state.drawerPanel === 'settings';
-  if (el.drawerTitle) el.drawerTitle.textContent = settingsActive ? '设置' : evolutionActive ? '进化' : skillsActive ? 'Skills' : '会话';
-  el.drawerSessionsButton.classList.toggle('active', !skillsActive && !evolutionActive && !settingsActive);
+  if (el.drawerTitle) el.drawerTitle.textContent = settingsActive ? '设置' : evolutionActive ? '进化' : skillsActive ? 'Skills' : secretaryActive ? '秘书' : '会话';
+  el.drawerSessionsButton.classList.toggle('active', !secretaryActive && !skillsActive && !evolutionActive && !settingsActive);
+  el.secretaryManagerButton?.classList.toggle('active', secretaryActive);
   el.skillManagerButton.classList.toggle('active', skillsActive);
   el.evolutionManagerButton?.classList.toggle('active', evolutionActive);
   el.drawerSettingsButton.classList.toggle('active', settingsActive);
-  el.drawerSessionsButton.setAttribute('aria-selected', String(!skillsActive && !evolutionActive && !settingsActive));
+  el.drawerSessionsButton.setAttribute('aria-selected', String(!secretaryActive && !skillsActive && !evolutionActive && !settingsActive));
+  el.secretaryManagerButton?.setAttribute('aria-selected', String(secretaryActive));
   el.skillManagerButton.setAttribute('aria-selected', String(skillsActive));
   el.evolutionManagerButton?.setAttribute('aria-selected', String(evolutionActive));
   el.drawerSettingsButton.setAttribute('aria-selected', String(settingsActive));
-  el.drawerSessionsPanel.classList.toggle('active', !skillsActive && !evolutionActive && !settingsActive);
+  el.drawerSessionsPanel.classList.toggle('active', !secretaryActive && !skillsActive && !evolutionActive && !settingsActive);
+  el.drawerSecretaryPanel?.classList.toggle('active', secretaryActive);
   el.drawerSkillsPanel.classList.toggle('active', skillsActive);
   el.drawerEvolutionPanel?.classList.toggle('active', evolutionActive);
   el.drawerSettingsPanel.classList.toggle('active', settingsActive);
   el.logoutButton.hidden = !settingsActive;
-  if (skillsActive) {
+  if (secretaryActive) {
+    loadSecretary({ markRead: true }).catch((error) => {
+      if (el.secretarySummary) el.secretarySummary.textContent = error.message || '秘书状态加载失败';
+    });
+  } else if (skillsActive) {
     loadSkills().catch((error) => {
       el.drawerSkillList.textContent = error.message || '加载失败';
     });
@@ -1079,6 +1128,338 @@ function setDrawerPanel(panel) {
     selectSettingsPage('ui');
   } else {
     renderSessions({ force: true });
+  }
+}
+
+function renderSecretaryTasks(payload) {
+  const ledger = payload.tasks || {};
+  const tasks = Array.isArray(ledger.tasks) ? ledger.tasks : [];
+  const statusOrder = { in_progress: 0, pending: 1, blocked: 2, completed: 3 };
+  const visible = [...tasks]
+    .sort((a, b) => statusOrder[a.status] - statusOrder[b.status] || a.priority - b.priority)
+    .slice(0, 10);
+  el.secretaryTaskCount.textContent = `${ledger.pendingCount || 0} 待办 · ${ledger.blockedCount || 0} 阻塞`;
+  el.secretaryTaskList.replaceChildren();
+  if (!visible.length) {
+    el.secretaryTaskList.textContent = ledger.error ? `任务账本读取失败：${ledger.error}` : '暂无任务';
+    return;
+  }
+  const labels = { pending: '待执行', in_progress: '进行中', blocked: '阻塞', completed: '已完成' };
+  const fragment = document.createDocumentFragment();
+  for (const task of visible) {
+    const row = document.createElement('div');
+    row.className = 'secretary-task-entry';
+    row.dataset.status = task.status;
+    const head = document.createElement('div');
+    head.className = 'secretary-task-entry-head';
+    const title = document.createElement('strong');
+    title.textContent = task.title;
+    const meta = document.createElement('span');
+    meta.textContent = `${labels[task.status] || task.status} · P${task.priority}`;
+    head.append(title, meta);
+    row.append(head);
+    const detail = task.status === 'completed' ? task.outcome : task.blocker || task.nextAction;
+    if (detail) {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = detail;
+      row.append(paragraph);
+    }
+    fragment.append(row);
+  }
+  el.secretaryTaskList.append(fragment);
+}
+
+function renderSecretaryNotifications(payload) {
+  const notifications = Array.isArray(payload.control?.notifications) ? payload.control.notifications : [];
+  el.secretaryNotificationList.replaceChildren();
+  if (!notifications.length) {
+    el.secretaryNotificationList.textContent = '暂无动态';
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const notification of [...notifications].reverse().slice(0, 10)) {
+    const row = document.createElement('div');
+    row.className = `secretary-notification-entry${notification.read ? '' : ' unread'}`;
+    row.dataset.type = notification.type || 'info';
+    const head = document.createElement('div');
+    head.className = 'secretary-notification-entry-head';
+    const title = document.createElement('strong');
+    title.textContent = notification.title || '秘书动态';
+    const at = document.createElement('span');
+    at.textContent = formatTime(notification.at);
+    head.append(title, at);
+    row.append(head);
+    if (notification.body) {
+      const paragraph = document.createElement('p');
+      paragraph.textContent = notification.body;
+      row.append(paragraph);
+    }
+    fragment.append(row);
+  }
+  el.secretaryNotificationList.append(fragment);
+}
+
+function applySecretarySettingsForm(settings = {}) {
+  if (!el.secretarySettingsForm || el.secretarySettingsForm.contains(document.activeElement)) return;
+  el.secretaryCheckInterval.value = settings.checkIntervalMinutes ?? 15;
+  el.secretaryContinuationInterval.value = settings.continuationIntervalMinutes ?? 30;
+  el.secretaryLearningInterval.value = settings.learningIntervalHours ?? 8;
+  el.secretaryMaxRuns.value = settings.maxAutonomousRunsPerDay ?? 24;
+  el.secretaryBriefTime.value = settings.dailyBriefTime || '08:30';
+  el.secretaryReviewTime.value = settings.dailyReviewTime || '21:30';
+  el.secretaryQuietStart.value = settings.quietStartTime || '23:30';
+  el.secretaryQuietEnd.value = settings.quietEndTime || '07:30';
+  el.secretaryTimezone.value = settings.timezone || 'Asia/Tokyo';
+  el.secretaryProactiveLearning.checked = settings.proactiveLearning !== false;
+}
+
+function renderSecretary() {
+  if (!el.drawerSecretaryPanel) return;
+  const payload = state.secretary || {};
+  const control = payload.control || {};
+  const settings = control.settings || {};
+  const scheduler = control.scheduler || {};
+  const session = payload.session || null;
+  const killed = control.killSwitch === true;
+  const running = payload.running === true || isSessionRunning(session);
+  const enabled = settings.enabled !== false;
+  const status = killed ? '已停止' : running ? '正在执行' : enabled && session ? '自主待命' : session ? '手动待命' : '未初始化';
+  el.secretaryStatus.textContent = status;
+  el.secretaryStatusDot.classList.toggle('running', !killed && Boolean(session));
+  el.secretaryStatusDot.classList.toggle('stopped', killed);
+  el.secretarySummary.textContent = killed
+    ? '总停止已锁定新任务。恢复后才会继续执行。'
+    : session
+      ? `${session.queuedCount || 0} 个排队任务 · ${session.runCount || 0} 次运行 · 默认高权限执行`
+      : '创建一个长期、高权限、可审计的专家秘书会话。';
+  el.openSecretaryButton.textContent = session ? '进入秘书' : '初始化秘书';
+  el.resumeSecretaryButton.hidden = !killed;
+  el.killSecretaryButton.disabled = killed;
+  el.wakeSecretaryButton.disabled = killed;
+  el.secretaryAutonomyToggle.checked = enabled;
+  el.secretaryAutonomyToggle.disabled = killed;
+  for (const button of el.secretaryTaskButtons) button.disabled = killed;
+  const maxRuns = settings.maxAutonomousRunsPerDay === 0 ? '不限' : settings.maxAutonomousRunsPerDay || 24;
+  el.secretarySchedule.textContent = enabled
+    ? `下次检查 ${scheduler.nextCheckAt ? formatTime(scheduler.nextCheckAt) : '即将开始'} · 今日自主 ${scheduler.dailyRunCount || 0}/${maxRuns}${scheduler.lastTrigger ? ` · 最近 ${scheduler.lastTrigger}` : ''}`
+    : '后台自主循环已关闭，仍可手动派工。';
+
+  const unreadCount = Number(payload.unreadCount || 0);
+  el.secretaryUnreadBadge.hidden = unreadCount === 0;
+  el.secretaryUnreadBadge.title = unreadCount ? `${unreadCount} 条未读秘书动态` : '';
+  el.markSecretaryNotificationsRead.disabled = unreadCount === 0;
+  if (!('Notification' in window)) {
+    el.enableSecretaryNotifications.disabled = true;
+    el.enableSecretaryNotifications.textContent = '通知不支持';
+  } else if (Notification.permission === 'granted') {
+    el.enableSecretaryNotifications.disabled = true;
+    el.enableSecretaryNotifications.textContent = '通知已开启';
+  } else {
+    el.enableSecretaryNotifications.disabled = false;
+    el.enableSecretaryNotifications.textContent = Notification.permission === 'denied' ? '通知已拒绝' : '系统通知';
+  }
+  applySecretarySettingsForm(settings);
+  renderSecretaryTasks(payload);
+  renderSecretaryNotifications(payload);
+
+  const audit = Array.isArray(payload.audit) ? payload.audit : [];
+  el.secretaryAuditCount.textContent = String(audit.length);
+  el.secretaryAuditList.replaceChildren();
+  if (!audit.length) {
+    el.secretaryAuditList.textContent = '暂无记录';
+    return;
+  }
+  const fragment = document.createDocumentFragment();
+  for (const entry of [...audit].reverse().slice(0, 24)) {
+    const row = document.createElement('div');
+    row.className = 'secretary-audit-entry';
+    const title = document.createElement('strong');
+    title.textContent = entry.type || 'secretary.event';
+    const detail = document.createElement('span');
+    detail.textContent = `${formatTime(entry.at)} · ${entry.summary || '-'}`;
+    row.append(title, detail);
+    fragment.append(row);
+  }
+  el.secretaryAuditList.append(fragment);
+}
+
+function deliverSecretaryBrowserNotifications(data = {}) {
+  const notifications = Array.isArray(data.control?.notifications) ? data.control.notifications : [];
+  for (const notification of notifications) {
+    if (notification.read || state.secretarySeenNotifications.has(notification.id)) continue;
+    state.secretarySeenNotifications.add(notification.id);
+    if ('Notification' in window && Notification.permission === 'granted') {
+      const browserNotification = new Notification(notification.title || '秘书动态', {
+        body: notification.body || '',
+        tag: notification.id
+      });
+      browserNotification.onclick = () => {
+        window.focus();
+        setDrawer(true);
+        setDrawerPanel('secretary');
+        browserNotification.close();
+      };
+    }
+  }
+  const seen = [...state.secretarySeenNotifications].slice(-240);
+  state.secretarySeenNotifications = new Set(seen);
+  storageJsonSet('cmc.secretarySeenNotifications', seen);
+}
+
+function mergeSecretaryPayload(data = {}, options = {}) {
+  if (options.notify !== false) deliverSecretaryBrowserNotifications(data);
+  state.secretary = data;
+  if (data.session) mergeSessionSnapshot(data.session);
+  renderSecretary();
+  renderSessions();
+  return data.session || null;
+}
+
+async function loadSecretary(options = {}) {
+  let data = await api('/api/secretary');
+  mergeSecretaryPayload(data, { notify: options.notify !== false });
+  if (options.markRead && data.unreadCount > 0) {
+    data = await api('/api/secretary/notifications/read', { method: 'POST', body: '{}' });
+    mergeSecretaryPayload(data, { notify: false });
+  }
+  return data;
+}
+
+function startSecretaryPolling() {
+  clearInterval(state.secretaryPollTimer);
+  state.secretaryPollTimer = setInterval(() => {
+    if (!navigator.onLine) return;
+    loadSecretary({ notify: true }).catch(() => {});
+  }, 30_000);
+}
+
+async function activateSecretary(options = {}) {
+  const data = await api('/api/secretary/activate', { method: 'POST' });
+  const session = mergeSecretaryPayload(data);
+  if (options.open !== false && session?.id) await selectSession(session.id);
+  return data;
+}
+
+async function killSecretary() {
+  el.killSecretaryButton.disabled = true;
+  el.secretarySummary.textContent = '正在停止所有秘书动作...';
+  try {
+    mergeSecretaryPayload(await api('/api/secretary/kill', { method: 'POST' }));
+    if (state.activeId === state.secretary?.session?.id) await loadSession(state.activeId, { showLoading: false });
+  } catch (error) {
+    el.secretarySummary.textContent = error.message || '停止失败';
+    el.killSecretaryButton.disabled = false;
+  }
+}
+
+async function resumeSecretary() {
+  el.resumeSecretaryButton.disabled = true;
+  try {
+    mergeSecretaryPayload(await api('/api/secretary/resume', { method: 'POST' }));
+  } catch (error) {
+    el.secretarySummary.textContent = error.message || '恢复失败';
+  } finally {
+    el.resumeSecretaryButton.disabled = false;
+  }
+}
+
+async function wakeSecretary() {
+  el.wakeSecretaryButton.disabled = true;
+  el.secretarySummary.textContent = '正在唤醒秘书...';
+  try {
+    const data = await api('/api/secretary/wake', { method: 'POST', body: '{}' });
+    const session = mergeSecretaryPayload(data);
+    if (session?.id) await selectSession(session.id);
+  } catch (error) {
+    el.secretarySummary.textContent = error.message || '唤醒失败';
+  } finally {
+    el.wakeSecretaryButton.disabled = state.secretary?.control?.killSwitch === true;
+  }
+}
+
+async function setSecretaryAutonomyEnabled(enabled) {
+  el.secretaryAutonomyToggle.disabled = true;
+  try {
+    mergeSecretaryPayload(await api('/api/secretary/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled })
+    }), { notify: false });
+  } catch (error) {
+    el.secretarySummary.textContent = error.message || '自主循环设置失败';
+    el.secretaryAutonomyToggle.checked = !enabled;
+  } finally {
+    el.secretaryAutonomyToggle.disabled = state.secretary?.control?.killSwitch === true;
+  }
+}
+
+async function saveSecretarySettings(event) {
+  event.preventDefault();
+  const form = new FormData(el.secretarySettingsForm);
+  const settings = {
+    checkIntervalMinutes: Number(form.get('checkIntervalMinutes')),
+    continuationIntervalMinutes: Number(form.get('continuationIntervalMinutes')),
+    learningIntervalHours: Number(form.get('learningIntervalHours')),
+    maxAutonomousRunsPerDay: Number(form.get('maxAutonomousRunsPerDay')),
+    dailyBriefTime: form.get('dailyBriefTime'),
+    dailyReviewTime: form.get('dailyReviewTime'),
+    quietStartTime: form.get('quietStartTime'),
+    quietEndTime: form.get('quietEndTime'),
+    timezone: form.get('timezone'),
+    proactiveLearning: form.get('proactiveLearning') === 'on'
+  };
+  el.secretarySettingsForm.setAttribute('aria-busy', 'true');
+  el.secretarySettingsState.textContent = '保存中...';
+  try {
+    mergeSecretaryPayload(await api('/api/secretary/settings', {
+      method: 'PATCH',
+      body: JSON.stringify(settings)
+    }), { notify: false });
+    el.secretarySettingsState.textContent = '策略已保存。';
+  } catch (error) {
+    el.secretarySettingsState.textContent = error.message || '保存失败';
+  } finally {
+    el.secretarySettingsForm.removeAttribute('aria-busy');
+  }
+}
+
+async function enableSecretaryBrowserNotifications() {
+  if (!('Notification' in window)) return;
+  const permission = await Notification.requestPermission();
+  if (permission === 'granted') {
+    el.enableSecretaryNotifications.textContent = '通知已开启';
+    el.enableSecretaryNotifications.disabled = true;
+    new Notification('专家秘书', { body: '主动任务完成后会在此设备提醒你。', tag: 'secretary-notifications-enabled' });
+  } else {
+    el.enableSecretaryNotifications.textContent = '通知已拒绝';
+  }
+}
+
+async function markSecretaryNotificationsRead() {
+  el.markSecretaryNotificationsRead.disabled = true;
+  try {
+    mergeSecretaryPayload(await api('/api/secretary/notifications/read', { method: 'POST', body: '{}' }), { notify: false });
+  } catch (error) {
+    el.secretarySummary.textContent = error.message || '标记已读失败';
+  }
+}
+
+async function runSecretaryQuickTask(kind, button) {
+  button.disabled = true;
+  try {
+    let payload = state.secretary;
+    if (!payload?.session) payload = await activateSecretary({ open: false });
+    if (payload?.control?.killSwitch) throw new Error('秘书总停止已启用，请先恢复。');
+    const data = await api('/api/secretary/quick-task', {
+      method: 'POST',
+      body: JSON.stringify({ kind })
+    });
+    const session = mergeSecretaryPayload({ ...payload, session: data.session, running: true });
+    await loadSecretary();
+    if (session?.id) await selectSession(session.id);
+  } catch (error) {
+    el.secretarySummary.textContent = error.message || '快捷任务启动失败';
+  } finally {
+    button.disabled = state.secretary?.control?.killSwitch === true;
   }
 }
 
@@ -4190,6 +4571,8 @@ async function refreshSessions(options = {}) {
 window.cmcAfterLogin = async function cmcAfterLogin() {
   setAuthView(true);
   await refreshSessions();
+  await loadSecretary({ notify: false }).catch(() => {});
+  startSecretaryPolling();
 };
 
 async function loadSession(id, options = {}) {
@@ -5013,6 +5396,8 @@ el.newSessionForm.addEventListener('submit', async (event) => {
 });
 
 el.logoutButton.addEventListener('click', async () => {
+  clearInterval(state.secretaryPollTimer);
+  state.secretaryPollTimer = null;
   await api('/api/logout', { method: 'POST' }).catch(() => {});
   setAuthView(false);
 });
@@ -5026,6 +5411,23 @@ el.sessionActionSheet?.addEventListener('click', (event) => {
 el.closeSessionActionSheet?.addEventListener('click', closeSessionActionSheet);
 el.closeTaskDetailDialog?.addEventListener('click', closeTaskDetailDialog);
 el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
+el.secretaryManagerButton?.addEventListener('click', () => setDrawerPanel('secretary'));
+el.refreshSecretaryButton?.addEventListener('click', () => loadSecretary({ markRead: true }).catch((error) => {
+  el.secretarySummary.textContent = error.message || '秘书状态加载失败';
+}));
+el.openSecretaryButton?.addEventListener('click', () => activateSecretary().catch((error) => {
+  el.secretarySummary.textContent = error.message || '秘书初始化失败';
+}));
+el.killSecretaryButton?.addEventListener('click', killSecretary);
+el.resumeSecretaryButton?.addEventListener('click', resumeSecretary);
+el.wakeSecretaryButton?.addEventListener('click', wakeSecretary);
+el.secretaryAutonomyToggle?.addEventListener('change', () => setSecretaryAutonomyEnabled(el.secretaryAutonomyToggle.checked));
+el.secretarySettingsForm?.addEventListener('submit', saveSecretarySettings);
+el.enableSecretaryNotifications?.addEventListener('click', enableSecretaryBrowserNotifications);
+el.markSecretaryNotificationsRead?.addEventListener('click', markSecretaryNotificationsRead);
+for (const button of el.secretaryTaskButtons) {
+  button.addEventListener('click', () => runSecretaryQuickTask(button.dataset.secretaryTask, button));
+}
 el.newSessionButton.addEventListener('click', () => {
   applyRunConfigToForm(el.newSessionForm, state.defaultRunConfig);
   openModal(el.dialog);
@@ -5291,6 +5693,7 @@ document.addEventListener('visibilitychange', () => {
     recordFrontendEvent('page.visible');
     state.foregroundRefreshTimer = setTimeout(() => {
       refreshActiveContext();
+      loadSecretary({ notify: true }).catch(() => {});
     }, 600);
   }
 });
@@ -5325,6 +5728,8 @@ async function boot() {
     await api('/api/me');
     setAuthView(true);
     await refreshSessions();
+    await loadSecretary({ notify: false }).catch(() => {});
+    startSecretaryPolling();
   } catch {
     loadCachedSessions();
     if (!navigator.onLine && state.sessions.length) {

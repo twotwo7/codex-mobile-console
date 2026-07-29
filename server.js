@@ -9,6 +9,16 @@ import { createSerialExecutor, createSingleFlight } from './server-concurrency.j
 import { createSqliteMessageStore, stateMetadataSnapshot } from './state-store.js';
 import { versionSessionStatus } from './session-status.js';
 import { compactBriefMessages } from './public/brief-view.js';
+import {
+  SECRETARY_QUICK_TASKS,
+  createSecretaryAuditEntry,
+  normalizeSecretaryControl,
+  normalizeSecretarySettings,
+  parseSecretaryAudit,
+  secretaryAutonomyPrompt,
+  selectSecretaryTrigger,
+  secretaryQuickPrompt
+} from './secretary-agent.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const HOST = process.env.HOST || '127.0.0.1';
@@ -20,6 +30,9 @@ const MESSAGE_DB_FILE = path.join(DATA_DIR, 'messages.sqlite3');
 const RESTART_MARKER_FILE = path.join(DATA_DIR, 'restart-marker.json');
 const PASSWORD_FILE = path.join(DATA_DIR, 'admin-password.txt');
 const SKILL_REGISTRY_FILE = path.join(DATA_DIR, 'skill-registry.json');
+const SECRETARY_AUDIT_FILE = path.join(DATA_DIR, 'secretary-audit.jsonl');
+const SECRETARY_PROJECT_DIR = path.resolve(process.env.SECRETARY_PROJECT_DIR || '/root/Projects/secretary-agent');
+const SECRETARY_TASK_FILE = path.join(SECRETARY_PROJECT_DIR, 'data', 'tasks.json');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const CODEX_HOME = process.env.CODEX_HOME || '/root/.codex';
 const SKILL_ROOTS = (process.env.SKILL_ROOTS || `${path.join(CODEX_HOME, 'skills')},/root/.agents/skills`)
@@ -99,6 +112,7 @@ const codexUsageCache = new Map();
 const codexMessagesCache = new Map();
 const runCodexImportSingleFlight = createSingleFlight();
 const runStateWriteSerial = createSerialExecutor();
+const secretaryAuditWriteSerial = createSerialExecutor();
 const messageStore = createSqliteMessageStore({ databaseFile: MESSAGE_DB_FILE });
 const clockTick = Number(process.env.CLK_TCK || 100);
 let totalRequests = 0;
@@ -119,6 +133,8 @@ let codexUpgradeTask = null;
 let appUpdateTask = null;
 let appUpdateMaintenanceTimer = null;
 let appAutoUpdateInFlight = false;
+let secretaryAutonomyTimer = null;
+let secretaryAutonomyInFlight = false;
 
 function commandPath() {
   const fallback = `/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${CODEX_BIN_DIR}`;
@@ -181,6 +197,7 @@ async function init() {
     state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
+    state.secretary = normalizeSecretaryControl(state.secretary);
     state.nextSeq ||= 1;
   } else {
     state.hiddenCodexSessions ||= {};
@@ -191,8 +208,10 @@ async function init() {
     state.siteMounts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
+    state.secretary = normalizeSecretaryControl(state.secretary);
     await saveState();
   }
+  await recoverSecretaryAuditHead();
   const hydratedFromSqlite = await messageStore.hydrateState(state);
   if (!hydratedFromSqlite && Object.values(state.sessions || {}).some((session) => Array.isArray(session.messages) && session.messages.length)) {
     await saveState();
@@ -206,6 +225,7 @@ async function init() {
   startRunMonitor();
   startSkillMaintenance();
   startAppUpdateMaintenance();
+  startSecretaryAutonomy();
 }
 
 function normalizeStorageSettings(value = {}) {
@@ -548,7 +568,53 @@ function auditSession(session, type, detail = {}) {
   };
   session.audit.push(entry);
   if (session.audit.length > MAX_AUDIT_EVENTS) session.audit = session.audit.slice(-MAX_AUDIT_EVENTS);
+  if (isSecretarySession(session)) {
+    appendSecretaryAudit(type, {
+      sessionId: session.id,
+      runId: entry.runId,
+      messageId: entry.messageId,
+      summary: entry.summary
+    });
+  }
   return entry;
+}
+
+function secretaryControl() {
+  state.secretary = normalizeSecretaryControl(state.secretary);
+  return state.secretary;
+}
+
+function isSecretarySession(session) {
+  return Boolean(session && (session.kind === 'secretary' || session.id === state.secretary?.sessionId));
+}
+
+function appendSecretaryAudit(type, detail = {}) {
+  const result = createSecretaryAuditEntry(secretaryControl(), { type, ...detail });
+  state.secretary = result.control;
+  secretaryAuditWriteSerial(() => appendFile(SECRETARY_AUDIT_FILE, `${JSON.stringify(result.entry)}\n`, { mode: 0o600 }))
+    .catch((error) => console.error('secretary audit append failed', error));
+  return result.entry;
+}
+
+async function recentSecretaryAudit(limit = 80) {
+  try {
+    return parseSecretaryAudit(await readFile(SECRETARY_AUDIT_FILE, 'utf8'), limit);
+  } catch {
+    return [];
+  }
+}
+
+async function recoverSecretaryAuditHead() {
+  const entries = await recentSecretaryAudit(1);
+  const latest = entries.at(-1);
+  if (!latest?.hash) return;
+  const control = secretaryControl();
+  state.secretary = {
+    ...control,
+    auditSeq: Math.max(control.auditSeq, Number(latest.seq || 0)),
+    auditHead: String(latest.hash),
+    lastEventAt: String(latest.at || control.lastEventAt || '')
+  };
 }
 
 function findRun(session, runId) {
@@ -582,6 +648,8 @@ function publicRun(run) {
     status: run.status || 'unknown',
     promptSummary: run.promptSummary || summarizeRunPrompt(run),
     elevated: run.elevated === true,
+    origin: run.origin || '',
+    triggerType: run.triggerType || '',
     codexSessionId: run.codexSessionId || '',
     pid: run.pid || 0,
     queuedAt: run.queuedAt || '',
@@ -612,6 +680,9 @@ function createHarnessRun(session, props = {}) {
     prompt: compactText(prompt, 12000),
     promptSummary: summarizeRunPrompt({ prompt }),
     elevated: props.elevated === true,
+    origin: String(props.origin || '').slice(0, 40),
+    triggerType: String(props.triggerType || '').slice(0, 80),
+    signalId: String(props.signalId || '').slice(0, 120),
     codexSessionId: session.codexSessionId || '',
     pid: 0,
     queuedAt: props.status === 'queued' ? nowIso() : '',
@@ -655,6 +726,14 @@ function appendRunEvent(session, type, detail = {}, options = {}) {
   run.events ||= [];
   run.events.push(event);
   if (run.events.length > MAX_RUN_EVENTS) run.events = run.events.slice(-MAX_RUN_EVENTS);
+  if (isSecretarySession(session)) {
+    appendSecretaryAudit(`run.${type}`, {
+      sessionId: session.id,
+      runId: run.id,
+      messageId: run.userMessageId,
+      summary: event.summary
+    });
+  }
   return event;
 }
 
@@ -1008,6 +1087,9 @@ async function prepareForShutdown(reason = 'signal') {
   if (running.size > 0) await writeRestartMarker(reason);
   clearTimeout(saveTimer);
   saveTimer = null;
+  clearInterval(secretaryAutonomyTimer);
+  secretaryAutonomyTimer = null;
+  await secretaryAuditWriteSerial(async () => {});
   await saveState();
 }
 
@@ -1378,6 +1460,8 @@ function publicSession(session) {
   }, {});
   return {
     id: session.id,
+    kind: session.kind || '',
+    autonomous: session.autonomous === true,
     source: session.source || 'web',
     title: session.title,
     cwd: session.cwd,
@@ -1439,6 +1523,371 @@ function publicSession(session) {
     messageCount: session.messages.length,
     runCount: session.runs.length
   };
+}
+
+async function ensureSecretarySession() {
+  await mkdir(SECRETARY_PROJECT_DIR, { recursive: true });
+  const control = secretaryControl();
+  let session = state.sessions[control.sessionId]
+    || Object.values(state.sessions || {}).find((item) => item.kind === 'secretary');
+  if (!session) {
+    const id = randomUUID();
+    const now = nowIso();
+    session = {
+      id,
+      kind: 'secretary',
+      autonomous: true,
+      title: '专家秘书',
+      cwd: SECRETARY_PROJECT_DIR,
+      linkedProjectPath: SECRETARY_PROJECT_DIR,
+      ...normalizeSessionConfig({
+        sandbox: 'danger-full-access',
+        approval: 'never',
+        reasoningEffort: 'high',
+        addDirs: [PROJECTS_ROOT]
+      }),
+      tags: ['秘书', '自治'],
+      codexSessionId: '',
+      status: 'idle',
+      createdAt: now,
+      updatedAt: now,
+      lastSeq: 0,
+      queue: [],
+      runs: [],
+      audit: [],
+      messages: []
+    };
+    state.sessions[id] = session;
+    state.secretary = {
+      ...control,
+      sessionId: id,
+      createdAt: control.createdAt || now,
+      updatedAt: now
+    };
+    auditSession(session, 'secretary.created', { summary: SECRETARY_PROJECT_DIR });
+    addMessage(session, {
+      role: 'system',
+      text: '专家秘书已就绪。该会话默认使用高权限自治执行；控制台保留完整审计与总停止能力。'
+    });
+    scheduleSave();
+  } else {
+    session.kind = 'secretary';
+    session.autonomous = true;
+    session.title ||= '专家秘书';
+    session.cwd = SECRETARY_PROJECT_DIR;
+    session.sandbox = 'danger-full-access';
+    session.approval = 'never';
+    session.reasoningEffort ||= 'high';
+    session.addDirs = [...new Set([...(session.addDirs || []), PROJECTS_ROOT])];
+    session.tags = normalizeSessionTags([...(session.tags || []), '秘书', '自治']);
+    session.trashedAt = '';
+    state.secretary = {
+      ...control,
+      sessionId: session.id,
+      createdAt: control.createdAt || session.createdAt || nowIso(),
+      updatedAt: nowIso()
+    };
+  }
+  return session;
+}
+
+async function readSecretaryTaskLedger() {
+  try {
+    const parsed = JSON.parse(await readFile(SECRETARY_TASK_FILE, 'utf8'));
+    const tasks = (Array.isArray(parsed.tasks) ? parsed.tasks : []).slice(0, 300).map((task) => ({
+      id: String(task.id || randomUUID()).slice(0, 160),
+      title: String(task.title || task.id || '未命名任务').replace(/\s+/g, ' ').trim().slice(0, 240),
+      status: ['pending', 'in_progress', 'blocked', 'completed'].includes(task.status) ? task.status : 'pending',
+      priority: Number.isFinite(Number(task.priority)) ? Number(task.priority) : 999,
+      createdAt: String(task.createdAt || ''),
+      updatedAt: String(task.updatedAt || ''),
+      completedAt: String(task.completedAt || ''),
+      nextAction: String(task.nextAction || '').replace(/\s+/g, ' ').trim().slice(0, 600),
+      outcome: String(task.outcome || '').replace(/\s+/g, ' ').trim().slice(0, 600),
+      blocker: String(task.blocker || '').replace(/\s+/g, ' ').trim().slice(0, 600)
+    })).sort((a, b) => a.priority - b.priority || a.title.localeCompare(b.title, 'zh-Hans-CN'));
+    return {
+      version: Number(parsed.version || 1),
+      tasks,
+      pendingCount: tasks.filter((task) => ['pending', 'in_progress'].includes(task.status)).length,
+      blockedCount: tasks.filter((task) => task.status === 'blocked').length,
+      completedCount: tasks.filter((task) => task.status === 'completed').length,
+      error: ''
+    };
+  } catch (error) {
+    return { version: 1, tasks: [], pendingCount: 0, blockedCount: 0, completedCount: 0, error: String(error.message || error) };
+  }
+}
+
+function addSecretaryNotification(detail = {}) {
+  const control = secretaryControl();
+  const notification = {
+    id: randomUUID(),
+    at: nowIso(),
+    type: String(detail.type || 'info').slice(0, 40),
+    title: compactEventText(detail.title || '秘书动态', 120),
+    body: compactEventText(detail.body || '', 800),
+    runId: String(detail.runId || '').slice(0, 120),
+    read: false
+  };
+  state.secretary = {
+    ...control,
+    notifications: [...control.notifications, notification].slice(-120),
+    updatedAt: notification.at
+  };
+  appendSecretaryAudit('secretary.notification.created', {
+    sessionId: control.sessionId,
+    runId: notification.runId,
+    summary: `${notification.title}: ${notification.body}`
+  });
+  scheduleSave();
+  return notification;
+}
+
+function queueSecretaryPrompt(session, prompt, options = {}) {
+  const displayPrompt = String(options.displayPrompt || prompt).trim();
+  const wasRunning = running.has(session.id);
+  const userMessage = addMessage(session, {
+    role: 'user',
+    text: displayPrompt,
+    elevated: true,
+    origin: options.origin || 'manual',
+    triggerType: options.triggerType || '',
+    runState: wasRunning ? 'queued' : 'submitted',
+    delivery: wasRunning ? 'queued' : 'submitted'
+  });
+  const run = createHarnessRun(session, {
+    prompt,
+    elevated: true,
+    origin: options.origin || 'manual',
+    triggerType: options.triggerType || '',
+    signalId: options.signalId || '',
+    messageId: userMessage.id,
+    status: wasRunning ? 'queued' : 'submitted'
+  });
+  userMessage.runId = run.id;
+  broadcastEvent(session.id, 'message_update', userMessage);
+  if (wasRunning) {
+    session.queue.push({
+      id: randomUUID(),
+      runId: run.id,
+      prompt,
+      displayPrompt,
+      elevated: true,
+      origin: run.origin,
+      triggerType: run.triggerType,
+      signalId: run.signalId,
+      images: [],
+      files: [],
+      createdAt: nowIso(),
+      messageId: userMessage.id
+    });
+    updateRunStatus(session, run.id, 'queued');
+    auditSession(session, 'queue.added', { runId: run.id, messageId: userMessage.id, prompt: displayPrompt });
+  } else {
+    runCodex(session, prompt, { runId: run.id, elevated: true, messageId: userMessage.id });
+  }
+  scheduleSave();
+  return { queued: wasRunning, run, userMessage };
+}
+
+function markSecretaryTriggerStarted(trigger, now = new Date()) {
+  const control = secretaryControl();
+  const localDate = trigger.localDate || now.toISOString().slice(0, 10);
+  const scheduler = control.scheduler;
+  const dailyRunCount = scheduler.dailyRunDate === localDate ? scheduler.dailyRunCount + 1 : 1;
+  const nextScheduler = {
+    ...scheduler,
+    lastRunAt: now.toISOString(),
+    lastTrigger: trigger.type,
+    dailyRunDate: localDate,
+    dailyRunCount,
+    lastError: ''
+  };
+  if (trigger.type === 'daily-brief') nextScheduler.lastDailyBriefDate = localDate;
+  if (trigger.type === 'daily-review') nextScheduler.lastDailyReviewDate = localDate;
+  if (trigger.type === 'learn') nextScheduler.lastLearningAt = now.toISOString();
+  const signals = control.signals.map((signal) => signal.id === trigger.signalId ? { ...signal, status: 'processing' } : signal);
+  state.secretary = { ...control, scheduler: nextScheduler, signals, updatedAt: now.toISOString() };
+}
+
+function latestAssistantSummaryForRun(session, runId) {
+  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
+    const message = session.messages[index];
+    if (message.runId === runId && message.role === 'assistant' && message.text) {
+      return compactEventText(message.text, 500);
+    }
+  }
+  return '';
+}
+
+function completeSecretaryAutonomousRun(session, run, status, failure) {
+  if (!isSecretarySession(session) || run?.origin !== 'autonomy') return;
+  const control = secretaryControl();
+  const now = nowIso();
+  const signals = control.signals.map((signal) => signal.id === run.signalId
+    ? { ...signal, status: status === 'completed' ? 'completed' : 'failed' }
+    : signal);
+  state.secretary = {
+    ...control,
+    signals,
+    scheduler: {
+      ...control.scheduler,
+      lastCompletedAt: now,
+      lastError: failure?.summary || ''
+    },
+    updatedAt: now
+  };
+  const summary = latestAssistantSummaryForRun(session, run.id) || failure?.summary || run.promptSummary || status;
+  addSecretaryNotification({
+    type: status === 'completed' ? 'completed' : status === 'stopped' ? 'stopped' : 'failed',
+    title: status === 'completed' ? `秘书已完成：${run.triggerType || '自主任务'}` : `秘书任务${status === 'stopped' ? '已停止' : '失败'}`,
+    body: summary,
+    runId: run.id
+  });
+}
+
+async function runSecretaryAutonomyTick(reason = 'timer') {
+  if (secretaryAutonomyInFlight) return null;
+  secretaryAutonomyInFlight = true;
+  try {
+    const control = secretaryControl();
+    const now = new Date();
+    const lastTick = Date.parse(control.scheduler.lastTickAt || '');
+    const checkMs = control.settings.checkIntervalMinutes * 60_000;
+    if (reason === 'timer' && lastTick && now.getTime() - lastTick < checkMs) return null;
+    state.secretary = {
+      ...control,
+      scheduler: {
+        ...control.scheduler,
+        lastTickAt: now.toISOString(),
+        nextCheckAt: new Date(now.getTime() + checkMs).toISOString()
+      },
+      updatedAt: now.toISOString()
+    };
+    if (control.killSwitch || !control.settings.enabled) {
+      scheduleSave();
+      return null;
+    }
+    const session = await ensureSecretarySession();
+    const tasks = await readSecretaryTaskLedger();
+    const trigger = selectSecretaryTrigger(secretaryControl(), {
+      now,
+      running: running.has(session.id),
+      pendingTaskCount: tasks.pendingCount
+    });
+    if (!trigger) {
+      scheduleSave();
+      return null;
+    }
+    const signal = secretaryControl().signals.find((item) => item.id === trigger.signalId) || null;
+    const prompt = secretaryAutonomyPrompt(trigger, { tasks: tasks.tasks, signal });
+    markSecretaryTriggerStarted(trigger, now);
+    const result = queueSecretaryPrompt(session, prompt, {
+      displayPrompt: `【自主任务 · ${trigger.label}】\n${prompt}`,
+      origin: 'autonomy',
+      triggerType: trigger.type,
+      signalId: trigger.signalId || ''
+    });
+    addSecretaryNotification({
+      type: 'started',
+      title: `秘书开始：${trigger.label}`,
+      body: result.queued ? '当前任务完成后自动执行。' : '已经开始自主执行。',
+      runId: result.run.id
+    });
+    auditSession(session, 'secretary.autonomy.triggered', { runId: result.run.id, messageId: result.userMessage.id, summary: `${reason}:${trigger.type}` });
+    return result;
+  } catch (error) {
+    const control = secretaryControl();
+    state.secretary = {
+      ...control,
+      scheduler: { ...control.scheduler, lastError: String(error.message || error).slice(0, 800) },
+      updatedAt: nowIso()
+    };
+    appendSecretaryAudit('secretary.autonomy.failed', { summary: error.message || String(error) });
+    scheduleSave();
+    return null;
+  } finally {
+    secretaryAutonomyInFlight = false;
+  }
+}
+
+function startSecretaryAutonomy() {
+  clearInterval(secretaryAutonomyTimer);
+  secretaryAutonomyTimer = setInterval(() => runSecretaryAutonomyTick('timer').catch(() => {}), 60_000);
+  secretaryAutonomyTimer.unref?.();
+  setTimeout(() => runSecretaryAutonomyTick('startup').catch(() => {}), 12_000).unref?.();
+}
+
+async function secretaryStatusPayload() {
+  const control = secretaryControl();
+  const session = state.sessions[control.sessionId]
+    || Object.values(state.sessions || {}).find((item) => item.kind === 'secretary')
+    || null;
+  const tasks = await readSecretaryTaskLedger();
+  return {
+    control,
+    session: session ? publicSession(session) : null,
+    running: Boolean(session && running.has(session.id)),
+    workspace: SECRETARY_PROJECT_DIR,
+    quickTasks: Object.keys(SECRETARY_QUICK_TASKS),
+    tasks,
+    unreadCount: control.notifications.filter((item) => !item.read).length,
+    audit: await recentSecretaryAudit(80)
+  };
+}
+
+function clearSecretaryQueue(session) {
+  const queue = [...(session.queue || [])];
+  session.queue = [];
+  for (const item of queue) {
+    updateMessageRunState(session, item.messageId || item.clientMessageId, 'stopped', { delivery: 'stopped' });
+    updateRunStatus(session, item.runId || item.messageId || item.clientMessageId, 'stopped', {
+      errorCode: 'secretary_kill_switch',
+      errorSummary: 'Secretary kill switch stopped the queued run.'
+    });
+  }
+  return queue.length;
+}
+
+async function stopSecretary() {
+  const control = secretaryControl();
+  const now = nowIso();
+  state.secretary = { ...control, killSwitch: true, stoppedAt: now, updatedAt: now };
+  const session = state.sessions[control.sessionId]
+    || Object.values(state.sessions || {}).find((item) => item.kind === 'secretary')
+    || null;
+  let stopped = false;
+  let cleared = 0;
+  if (session) {
+    cleared = clearSecretaryQueue(session);
+    stopped = stopRunningSession(session);
+    if (!stopped) session.status = 'idle';
+    session.updatedAt = now;
+    auditSession(session, 'secretary.kill_switch.enabled', { summary: `running:${stopped} queued:${cleared}` });
+    addMessage(session, {
+      role: 'system',
+      text: '秘书总停止已启用。当前执行和排队任务已停止，新任务已锁定。',
+      status: stopped ? 'stopping' : 'idle'
+    });
+    broadcastSession(session);
+  } else {
+    appendSecretaryAudit('secretary.kill_switch.enabled', { summary: 'No secretary session existed.' });
+  }
+  scheduleSave();
+  return { stopped, cleared };
+}
+
+async function resumeSecretary() {
+  const session = await ensureSecretarySession();
+  const control = secretaryControl();
+  const now = nowIso();
+  state.secretary = { ...control, sessionId: session.id, killSwitch: false, resumedAt: now, updatedAt: now };
+  auditSession(session, 'secretary.kill_switch.disabled', { summary: 'Autonomous execution resumed.' });
+  addMessage(session, { role: 'system', text: '秘书总停止已解除，可以继续接收和执行任务。', status: 'idle' });
+  broadcastSession(session);
+  scheduleSave();
+  return session;
 }
 
 function parseProcStat(raw) {
@@ -4491,6 +4940,7 @@ function runCodex(session, prompt, options = {}) {
       errorCode: failure.code,
       errorSummary: failure.summary
     });
+    completeSecretaryAutonomousRun(session, findRun(session, session.activeRun?.runId || run.id), 'failed', failure);
     delete session.activeRun;
     addMessage(session, {
       role: 'system',
@@ -4534,6 +4984,7 @@ function runCodex(session, prompt, options = {}) {
       errorCode: failure?.code || '',
       errorSummary: failure?.summary || ''
     });
+    completeSecretaryAutonomousRun(session, findRun(session, activeRunId), finalRunState, failure);
     delete session.activeRun;
     session.status = nextStatus;
     session.updatedAt = nowIso();
@@ -5016,6 +5467,107 @@ async function handleApi(req, res, url) {
     });
   }
 
+  if (url.pathname === '/api/secretary' && req.method === 'GET') {
+    return json(res, 200, await secretaryStatusPayload());
+  }
+
+  if (url.pathname === '/api/secretary/activate' && req.method === 'POST') {
+    const session = await ensureSecretarySession();
+    return json(res, 200, { ok: true, ...(await secretaryStatusPayload()), session: publicSession(session) });
+  }
+
+  if (url.pathname === '/api/secretary/resume' && req.method === 'POST') {
+    const session = await resumeSecretary();
+    return json(res, 200, { ok: true, ...(await secretaryStatusPayload()), session: publicSession(session) });
+  }
+
+  if (url.pathname === '/api/secretary/kill' && req.method === 'POST') {
+    const result = await stopSecretary();
+    return json(res, 200, { ok: true, ...result, ...(await secretaryStatusPayload()) });
+  }
+
+  if (url.pathname === '/api/secretary/settings' && req.method === 'PATCH') {
+    const body = await readJson(req);
+    const control = secretaryControl();
+    const settings = normalizeSecretarySettings({ ...control.settings, ...(body.settings || body) });
+    state.secretary = { ...control, settings, updatedAt: nowIso() };
+    appendSecretaryAudit('secretary.settings.updated', {
+      sessionId: control.sessionId,
+      summary: JSON.stringify(settings)
+    });
+    scheduleSave();
+    if (settings.enabled && !control.killSwitch) setTimeout(() => runSecretaryAutonomyTick('settings').catch(() => {}), 50).unref?.();
+    return json(res, 200, { ok: true, ...(await secretaryStatusPayload()) });
+  }
+
+  if (url.pathname === '/api/secretary/wake' && req.method === 'POST') {
+    const control = secretaryControl();
+    if (control.killSwitch) return json(res, 423, { error: 'secretary_stopped', message: '秘书总停止已启用。' });
+    const session = await ensureSecretarySession();
+    const tasks = await readSecretaryTaskLedger();
+    const trigger = { type: 'manual', label: '立即唤醒', localDate: nowIso().slice(0, 10) };
+    const prompt = secretaryAutonomyPrompt(trigger, { tasks: tasks.tasks });
+    markSecretaryTriggerStarted(trigger, new Date());
+    const result = queueSecretaryPrompt(session, prompt, {
+      displayPrompt: `【自主任务 · 立即唤醒】\n${prompt}`,
+      origin: 'autonomy',
+      triggerType: 'manual'
+    });
+    addSecretaryNotification({
+      type: 'started',
+      title: '秘书已被唤醒',
+      body: result.queued ? '任务已经进入队列。' : '正在检查状态并自主执行。',
+      runId: result.run.id
+    });
+    return json(res, 202, { ok: true, queued: result.queued, ...(await secretaryStatusPayload()) });
+  }
+
+  if (url.pathname === '/api/secretary/events' && req.method === 'POST') {
+    const body = await readJson(req);
+    const title = String(body.title || '').trim();
+    if (!title) return json(res, 400, { error: 'missing_event_title' });
+    const control = secretaryControl();
+    const signal = {
+      id: randomUUID(),
+      at: nowIso(),
+      type: String(body.type || 'external').slice(0, 80),
+      title: title.slice(0, 160),
+      detail: String(body.detail || '').slice(0, 1600),
+      priority: ['urgent', 'high', 'normal', 'low'].includes(body.priority) ? body.priority : 'normal',
+      status: 'pending'
+    };
+    state.secretary = { ...control, signals: [...control.signals, signal].slice(-80), updatedAt: signal.at };
+    appendSecretaryAudit('secretary.signal.received', { sessionId: control.sessionId, summary: `${signal.priority}:${signal.type}:${signal.title}` });
+    scheduleSave();
+    setTimeout(() => runSecretaryAutonomyTick('event').catch(() => {}), 50).unref?.();
+    return json(res, 202, { ok: true, signal, ...(await secretaryStatusPayload()) });
+  }
+
+  if (url.pathname === '/api/secretary/notifications/read' && req.method === 'POST') {
+    const body = await readJson(req).catch(() => ({}));
+    const ids = new Set((Array.isArray(body.ids) ? body.ids : []).map(String));
+    const control = secretaryControl();
+    state.secretary = {
+      ...control,
+      notifications: control.notifications.map((item) => (!ids.size || ids.has(item.id)) ? { ...item, read: true } : item),
+      updatedAt: nowIso()
+    };
+    scheduleSave();
+    return json(res, 200, { ok: true, ...(await secretaryStatusPayload()) });
+  }
+
+  if (url.pathname === '/api/secretary/quick-task' && req.method === 'POST') {
+    const body = await readJson(req);
+    const prompt = secretaryQuickPrompt(body.kind);
+    if (!prompt) return json(res, 400, { error: 'unknown_secretary_quick_task' });
+    const session = await ensureSecretarySession();
+    if (secretaryControl().killSwitch) {
+      return json(res, 423, { error: 'secretary_stopped', message: '秘书总停止已启用。' });
+    }
+    const result = queueSecretaryPrompt(session, prompt, { origin: 'quick', triggerType: String(body.kind || '') });
+    return json(res, 202, { ok: true, queued: result.queued, session: publicSession(session) });
+  }
+
   if (url.pathname === '/api/admin/restart' && req.method === 'POST') {
     const body = req.method === 'POST' ? await readJson(req).catch(() => ({})) : {};
     const result = await requestServiceRestart(String(body.reason || 'api').slice(0, 80));
@@ -5437,7 +5989,10 @@ async function handleApi(req, res, url) {
     if (!session) return json(res, 404, { error: 'session_not_found' });
     const body = await readJson(req, 80 * 1024 * 1024);
     const prompt = String(body.prompt || '').trim();
-    const elevated = body.elevated === true;
+    if (isSecretarySession(session) && secretaryControl().killSwitch) {
+      return json(res, 423, { error: 'secretary_stopped', message: '秘书总停止已启用，请先恢复。' });
+    }
+    const elevated = isSecretarySession(session) || body.elevated === true;
     const clientMessageId = String(body.clientMessageId || '').trim().slice(0, 120);
     const queueId = clientMessageId || randomUUID();
     const images = await savePromptImages(body.images || []);
@@ -5577,6 +6132,9 @@ async function handleApi(req, res, url) {
   if (messageRetryMatch && req.method === 'POST') {
     const session = state.sessions[decodeURIComponent(messageRetryMatch[1])];
     if (!session) return json(res, 404, { error: 'session_not_found' });
+    if (isSecretarySession(session) && secretaryControl().killSwitch) {
+      return json(res, 423, { error: 'secretary_stopped', message: '秘书总停止已启用，请先恢复。' });
+    }
     reconcileSessionRunState(session, 'retry');
     const messageId = decodeURIComponent(messageRetryMatch[2]);
     const message = (session.messages || []).find((item) => (

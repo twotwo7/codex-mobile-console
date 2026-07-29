@@ -11,7 +11,7 @@
     <title>Codex Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=165">
+    <link rel="stylesheet" href="/styles.css?v=167">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -36,6 +36,7 @@
           </div>
           <div id="drawerModeRow" class="drawer-mode-row" role="tablist" aria-label="侧边栏视图">
             <button id="drawerSessionsButton" class="active" type="button" role="tab" aria-selected="true" aria-controls="drawerSessionsPanel">会话</button>
+            <button id="secretaryManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSecretaryPanel">秘书<span id="secretaryUnreadBadge" class="secretary-unread-badge" hidden></span></button>
             <button id="skillManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSkillsPanel">Skills</button>
             <button id="evolutionManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerEvolutionPanel">进化</button>
             <button id="drawerSettingsButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSettingsPanel">设置</button>
@@ -68,6 +69,75 @@
             <button id="clearSessionSearchButton" class="drawer-tool-button" type="button" aria-label="清空会话搜索" title="清空搜索">×</button>
           </div>
           <div id="sessionList" class="session-list"></div>
+        </section>
+        <section id="drawerSecretaryPanel" class="drawer-panel drawer-secretary-panel" role="tabpanel" aria-labelledby="secretaryManagerButton">
+          <div class="secretary-overview">
+            <div class="secretary-status-line">
+              <span id="secretaryStatusDot" class="secretary-status-dot" aria-hidden="true"></span>
+              <strong id="secretaryStatus">未初始化</strong>
+              <button id="refreshSecretaryButton" class="drawer-tool-button" type="button" aria-label="刷新秘书状态" title="刷新">↻</button>
+            </div>
+            <p id="secretarySummary" class="skill-status" role="status">创建一个长期、高权限、可审计的专家秘书会话。</p>
+            <div class="secretary-autonomy-row">
+              <label class="secretary-autonomy-toggle">
+                <input id="secretaryAutonomyToggle" type="checkbox">
+                <span>后台自主循环</span>
+              </label>
+              <button id="wakeSecretaryButton" class="ghost-button inline" type="button">立即唤醒</button>
+            </div>
+            <p id="secretarySchedule" class="secretary-schedule">读取调度计划...</p>
+            <div class="secretary-primary-actions">
+              <button id="openSecretaryButton" type="button">进入秘书</button>
+              <button id="resumeSecretaryButton" class="ghost-button inline" type="button" hidden>恢复执行</button>
+              <button id="killSecretaryButton" class="danger-button inline" type="button">停止所有动作</button>
+            </div>
+          </div>
+          <div class="secretary-quick-actions" aria-label="秘书快捷任务">
+            <button type="button" data-secretary-task="focus">今日重点</button>
+            <button type="button" data-secretary-task="continue">继续任务</button>
+            <button type="button" data-secretary-task="learn">自主学习</button>
+            <button type="button" data-secretary-task="audit">运行巡检</button>
+          </div>
+          <div class="secretary-section-head">
+            <strong>任务台</strong>
+            <span id="secretaryTaskCount">0</span>
+          </div>
+          <div id="secretaryTaskList" class="secretary-task-list">暂无任务</div>
+          <div class="secretary-section-head">
+            <strong>主动动态</strong>
+            <div>
+              <button id="enableSecretaryNotifications" class="text-button" type="button">系统通知</button>
+              <button id="markSecretaryNotificationsRead" class="text-button" type="button">全部已读</button>
+            </div>
+          </div>
+          <div id="secretaryNotificationList" class="secretary-notification-list" aria-live="polite">暂无动态</div>
+          <details class="secretary-settings-details">
+            <summary>运行策略</summary>
+            <form id="secretarySettingsForm" class="secretary-settings-form">
+              <div class="secretary-settings-grid">
+                <label for="secretaryCheckInterval">状态检查（分钟）<input id="secretaryCheckInterval" name="checkIntervalMinutes" type="number" min="1" max="1440" required></label>
+                <label for="secretaryContinuationInterval">任务续作（分钟）<input id="secretaryContinuationInterval" name="continuationIntervalMinutes" type="number" min="5" max="1440" required></label>
+                <label for="secretaryLearningInterval">主动学习（小时）<input id="secretaryLearningInterval" name="learningIntervalHours" type="number" min="1" max="168" required></label>
+                <label for="secretaryMaxRuns">每日最多自主运行<input id="secretaryMaxRuns" name="maxAutonomousRunsPerDay" type="number" min="0" max="500" required></label>
+                <label for="secretaryBriefTime">每日计划<input id="secretaryBriefTime" name="dailyBriefTime" type="time" required></label>
+                <label for="secretaryReviewTime">每日回顾<input id="secretaryReviewTime" name="dailyReviewTime" type="time" required></label>
+                <label for="secretaryQuietStart">静默开始<input id="secretaryQuietStart" name="quietStartTime" type="time" required></label>
+                <label for="secretaryQuietEnd">静默结束<input id="secretaryQuietEnd" name="quietEndTime" type="time" required></label>
+              </div>
+              <label for="secretaryTimezone">时区<input id="secretaryTimezone" name="timezone" type="text" autocomplete="off" required></label>
+              <label class="secretary-learning-toggle">
+                <input id="secretaryProactiveLearning" name="proactiveLearning" type="checkbox">
+                <span>空闲时主动学习</span>
+              </label>
+              <button type="submit">保存策略</button>
+              <p id="secretarySettingsState" class="skill-status" role="status"></p>
+            </form>
+          </details>
+          <div class="secretary-audit-head">
+            <strong>最近审计</strong>
+            <span id="secretaryAuditCount">0</span>
+          </div>
+          <div id="secretaryAuditList" class="secretary-audit-list" aria-live="polite">暂无记录</div>
         </section>
         <section id="drawerSkillsPanel" class="drawer-panel drawer-skills-panel" role="tabpanel" aria-labelledby="skillManagerButton">
           <div class="drawer-skill-toolbar">
@@ -715,6 +785,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=199" type="module"></script>
+    <script src="/app.js?v=201" type="module"></script>
   </body>
 </html>

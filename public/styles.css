@@ -401,8 +401,8 @@ button:disabled {
 
 .drawer-mode-row {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 4px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 2px;
   padding: 3px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -411,11 +411,13 @@ button:disabled {
 
 .drawer-mode-row button {
   min-height: 30px;
-  padding: 0 5px;
+  min-width: 0;
+  padding: 0 1px;
   background: transparent;
   color: var(--muted);
   border: 0;
-  font-size: 12px;
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 .drawer-mode-row button.active {
@@ -474,6 +476,294 @@ button:disabled {
 
 .drawer-evolution-panel.active {
   grid-template-rows: auto auto minmax(0, 1fr);
+}
+
+.drawer-secretary-panel.active {
+  display: block;
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.secretary-unread-badge {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 3px;
+  border-radius: 50%;
+  background: var(--accent-2);
+  vertical-align: 2px;
+}
+
+.secretary-overview {
+  display: grid;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.secretary-autonomy-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.secretary-autonomy-toggle,
+.secretary-learning-toggle {
+  display: flex;
+  grid-auto-flow: unset;
+  grid-template-columns: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.secretary-autonomy-toggle input,
+.secretary-learning-toggle input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.secretary-schedule {
+  margin: -2px 0 0;
+  color: var(--soft);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.secretary-status-line {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.secretary-status-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--soft);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--soft) 16%, transparent);
+}
+
+.secretary-status-dot.running {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+}
+
+.secretary-status-dot.stopped {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 18%, transparent);
+}
+
+.secretary-primary-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.secretary-primary-actions button {
+  min-height: 40px;
+}
+
+.secretary-primary-actions .danger-button {
+  border: 1px solid color-mix(in srgb, var(--danger) 68%, var(--line));
+  background: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  color: var(--danger);
+}
+
+.secretary-quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.secretary-quick-actions button {
+  min-height: 38px;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.secretary-audit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.secretary-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 16px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.secretary-section-head > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.text-button {
+  min-height: 28px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.secretary-task-list,
+.secretary-notification-list {
+  display: grid;
+  align-content: start;
+}
+
+.secretary-task-entry,
+.secretary-notification-entry {
+  display: grid;
+  gap: 4px;
+  padding: 9px 1px;
+  border-bottom: 1px solid var(--line);
+}
+
+.secretary-task-entry-head,
+.secretary-notification-entry-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.secretary-task-entry strong,
+.secretary-notification-entry strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.secretary-task-entry span,
+.secretary-task-entry p,
+.secretary-notification-entry span,
+.secretary-notification-entry p {
+  margin: 0;
+  color: var(--soft);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.secretary-task-entry[data-status="in_progress"] strong {
+  color: var(--accent);
+}
+
+.secretary-task-entry[data-status="blocked"] strong,
+.secretary-notification-entry[data-type="failed"] strong {
+  color: var(--danger);
+}
+
+.secretary-notification-entry.unread {
+  box-shadow: inset 2px 0 0 var(--accent-2);
+  padding-left: 8px;
+}
+
+.secretary-settings-details {
+  margin-top: 16px;
+  padding: 0 1px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.secretary-settings-details summary {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.secretary-settings-form {
+  display: grid;
+  gap: 10px;
+  padding-top: 8px;
+}
+
+.secretary-settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.secretary-settings-form label {
+  min-width: 0;
+  font-size: 11px;
+}
+
+.secretary-settings-form input[type="number"],
+.secretary-settings-form input[type="time"],
+.secretary-settings-form input[type="text"] {
+  height: 38px;
+  min-width: 0;
+  padding: 0 9px;
+  font-size: 12px;
+}
+
+.secretary-settings-form button[type="submit"] {
+  min-height: 38px;
+}
+
+.secretary-audit-head {
+  margin-top: 16px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--line);
+}
+
+.secretary-audit-list {
+  min-height: 0;
+  overflow: auto;
+  display: grid;
+  align-content: start;
+  gap: 1px;
+  border-top: 1px solid var(--line);
+}
+
+.secretary-audit-entry {
+  display: grid;
+  gap: 3px;
+  padding: 8px 2px;
+  border-bottom: 1px solid var(--line);
+}
+
+.secretary-audit-entry strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.secretary-audit-entry span {
+  color: var(--soft);
+  font-size: 11px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 
 .drawer-settings-panel.active {

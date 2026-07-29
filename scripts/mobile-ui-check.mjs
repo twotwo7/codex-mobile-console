@@ -219,13 +219,25 @@ async function checkDrawerSwitchStability(page, viewportName) {
   await waitForDrawerSettled(page, true);
   const baseline = await getDrawerHeadBoxes(page);
 
-  for (const selector of ['#skillManagerButton', '#drawerSettingsButton', '#drawerSessionsButton']) {
+  for (const selector of ['#secretaryManagerButton', '#skillManagerButton', '#drawerSettingsButton', '#drawerSessionsButton']) {
     await page.click(selector);
     await page.waitForFunction((activeSelector) => document.querySelector(activeSelector)?.classList.contains('active'), selector, { timeout: 5000 });
     const current = await getDrawerHeadBoxes(page);
     assertStableBox(baseline.titleSlot, current.titleSlot, `drawer title slot after ${selector}`);
     assertStableBox(baseline.modeRow, current.modeRow, `drawer mode row after ${selector}`);
     assertStableBox(baseline.closeButton, current.closeButton, `drawer close button after ${selector}`);
+    if (selector === '#secretaryManagerButton') {
+      await assertVisibleBox(page, '#openSecretaryButton', 'secretary open button');
+      await assertVisibleBox(page, '#killSecretaryButton', 'secretary kill button');
+      await assertVisibleBox(page, '#secretaryAutonomyToggle', 'secretary autonomy toggle');
+      await assertVisibleBox(page, '#wakeSecretaryButton', 'secretary wake button');
+      await assertVisibleBox(page, '#secretaryTaskList', 'secretary task list');
+      await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-secretary.png`), fullPage: false });
+      await page.click('.secretary-settings-details summary');
+      await page.locator('#secretaryTimezone').scrollIntoViewIfNeeded();
+      await assertVisibleBox(page, '#secretaryTimezone', 'secretary timezone input');
+      await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-secretary-settings.png`), fullPage: false });
+    }
   }
 
   await page.screenshot({ path: path.join(OUT_DIR, `${viewportName}-drawer.png`), fullPage: false });
@@ -395,6 +407,28 @@ async function checkLongTitleMenu(page, viewportName) {
   await page.waitForFunction(() => document.querySelector('#topMoreMenu')?.hidden && document.querySelector('#topFilterMenu')?.hidden, null, { timeout: 5000 });
 }
 
+async function checkDesktopSecretary(browser) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: 1 });
+  const page = await context.newPage();
+  try {
+    await loginSmoke(page);
+    await page.click('#secretaryManagerButton');
+    await page.waitForSelector('#drawerSecretaryPanel.active', { timeout: 5000 });
+    await assertVisibleBox(page, '#drawerSecretaryPanel', 'desktop secretary panel');
+    await assertVisibleBox(page, '#openSecretaryButton', 'desktop secretary open button');
+    await assertVisibleBox(page, '#killSecretaryButton', 'desktop secretary kill button');
+    await assertVisibleBox(page, '#secretaryAutonomyToggle', 'desktop secretary autonomy toggle');
+    await page.screenshot({ path: path.join(OUT_DIR, 'desktop-1280-secretary.png'), fullPage: false });
+    await page.click('.secretary-settings-details summary');
+    await page.locator('#secretaryTimezone').scrollIntoViewIfNeeded();
+    await assertVisibleBox(page, '#secretaryTimezone', 'desktop secretary timezone input');
+    await page.screenshot({ path: path.join(OUT_DIR, 'desktop-1280-secretary-settings.png'), fullPage: false });
+  } finally {
+    await api(page, '/api/logout', { method: 'POST', body: '{}' }).catch(() => {});
+    await context.close();
+  }
+}
+
 async function run() {
   await mkdir(OUT_DIR, { recursive: true });
   const browser = await chromium.launch({
@@ -455,6 +489,7 @@ async function run() {
         await context.close();
       }
     }
+    await checkDesktopSecretary(browser);
   } finally {
     await browser.close();
   }
