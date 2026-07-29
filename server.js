@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createSerialExecutor, createSingleFlight } from './server-concurrency.js';
 import { createSqliteMessageStore, stateMetadataSnapshot } from './state-store.js';
+import { versionSessionStatus } from './session-status.js';
 import { compactBriefMessages } from './public/brief-view.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -705,6 +706,21 @@ function contextHealthFromUsage(usage) {
   };
 }
 
+function queueStatusFingerprint(queue = []) {
+  const compact = queue.map((item) => ({
+    id: item.id || '',
+    runId: item.runId || '',
+    messageId: item.messageId || '',
+    clientMessageId: item.clientMessageId || '',
+    prompt: item.displayPrompt || item.prompt || '',
+    elevated: item.elevated === true,
+    createdAt: item.createdAt || '',
+    images: (item.images || []).map((image) => [image.id || '', image.name || image.fileName || '', image.path || '', image.url || '']),
+    files: (item.files || []).map((file) => [file.id || '', file.name || file.fileName || '', file.path || '', file.url || '', Number(file.size || 0)])
+  }));
+  return createHash('sha256').update(JSON.stringify(compact)).digest('hex');
+}
+
 function classifyCodexFailure({ code, lastError = '', session, spawnError = null, wasStopping = false } = {}) {
   const errorText = String(lastError || spawnError?.message || '').trim();
   if (wasStopping) return { code: 'process_killed', retryable: true, summary: '任务已停止。' };
@@ -757,7 +773,8 @@ function deriveSessionStatusSummary(session) {
     error: '失败',
     idle: '空闲'
   };
-  return {
+  const previousRevision = Number(session.statusRevision || 0);
+  const summary = versionSessionStatus(session, {
     status,
     label: labels[status] || status,
     running: runtimeRunning,
@@ -766,7 +783,9 @@ function deriveSessionStatusSummary(session) {
     activeRunId: active?.id || session.activeRun?.runId || '',
     lastRunStatus: latestRun(session)?.status || '',
     contextHealth
-  };
+  }, nowIso, queueStatusFingerprint(session.queue));
+  if (summary.revision !== previousRevision) scheduleSave();
+  return summary;
 }
 
 function reconcileRunningSessions(restartMarker = null) {
@@ -1377,6 +1396,8 @@ function publicSession(session) {
     codexSessionId: session.codexSessionId || '',
     status: effectiveStatus,
     statusSummary,
+    statusRevision: statusSummary.revision,
+    statusUpdatedAt: statusSummary.updatedAt,
     storedStatus: session.status,
     isRunning: statusSummary.running,
     canStop: statusSummary.canStop,
@@ -4489,7 +4510,7 @@ function runCodex(session, prompt, options = {}) {
     running.delete(session.id);
     const wasStopping = session.status === 'stopping';
     const next = session.queue?.shift() || null;
-    const nextStatus = next?.prompt ? 'running' : code === 0 || wasStopping ? 'idle' : 'error';
+    const nextStatus = code === 0 || wasStopping ? 'idle' : 'error';
     const finalRunState = wasStopping ? 'stopped' : code === 0 ? 'completed' : 'failed';
     const failure = finalRunState === 'failed'
       ? classifyCodexFailure({ code, lastError: lastCodexError, session, wasStopping })
@@ -4513,14 +4534,16 @@ function runCodex(session, prompt, options = {}) {
       errorCode: failure?.code || '',
       errorSummary: failure?.summary || ''
     });
+    delete session.activeRun;
     session.status = nextStatus;
     session.updatedAt = nowIso();
     addMessage(session, {
       role: 'system',
+      runId: activeRunId,
       text: next?.prompt
         ? wasStopping ? 'Codex run stopped. Starting next queued prompt.' : 'Codex run finished. Starting next queued prompt.'
         : wasStopping ? 'Codex run stopped.' : code === 0 ? 'Codex run finished.' : codexExitMessage(code, session, lastCodexError),
-      status: nextStatus,
+      status: next?.prompt ? 'running' : nextStatus,
       queuedCount: session.queue?.length || 0
     });
     if (finalRunState === 'completed') {
@@ -4538,8 +4561,6 @@ function runCodex(session, prompt, options = {}) {
         scheduleSave();
       });
     }
-    broadcastSession(session);
-
     if (next?.prompt) {
       scheduleSave();
       runCodex(session, next.prompt, {
@@ -4554,7 +4575,7 @@ function runCodex(session, prompt, options = {}) {
       return;
     }
 
-    delete session.activeRun;
+    broadcastSession(session);
     scheduleSave();
     scheduleServiceRestart();
   });

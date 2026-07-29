@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { createConnectionState } from '../public/connection-state.js';
 import { createFrontendEvents } from '../public/frontend-events.js';
 import { createSessionStateController, isSessionRunning, sessionStatusFromMessage } from '../public/session-state.js';
+import { isStaleSessionSnapshot, sessionSnapshotPatch, snapshotStatusRevision } from '../public/session-snapshot.js';
+import { versionSessionStatus } from '../session-status.js';
 import { createTopbarView } from '../public/topbar-view.js';
 
 function fakeClassList() {
@@ -79,6 +81,38 @@ function createHarness() {
 }
 
 {
+  const session = {};
+  const first = versionSessionStatus(session, {
+    status: 'running', running: true, canStop: true, queueCount: 0, activeRunId: 'r1', lastRunStatus: 'running'
+  }, () => '2026-07-29T01:00:00.000Z');
+  assert.equal(first.revision, 1);
+  assert.equal(first.updatedAt, '2026-07-29T01:00:00.000Z');
+  const unchanged = versionSessionStatus(session, {
+    status: 'running', running: true, canStop: true, queueCount: 0, activeRunId: 'r1', lastRunStatus: 'running'
+  }, () => 'should-not-be-used');
+  assert.equal(unchanged.revision, 1);
+  const queueEdited = versionSessionStatus(session, {
+    status: 'running', running: true, canStop: true, queueCount: 0, activeRunId: 'r1', lastRunStatus: 'running'
+  }, () => '2026-07-29T01:00:30.000Z', '[{"id":"q1","text":"edited"}]');
+  assert.equal(queueEdited.revision, 2);
+  const completed = versionSessionStatus(session, {
+    status: 'idle', running: false, canStop: false, queueCount: 0, activeRunId: '', lastRunStatus: 'completed'
+  }, () => '2026-07-29T01:01:00.000Z');
+  assert.equal(completed.revision, 3);
+  assert.equal(completed.updatedAt, '2026-07-29T01:01:00.000Z');
+}
+
+{
+  const current = { id: 's1', title: 'Old title', status: 'idle', statusRevision: 8, queuedCount: 0, lastSeq: 20, activityAt: '2026-07-29T01:00:00Z' };
+  const stale = { id: 's1', title: 'New title', status: 'running', statusRevision: 7, queuedCount: 2, lastSeq: 10, activityAt: '2026-07-28T01:00:00Z' };
+  assert.equal(snapshotStatusRevision(current), 8);
+  assert.equal(isStaleSessionSnapshot(current, stale), true);
+  assert.deepEqual(sessionSnapshotPatch(current, stale), { id: 's1', title: 'New title' });
+  assert.equal(isStaleSessionSnapshot(current, { id: 's1', status: 'running' }), true);
+  assert.equal(isStaleSessionSnapshot(current, { id: 's1', status: 'running', statusRevision: 9 }), false);
+}
+
+{
   const { controller, el, state } = createHarness();
   assert.equal(controller.getActiveSession().id, 's1');
   assert.equal(controller.mergeSessionSnapshot({ id: 's1', status: 'running', isRunning: true, canStop: true }), true);
@@ -96,6 +130,27 @@ function createHarness() {
 
 {
   const { controller, state } = createHarness();
+  assert.equal(controller.mergeSessionSnapshot({
+    id: 's1', status: 'running', isRunning: true, canStop: true, queuedCount: 1, statusRevision: 12
+  }), true);
+  assert.equal(controller.mergeSessionSnapshot({
+    id: 's1', title: 'Renamed safely', status: 'idle', isRunning: false, canStop: false, queuedCount: 0, statusRevision: 11
+  }), true);
+  assert.equal(state.sessions[0].title, 'Renamed safely');
+  assert.equal(state.sessions[0].status, 'running');
+  assert.equal(state.sessions[0].queuedCount, 1);
+  assert.equal(controller.mergeSessionSnapshot({
+    id: 's1', status: 'idle', isRunning: false, canStop: false, queuedCount: 0, statusRevision: 13
+  }), true);
+  assert.equal(state.sessions[0].status, 'idle');
+  assert.equal(controller.mergeSessionSnapshot({
+    id: 's1', status: 'running', isRunning: true, canStop: true, statusRevision: 12
+  }), false);
+  assert.equal(state.sessions[0].status, 'idle');
+}
+
+{
+  const { controller, state } = createHarness();
   const messages = [
     { id: 'm1', seq: 1, role: 'system', text: 'Codex is working.', status: 'running' },
     { id: 'm2', seq: 2, role: 'system', text: 'Codex run finished.' }
@@ -109,6 +164,17 @@ function createHarness() {
   assert.equal(state.sessions[0].status, 'idle');
 
   assert.equal(controller.applySessionStatusFromMessage('s1', messages[0], messages), false);
+  assert.equal(state.sessions[0].status, 'idle');
+}
+
+{
+  const { controller, state } = createHarness();
+  controller.mergeSessionSnapshot({
+    id: 's1', status: 'idle', statusRevision: 2, statusSummary: { status: 'idle', running: false, revision: 2 }
+  });
+  assert.equal(controller.applySessionStatusFromMessage('s1', {
+    id: 'late', seq: 99, role: 'system', text: 'Codex is working.', status: 'running'
+  }, []), false);
   assert.equal(state.sessions[0].status, 'idle');
 }
 

@@ -1,3 +1,5 @@
+import { sessionSnapshotPatch, snapshotStatusRevision } from './session-snapshot.js?v=1';
+
 const SESSION_STATUS_KEYS = [
   'source',
   'title',
@@ -25,6 +27,8 @@ const SESSION_STATUS_KEYS = [
   'canStop',
   'queuedCount',
   'statusSummary',
+  'statusRevision',
+  'statusUpdatedAt',
   'activeRun',
   'lastRun',
   'runCounts',
@@ -86,9 +90,10 @@ export function createSessionStateController(options) {
 
   function mergeSessionSnapshot(nextSession) {
     if (!nextSession?.id) return false;
-    const patch = Object.fromEntries(Object.entries(nextSession).filter(([, value]) => value !== undefined));
     const sessions = getSessions();
     const index = sessions.findIndex((item) => item.id === nextSession.id);
+    const current = index >= 0 ? sessions[index] : null;
+    const patch = sessionSnapshotPatch(current, nextSession);
     if (index < 0) {
       setSessions([patch, ...sessions]);
       saveSessionCache();
@@ -97,7 +102,6 @@ export function createSessionStateController(options) {
       return true;
     }
 
-    const current = sessions[index];
     const next = { ...current, ...patch };
     const changed = SESSION_STATUS_KEYS.some((key) => !sameSnapshotValue(current[key], next[key]))
       || JSON.stringify(current.queue || []) !== JSON.stringify(next.queue || []);
@@ -111,6 +115,8 @@ export function createSessionStateController(options) {
   }
 
   function applySessionStatusFromMessage(sessionId, message, messages) {
+    const currentSession = getSessions().find((item) => item.id === sessionId);
+    if (snapshotStatusRevision(currentSession) > 0) return false;
     const status = sessionStatusFromMessage(message);
     if (!status) return false;
     const messageSeq = messageSequenceValue(message);
@@ -118,12 +124,12 @@ export function createSessionStateController(options) {
     if (messageSeq && latestSeq && messageSeq < latestSeq) return false;
     const nextRunning = status === 'running' || status === 'stopping';
     const statusSummary = {
-      ...(getSessions().find((item) => item.id === sessionId)?.statusSummary || {}),
+      ...(currentSession?.statusSummary || {}),
       status,
       label: status === 'running' ? '运行中' : status === 'stopping' ? '停止中' : status === 'error' ? '失败' : '空闲',
       running: nextRunning,
       canStop: status === 'running',
-      queueCount: message.queuedCount ?? getSessions().find((item) => item.id === sessionId)?.queuedCount ?? 0
+      queueCount: message.queuedCount ?? currentSession?.queuedCount ?? 0
     };
     return mergeSessionSnapshot({
       id: sessionId,

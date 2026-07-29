@@ -11,7 +11,7 @@ import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
 import { compileTextSearch, createSearchTextCache } from './session-search.js?v=1';
-import { createSessionStateController } from './session-state.js?v=8';
+import { createSessionStateController } from './session-state.js?v=9';
 import { createSkillView } from './skill-view.js?v=3';
 import { createTopbarView } from './topbar-view.js?v=9';
 
@@ -109,8 +109,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '198';
-const SW_CACHE_VERSION = 'codex-console-v215';
+const APP_ASSET_VERSION = '199';
+const SW_CACHE_VERSION = 'codex-console-v216';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
