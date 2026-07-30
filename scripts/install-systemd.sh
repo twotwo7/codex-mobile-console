@@ -65,6 +65,7 @@ UNIT
 cat >"$BACKUP_SERVICE_FILE" <<UNIT
 [Unit]
 Description=Backup Codex Mobile Console state
+ConditionPathExists=$ROOT_DIR/scripts/backup-state.mjs
 
 [Service]
 Type=oneshot
