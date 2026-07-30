@@ -401,7 +401,7 @@ button:disabled {
 
 .drawer-mode-row {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--line);
@@ -465,6 +465,30 @@ button:disabled {
   gap: 10px;
   flex: 1;
 }
+
+.drawer-ops-panel.active {
+  display: block;
+  flex: 1 1 0;
+  height: 0;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.ops-hero { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 18px 4px 16px; border-bottom: 1px solid var(--line); }
+.ops-hero h2 { margin: 3px 0 6px; font-size: 24px; letter-spacing: -0.04em; }
+.ops-hero p:last-child, .ops-summary, .ops-entry-list span { color: var(--muted); }
+.ops-summary { padding: 14px 4px; font-size: 13px; line-height: 1.55; }
+.ops-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); border-block: 1px solid var(--line); }
+.ops-metrics span { display: flex; min-height: 62px; padding: 10px 8px; flex-direction: column; justify-content: center; color: var(--muted); font-size: 11px; }
+.ops-metrics span:nth-child(odd) { border-right: 1px solid var(--line); }
+.ops-metrics span:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
+.ops-metrics strong { margin-top: 4px; color: var(--text); font-size: 18px; }
+.ops-entry-list { display: grid; margin-top: 10px; }
+.ops-entry-list button { display: grid; min-height: 66px; padding: 12px 4px; border: 0; border-bottom: 1px solid var(--line); border-radius: 0; background: transparent; text-align: left; }
+.ops-entry-list button:hover, .ops-entry-list button:focus-visible { background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.ops-entry-list strong { color: var(--text); font-size: 15px; }
+.ops-entry-list span { margin-top: 4px; font-size: 12px; line-height: 1.45; }
 
 #drawerSessionsPanel.active {
   grid-template-rows: auto auto minmax(0, 1fr);
@@ -634,6 +658,12 @@ button:disabled {
 .secretary-notification-list {
   display: grid;
   align-content: start;
+}
+
+.secretary-task-list {
+  max-height: 300px;
+  overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .secretary-task-entry,

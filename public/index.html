@@ -8,17 +8,17 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-title" content="Codex">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <title>Codex Console</title>
+    <title>Codex Ops Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=167">
+    <link rel="stylesheet" href="/styles.css?v=168">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
       <main class="login-panel">
-        <p class="eyebrow">Private Console</p>
-        <h1>Codex</h1>
-        <p class="login-copy">输入本机控制台密码后，此设备会保留 30 天登录状态。</p>
+        <p class="eyebrow">Self-hosted AI Operations</p>
+        <h1>Codex Ops</h1>
+        <p class="login-copy">登录你的私有 AI 运维中枢。会话、秘书、服务器状态、审计与恢复都留在自己的机器上。</p>
         <form id="loginForm" class="login-form">
           <label for="password">访问密码</label>
           <input id="password" name="password" type="password" autocomplete="current-password" inputmode="text" required>
@@ -35,7 +35,8 @@
             <strong id="drawerTitle">会话</strong>
           </div>
           <div id="drawerModeRow" class="drawer-mode-row" role="tablist" aria-label="侧边栏视图">
-            <button id="drawerSessionsButton" class="active" type="button" role="tab" aria-selected="true" aria-controls="drawerSessionsPanel">会话</button>
+            <button id="opsManagerButton" class="active" type="button" role="tab" aria-selected="true" aria-controls="drawerOpsPanel">中枢</button>
+            <button id="drawerSessionsButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSessionsPanel">会话</button>
             <button id="secretaryManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSecretaryPanel">秘书<span id="secretaryUnreadBadge" class="secretary-unread-badge" hidden></span></button>
             <button id="skillManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSkillsPanel">Skills</button>
             <button id="evolutionManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerEvolutionPanel">进化</button>
@@ -45,7 +46,24 @@
             <button id="closeDrawer" class="drawer-tool-button" type="button" aria-label="关闭会话列表" title="关闭">×</button>
           </div>
         </div>
-        <section id="drawerSessionsPanel" class="drawer-panel active" role="tabpanel" aria-labelledby="drawerSessionsButton">
+        <section id="drawerOpsPanel" class="drawer-panel drawer-ops-panel active" role="tabpanel" aria-labelledby="opsManagerButton">
+          <div class="ops-hero">
+            <div><p class="eyebrow">Self-hosted AI operations</p><h2>AI 运维中枢</h2><p>统一查看服务器资源、长期秘书、项目会话和审计恢复。</p></div>
+            <button id="refreshOpsButton" class="ghost-button inline" type="button">刷新</button>
+          </div>
+          <div id="opsSummary" class="ops-summary" role="status" aria-live="polite">正在读取本机状态...</div>
+          <div class="ops-metrics" aria-label="中枢状态摘要">
+            <span>服务<strong id="opsServiceState">读取中</strong></span><span>运行<strong id="opsRunningCount">0</strong></span>
+            <span>任务<strong id="opsTaskCount">0</strong></span><span>磁盘<strong id="opsDiskFree">--</strong></span>
+          </div>
+          <div class="ops-entry-list" aria-label="中枢快捷入口">
+            <button type="button" data-ops-target="secretary"><strong>长期秘书</strong><span>任务、晨报、自主循环与总停止</span></button>
+            <button type="button" data-ops-target="maintenance"><strong>资源看板</strong><span>服务健康、磁盘、版本与安全升级</span></button>
+            <button type="button" data-ops-target="sessions"><strong>项目与会话</strong><span>切换项目、排队指令、停止运行</span></button>
+            <button type="button" data-ops-target="evolution"><strong>审计与恢复</strong><span>项目检查、演进记录与可恢复操作</span></button>
+          </div>
+        </section>
+        <section id="drawerSessionsPanel" class="drawer-panel" role="tabpanel" aria-labelledby="drawerSessionsButton">
           <div class="drawer-session-controls">
             <div class="segmented-control drawer-view-row" role="radiogroup" aria-label="会话视图">
               <button type="button" data-session-view="recent">最近</button>
@@ -412,9 +430,9 @@
         </header>
 
         <section id="emptyState" class="empty-state">
-          <p class="eyebrow">Ready</p>
-          <h2>选择或新建一个会话</h2>
-          <p>手机端只负责展示和发送指令，Codex 会在服务器后端持续运行。</p>
+          <p class="eyebrow">Self-hosted AI operations</p>
+          <h2>从中枢选择下一项工作</h2>
+          <p>Codex、长期秘书和运维数据都在服务器持续运行，浏览器只是安全控制入口。</p>
         </section>
 
         <section id="messagePane" class="message-pane" aria-live="polite"></section>
@@ -785,6 +803,6 @@
         }
       });
     </script>
-    <script src="/app.js?v=201" type="module"></script>
+    <script src="/app.js?v=202" type="module"></script>
   </body>
 </html>

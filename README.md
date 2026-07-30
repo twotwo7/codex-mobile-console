@@ -1,29 +1,30 @@
 # Codex Mobile Console
 
-Self-hosted mobile control panel for persistent Codex development sessions.
+Self-hosted AI operations hub for Codex sessions, long-running expert secretary workflows, server health, audit, upgrades, and recovery.
 
-Codex Mobile Console lets you control Codex sessions from your phone while Codex keeps running on your own server, VPS, NAS, home lab, or remote development box.
+Codex Mobile Console keeps execution and operational data on your own server, VPS, NAS, home lab, or remote development box. Its browser UI gives you one control surface for AI work and the machine that runs it.
 
 ![Codex Mobile Console use case](docs/assets/case-remote-control.svg)
 
 ## What It Is
 
-This is not a generic AI chat UI and not a mobile SSH replacement. It is a private, mobile-first control surface for developers who already run Codex on a server and want to:
+Official Codex clients already cover rich coding workflows across desktop, web, cloud, and mobile. This project focuses on a different boundary: operating your own always-on AI runtime.
 
-- check progress from a phone
-- send follow-up prompts without reconnecting SSH
-- switch between Codex sessions and projects
-- queue the next instructions while a task is running
-- stop stuck commands and inspect runtime state
-- keep Codex work alive after the terminal or browser disconnects
+It is not a generic AI chat UI and not a mobile SSH replacement. It is a private operations layer for people who want to:
 
-SSH clients on phones are fine for emergency commands, but they are poor control panels for long-running AI development work. This project is designed around a different workflow:
+- run a persistent expert secretary with scheduled, auditable work
+- see server health, storage, versions, sessions, and queued work together
+- operate multiple Codex projects without keeping a terminal connected
+- stop stuck commands, inspect process state, and recover after restarts
+- back up local state and perform safe console or Codex upgrades
+- use phone, tablet, or desktop as a secure window into the same private runtime
 
-- keep Codex sessions alive on the server
-- open a mobile-friendly PWA when you need to check progress
-- switch between projects and sessions quickly
-- send follow-up prompts without restarting terminal sessions
-- stop stuck runs and inspect runtime state from the browser
+The default workflow is:
+
+- keep Codex sessions and the secretary alive on the server
+- open the **AI Ops Hub** for server resources, tasks, projects, audit, and recovery
+- enter a specialist panel only when deeper action is required
+- keep every operation protected by local authentication, audit, and a total stop switch
 
 ## Use Cases
 
@@ -33,6 +34,8 @@ SSH clients on phones are fine for emergency commands, but they are poor control
 
 ## Highlights
 
+- Unified AI Ops Hub for server health, secretary tasks, projects, audit, and recovery
+- Persistent expert secretary with daily planning, continuation, learning, and review cycles
 - Mobile-first web UI for Codex sessions
 - Persistent server-side sessions; terminal disconnects do not stop Codex
 - Recent, flat, directory-grouped, and trash session views
@@ -47,6 +50,7 @@ SSH clients on phones are fine for emergency commands, but they are poor control
 - PWA service worker cache for phone usage
 - 30-day login cookie for trusted personal devices
 - Safe restart flow that waits for active Codex child processes
+- Backup, restore, application update, rollback, and Codex upgrade workflows
 
 ## Feature Tour
 

@@ -1,8 +1,8 @@
 {
   "name": "codex-mobile-console",
-  "version": "1.5.7",
+  "version": "1.6.0",
   "type": "module",
-  "description": "Mobile-first Codex control console with persistent sessions",
+  "description": "Self-hosted AI operations hub for Codex sessions, expert secretary workflows, server health, audit, and recovery",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -17,6 +17,8 @@
     "self-hosted",
     "pwa",
     "mobile",
+    "ai-operations",
+    "server-operations",
     "developer-tools",
     "ai-coding"
   ],

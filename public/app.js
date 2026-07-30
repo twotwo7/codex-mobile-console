@@ -65,7 +65,7 @@ const state = {
   scrollSuppressToken: 0,
   initialBottomLockSessionId: '',
   drawerOpen: false,
-  drawerPanel: 'sessions',
+  drawerPanel: 'ops',
   sessionActionId: '',
   sessionListDirty: true,
   sessionRenderLimit: 40,
@@ -181,6 +181,15 @@ const el = {
   closeDrawer: document.querySelector('#closeDrawer'),
   drawerTitle: document.querySelector('#drawerTitle'),
   drawerModeRow: document.querySelector('#drawerModeRow'),
+  opsManagerButton: document.querySelector('#opsManagerButton'),
+  drawerOpsPanel: document.querySelector('#drawerOpsPanel'),
+  refreshOpsButton: document.querySelector('#refreshOpsButton'),
+  opsSummary: document.querySelector('#opsSummary'),
+  opsServiceState: document.querySelector('#opsServiceState'),
+  opsRunningCount: document.querySelector('#opsRunningCount'),
+  opsTaskCount: document.querySelector('#opsTaskCount'),
+  opsDiskFree: document.querySelector('#opsDiskFree'),
+  opsTargetButtons: [...document.querySelectorAll('[data-ops-target]')],
   drawerSessionsButton: document.querySelector('#drawerSessionsButton'),
   drawerSessionsPanel: document.querySelector('#drawerSessionsPanel'),
   drawerSecretaryPanel: document.querySelector('#drawerSecretaryPanel'),
@@ -1046,6 +1055,11 @@ function setDrawer(open) {
   document.body.classList.toggle('drawer-open', open);
   el.sessionDrawer.classList.toggle('open', open);
   el.drawerScrim.hidden = !open;
+  if (open && state.drawerPanel === 'ops') {
+    loadOpsHub().catch((error) => {
+      if (el.opsSummary) el.opsSummary.textContent = error.message || '中枢状态加载失败';
+    });
+  }
   if (open && state.drawerPanel === 'sessions' && state.sessionListDirty) {
     requestAnimationFrame(() => renderSessions({ force: true }));
   }
@@ -1090,29 +1104,38 @@ function setSessionViewMode(mode) {
 }
 
 function setDrawerPanel(panel) {
-  state.drawerPanel = ['secretary', 'skills', 'evolution', 'settings'].includes(panel) ? panel : 'sessions';
+  state.drawerPanel = ['ops', 'sessions', 'secretary', 'skills', 'evolution', 'settings'].includes(panel) ? panel : 'ops';
+  const opsActive = state.drawerPanel === 'ops';
+  const sessionsActive = state.drawerPanel === 'sessions';
   const secretaryActive = state.drawerPanel === 'secretary';
   const skillsActive = state.drawerPanel === 'skills';
   const evolutionActive = state.drawerPanel === 'evolution';
   const settingsActive = state.drawerPanel === 'settings';
-  if (el.drawerTitle) el.drawerTitle.textContent = settingsActive ? '设置' : evolutionActive ? '进化' : skillsActive ? 'Skills' : secretaryActive ? '秘书' : '会话';
-  el.drawerSessionsButton.classList.toggle('active', !secretaryActive && !skillsActive && !evolutionActive && !settingsActive);
+  if (el.drawerTitle) el.drawerTitle.textContent = opsActive ? '中枢' : settingsActive ? '设置' : evolutionActive ? '进化' : skillsActive ? 'Skills' : secretaryActive ? '秘书' : '会话';
+  el.opsManagerButton?.classList.toggle('active', opsActive);
+  el.drawerSessionsButton.classList.toggle('active', sessionsActive);
   el.secretaryManagerButton?.classList.toggle('active', secretaryActive);
   el.skillManagerButton.classList.toggle('active', skillsActive);
   el.evolutionManagerButton?.classList.toggle('active', evolutionActive);
   el.drawerSettingsButton.classList.toggle('active', settingsActive);
-  el.drawerSessionsButton.setAttribute('aria-selected', String(!secretaryActive && !skillsActive && !evolutionActive && !settingsActive));
+  el.opsManagerButton?.setAttribute('aria-selected', String(opsActive));
+  el.drawerSessionsButton.setAttribute('aria-selected', String(sessionsActive));
   el.secretaryManagerButton?.setAttribute('aria-selected', String(secretaryActive));
   el.skillManagerButton.setAttribute('aria-selected', String(skillsActive));
   el.evolutionManagerButton?.setAttribute('aria-selected', String(evolutionActive));
   el.drawerSettingsButton.setAttribute('aria-selected', String(settingsActive));
-  el.drawerSessionsPanel.classList.toggle('active', !secretaryActive && !skillsActive && !evolutionActive && !settingsActive);
+  el.drawerOpsPanel?.classList.toggle('active', opsActive);
+  el.drawerSessionsPanel.classList.toggle('active', sessionsActive);
   el.drawerSecretaryPanel?.classList.toggle('active', secretaryActive);
   el.drawerSkillsPanel.classList.toggle('active', skillsActive);
   el.drawerEvolutionPanel?.classList.toggle('active', evolutionActive);
   el.drawerSettingsPanel.classList.toggle('active', settingsActive);
   el.logoutButton.hidden = !settingsActive;
-  if (secretaryActive) {
+  if (opsActive) {
+    loadOpsHub().catch((error) => {
+      if (el.opsSummary) el.opsSummary.textContent = error.message || '中枢状态加载失败';
+    });
+  } else if (secretaryActive) {
     loadSecretary({ markRead: true }).catch((error) => {
       if (el.secretarySummary) el.secretarySummary.textContent = error.message || '秘书状态加载失败';
     });
@@ -1129,6 +1152,29 @@ function setDrawerPanel(panel) {
   } else {
     renderSessions({ force: true });
   }
+}
+
+function renderOpsHub(health = {}, secretary = {}) {
+  const tasks = Array.isArray(secretary.tasks?.tasks) ? secretary.tasks.tasks : [];
+  const activeTasks = tasks.filter((task) => ['pending', 'in_progress', 'blocked'].includes(task.status));
+  const warnings = Array.isArray(health.warnings) ? health.warnings : [];
+  el.opsServiceState.textContent = health.ok ? '正常' : '关注';
+  el.opsRunningCount.textContent = String(health.sessions?.running || 0);
+  el.opsTaskCount.textContent = String(activeTasks.length);
+  el.opsDiskFree.textContent = health.storage?.disk ? formatBytes(health.storage.disk.freeBytes) : '--';
+  el.opsSummary.textContent = warnings.length
+    ? warnings[0]
+    : `本机服务正常 · ${health.sessions?.total || 0} 个会话 · 秘书${secretary.control?.killSwitch ? '已总停止' : secretary.session ? '在线' : '未初始化'}`;
+}
+
+async function loadOpsHub() {
+  if (!el.opsSummary) return;
+  el.opsSummary.textContent = '正在读取本机状态...';
+  const [healthResult, secretaryResult] = await Promise.allSettled([api('/api/system/health'), api('/api/secretary')]);
+  const health = healthResult.status === 'fulfilled' ? healthResult.value : {};
+  const secretary = secretaryResult.status === 'fulfilled' ? secretaryResult.value : state.secretary || {};
+  if (secretaryResult.status === 'fulfilled') mergeSecretaryPayload(secretary, { notify: false });
+  renderOpsHub(health, secretary);
 }
 
 function renderSecretaryTasks(payload) {
@@ -5410,7 +5456,22 @@ el.sessionActionSheet?.addEventListener('click', (event) => {
 });
 el.closeSessionActionSheet?.addEventListener('click', closeSessionActionSheet);
 el.closeTaskDetailDialog?.addEventListener('click', closeTaskDetailDialog);
+el.opsManagerButton?.addEventListener('click', () => setDrawerPanel('ops'));
 el.drawerSessionsButton.addEventListener('click', () => setDrawerPanel('sessions'));
+el.refreshOpsButton?.addEventListener('click', () => loadOpsHub().catch((error) => {
+  el.opsSummary.textContent = error.message || '中枢状态加载失败';
+}));
+for (const button of el.opsTargetButtons) {
+  button.addEventListener('click', () => {
+    const target = button.dataset.opsTarget;
+    if (target === 'maintenance') {
+      setDrawerPanel('settings');
+      selectSettingsPage('maintenance');
+      return;
+    }
+    setDrawerPanel(target);
+  });
+}
 el.secretaryManagerButton?.addEventListener('click', () => setDrawerPanel('secretary'));
 el.refreshSecretaryButton?.addEventListener('click', () => loadSecretary({ markRead: true }).catch((error) => {
   el.secretarySummary.textContent = error.message || '秘书状态加载失败';
