@@ -251,12 +251,15 @@ button:disabled {
 
 .session-drawer {
   min-width: 0;
+  min-height: 0;
+  height: 100%;
   border-right: 1px solid var(--line);
   background: var(--drawer-bg);
   display: flex;
   flex-direction: column;
   padding: 18px;
   gap: 10px;
+  overflow: hidden;
 }
 
 .drawer-head,
@@ -3193,6 +3196,7 @@ button:disabled {
   align-content: start;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
 }
 
 .settings-tabs {
