@@ -252,6 +252,7 @@ const el = {
   connectionBadge: document.querySelector('#connectionBadge'),
   emptyState: document.querySelector('#emptyState'),
   siteMountStrip: document.querySelector('#siteMountStrip'),
+  artifactStrip: document.querySelector('#artifactStrip'),
   messagePane: document.querySelector('#messagePane'),
   promptForm: document.querySelector('#promptForm'),
   promptInput: document.querySelector('#promptInput'),
@@ -293,6 +294,16 @@ const el = {
   defaultIgnoreRulesToggle: document.querySelector('#defaultIgnoreRulesToggle'),
   refreshCodexConfigButton: document.querySelector('#refreshCodexConfigButton'),
   codexConfigSummary: document.querySelector('#codexConfigSummary'),
+  refreshCodexAuthButton: document.querySelector('#refreshCodexAuthButton'),
+  codexAuthProfiles: document.querySelector('#codexAuthProfiles'),
+  createApiKeyProfileButton: document.querySelector('#createApiKeyProfileButton'),
+  createDeviceProfileButton: document.querySelector('#createDeviceProfileButton'),
+  codexApiKeyDialog: document.querySelector('#codexApiKeyDialog'),
+  codexApiKeyForm: document.querySelector('#codexApiKeyForm'),
+  closeCodexApiKeyDialog: document.querySelector('#closeCodexApiKeyDialog'),
+  codexDeviceDialog: document.querySelector('#codexDeviceDialog'),
+  codexDeviceForm: document.querySelector('#codexDeviceForm'),
+  closeCodexDeviceDialog: document.querySelector('#closeCodexDeviceDialog'),
   stopButton: document.querySelector('#stopButton'),
   sendButton: document.querySelector('#sendButton'),
   skillButton: document.querySelector('#skillButton'),
@@ -562,6 +573,7 @@ function lineList(value) {
 function normalizeRunConfig(value = {}) {
   return {
     ...DEFAULT_RUN_CONFIG,
+    authProfileId: String(value.authProfileId || 'default').trim() || 'default',
     model: String(value.model || '').trim(),
     profile: String(value.profile || '').trim(),
     sandbox: ['read-only', 'workspace-write', 'danger-full-access'].includes(value.sandbox) ? value.sandbox : DEFAULT_RUN_CONFIG.sandbox,
@@ -619,6 +631,7 @@ function runConfigFromForm(form) {
   const data = new FormData(form);
   return normalizeRunConfig({
     model: readModelControl(form.elements.model, form.elements.modelCustom),
+    authProfileId: data.get('authProfileId'),
     profile: data.get('profile'),
     sandbox: data.get('sandbox'),
     approval: data.get('approval'),
@@ -635,6 +648,7 @@ function applyRunConfigToForm(form, config = {}) {
   const value = normalizeRunConfig(config);
   if (!form) return;
   setModelControl(form.elements.model, form.elements.modelCustom, value.model);
+  if (form.elements.authProfileId) form.elements.authProfileId.value = value.authProfileId;
   if (form.elements.profile) form.elements.profile.value = value.profile;
   if (form.elements.sandbox) form.elements.sandbox.value = value.sandbox;
   if (form.elements.approval) form.elements.approval.value = value.approval;
@@ -1825,8 +1839,58 @@ function renderSessionButton(session) {
 function renderActiveStatus(session = getActiveSession()) {
   topbarView.renderActiveStatus(session);
   renderSiteMountStrip(session);
+  renderArtifactStrip(session);
   updateMessageDisplayButton();
   updateCollapseActionButtons();
+}
+
+function renderArtifactStrip(session = getActiveSession()) {
+  if (!el.artifactStrip) return;
+  const artifacts = Array.isArray(session?.artifacts) ? session.artifacts : [];
+  el.artifactStrip.hidden = !artifacts.length;
+  el.artifactStrip.textContent = '';
+  if (!artifacts.length) return;
+  const toggle = document.createElement('button');
+  toggle.type = 'button';
+  toggle.className = 'artifact-toggle';
+  toggle.textContent = '↓';
+  toggle.title = `${artifacts.length} 个可下载产物`;
+  toggle.setAttribute('aria-label', `下载产物 ${artifacts.length} 个`);
+  toggle.setAttribute('aria-expanded', 'false');
+  const popover = document.createElement('div');
+  popover.className = 'artifact-popover';
+  popover.hidden = true;
+  const title = document.createElement('strong');
+  title.textContent = `本轮产物 ${artifacts.length}`;
+  popover.append(title);
+  for (const artifact of artifacts.slice(0, 20)) {
+    const link = document.createElement('a');
+    link.href = artifact.downloadUrl;
+    link.download = artifact.name || '';
+    link.textContent = artifact.relativePath || artifact.name || '下载文件';
+    link.title = `${artifact.relativePath || artifact.name} · ${formatBytes(artifact.size || 0)}`;
+    popover.append(link);
+  }
+  if (artifacts.length > 20) {
+    const more = document.createElement('small');
+    more.textContent = `还有 ${artifacts.length - 20} 个产物，请打开会话详情查看。`;
+    popover.append(more);
+  }
+  toggle.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const open = popover.hidden;
+    popover.hidden = !open;
+    toggle.setAttribute('aria-expanded', String(open));
+  });
+  popover.addEventListener('click', (event) => event.stopPropagation());
+  el.artifactStrip.append(toggle, popover);
+}
+
+function closeArtifactStrip() {
+  const popover = el.artifactStrip?.querySelector('.artifact-popover');
+  const toggle = el.artifactStrip?.querySelector('.artifact-toggle');
+  if (popover) popover.hidden = true;
+  if (toggle) toggle.setAttribute('aria-expanded', 'false');
 }
 
 function renderSiteMountStrip(session = getActiveSession()) {
@@ -4157,6 +4221,73 @@ async function loadCodexConfigSummary() {
   }
 }
 
+async function loadCodexAuthProfiles() {
+  if (!el.codexAuthProfiles) return;
+  el.codexAuthProfiles.textContent = '加载中...';
+  try {
+    const data = await api('/api/codex/auth/profiles', { timeoutMs: 20000 });
+    const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+    for (const select of document.querySelectorAll('[data-auth-profile-select]')) {
+      const previous = select.value;
+      select.innerHTML = '<option value="default">跟随当前默认账号</option>' + profiles.map((profile) => `<option value="${escapeHtml(profile.id)}">${escapeHtml(profile.name)}${profile.active ? '（默认）' : ''}</option>`).join('');
+      if ([...select.options].some((option) => option.value === previous)) select.value = previous;
+    }
+    el.codexAuthProfiles.innerHTML = profiles.map((profile) => `
+      <article class="codex-auth-profile ${profile.active ? 'is-active' : ''}">
+        <div class="codex-auth-profile-main"><strong>${escapeHtml(profile.name)}</strong><small>${profile.mode === 'device' ? 'ChatGPT 官方授权' : 'API Key'}${profile.keyHint ? ` · ${escapeHtml(profile.keyHint)}` : ''}</small></div>
+        <span class="codex-auth-status ${profile.authStatus === 'logged_in' ? 'ok' : 'muted'}">${profile.authStatus === 'logged_in' ? '已登录' : profile.authStatus === 'logged_out' ? '未登录' : '状态未知'}</span>
+        <div class="codex-auth-profile-actions">
+          ${profile.mode === 'device' ? `<button class="ghost-button inline" type="button" data-codex-device-login="${escapeHtml(profile.id)}">授权</button>` : `<button class="ghost-button inline" type="button" data-codex-api-login="${escapeHtml(profile.id)}">更新 Key</button>`}
+          ${profile.active ? '<span class="settings-page-note">默认</span>' : `<button class="ghost-button inline" type="button" data-codex-activate="${escapeHtml(profile.id)}">设为默认</button>`}
+          <button class="icon-button" type="button" aria-label="备份恢复" title="备份恢复" data-codex-backups="${escapeHtml(profile.id)}">⋯</button>
+        </div>
+      </article>`).join('') || '<small>还没有认证档案。</small>';
+  } catch (error) {
+    el.codexAuthProfiles.textContent = error.message || '认证信息加载失败';
+  }
+}
+
+async function createCodexProfile(mode) {
+  const dialog = mode === 'device' ? el.codexDeviceDialog : el.codexApiKeyDialog;
+  if (dialog) openModal(dialog);
+}
+
+async function loginApiKeyForProfile(profileId) {
+  const apiKey = window.prompt('请输入 API Key。提交后只会保存在服务器，页面不会再次显示。');
+  if (!apiKey) return;
+  await api(`/api/codex/auth/profiles/${encodeURIComponent(profileId)}/api-key`, { method: 'POST', body: JSON.stringify({ apiKey }) });
+  await loadCodexAuthProfiles();
+}
+
+async function startDeviceLogin(profileId) {
+  const data = await api(`/api/codex/auth/profiles/${encodeURIComponent(profileId)}/device/start`, { method: 'POST' });
+  const task = data.task;
+  let opened = false;
+  alert('已启动官方授权。请查看下一步提示并在官方页面完成登录。');
+  const timer = setInterval(async () => {
+    try {
+      const current = (await api(`/api/codex/auth/tasks/${encodeURIComponent(task.id)}`)).task;
+      if (current.message) {
+        el.codexAuthProfiles.querySelector(`[data-codex-device-login="${CSS.escape(profileId)}"]`)?.setAttribute('title', current.message);
+        const authUrl = current.message.match(/https?:\/\/[^\s)]+/i)?.[0];
+        if (authUrl && !opened) { opened = true; window.open(authUrl, '_blank', 'noopener'); }
+      }
+      if (['completed', 'failed', 'expired'].includes(current.status)) { clearInterval(timer); if (current.status === 'failed' && current.message) alert(current.message); await loadCodexAuthProfiles(); }
+    } catch { clearInterval(timer); }
+  }, 1800);
+}
+
+async function showCodexBackups(profileId) {
+  const data = await api(`/api/codex/auth/profiles/${encodeURIComponent(profileId)}/backups`);
+  const backups = data.backups || [];
+  if (!backups.length) { alert('暂无可恢复备份。'); return; }
+  const choice = window.prompt(`输入要恢复的备份编号：\n${backups.map((item, index) => `${index + 1}. ${item.createdAt}`).join('\n')}`);
+  const index = Number(choice) - 1;
+  if (!Number.isInteger(index) || !backups[index]) return;
+  await api(`/api/codex/auth/profiles/${encodeURIComponent(profileId)}/backups`, { method: 'POST', body: JSON.stringify({ backupId: backups[index].id }) });
+  await loadCodexAuthProfiles();
+}
+
 function insertPromptText(text) {
   const value = el.promptInput.value || '';
   const start = el.promptInput.selectionStart ?? value.length;
@@ -5263,12 +5394,14 @@ document.addEventListener('click', () => {
   messageView.closeMessageMenus();
   closeTopMenus();
   closeAttachmentMenu();
+  closeArtifactStrip();
 });
 
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') messageView.closeMessageMenus();
   if (event.key === 'Escape') closeTopMenus();
   if (event.key === 'Escape') closeAttachmentMenu();
+  if (event.key === 'Escape') closeArtifactStrip();
   if (event.key === 'Escape' && !el.sessionActionSheet?.hidden) closeSessionActionSheet();
   if (event.key === 'Escape' && !el.imageViewer.hidden) closeImageViewer();
   if (event.key === 'Escape' && el.sharePreviewDialog?.open) closeSharePreview();
@@ -5525,6 +5658,42 @@ el.evolutionList?.addEventListener('click', (event) => {
   handleEvolutionAction(event);
 });
 el.refreshCodexConfigButton?.addEventListener('click', loadCodexConfigSummary);
+el.refreshCodexAuthButton?.addEventListener('click', loadCodexAuthProfiles);
+el.createApiKeyProfileButton?.addEventListener('click', () => createCodexProfile('apikey'));
+el.createDeviceProfileButton?.addEventListener('click', () => createCodexProfile('device'));
+el.closeCodexApiKeyDialog?.addEventListener('click', () => closeModal(el.codexApiKeyDialog));
+el.closeCodexDeviceDialog?.addEventListener('click', () => closeModal(el.codexDeviceDialog));
+el.codexApiKeyForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = new FormData(el.codexApiKeyForm);
+  try {
+    const created = await api('/api/codex/auth/profiles', { method: 'POST', body: JSON.stringify({ name: form.get('name'), mode: 'apikey' }) });
+    await api(`/api/codex/auth/profiles/${encodeURIComponent(created.profile.id)}/api-key`, { method: 'POST', body: JSON.stringify({ apiKey: form.get('apiKey') }) });
+    el.codexApiKeyForm.reset(); closeModal(el.codexApiKeyDialog); await loadCodexAuthProfiles();
+  } catch (error) { alert(error.message || 'API Key 登录失败'); }
+});
+el.codexDeviceForm?.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const form = new FormData(el.codexDeviceForm);
+  try {
+    const created = await api('/api/codex/auth/profiles', { method: 'POST', body: JSON.stringify({ name: form.get('name'), mode: 'device' }) });
+    el.codexDeviceForm.reset(); closeModal(el.codexDeviceDialog);
+    await startDeviceLogin(created.profile.id);
+    await loadCodexAuthProfiles();
+  } catch (error) { alert(error.message || '授权启动失败'); }
+});
+el.codexAuthProfiles?.addEventListener('click', async (event) => {
+  const button = event.target.closest('button[data-codex-activate],button[data-codex-api-login],button[data-codex-device-login],button[data-codex-backups]');
+  if (!button) return;
+  try {
+    const profileId = button.dataset.codexActivate || button.dataset.codexApiLogin || button.dataset.codexDeviceLogin || button.dataset.codexBackups;
+    if (button.dataset.codexActivate) await api(`/api/codex/auth/profiles/${encodeURIComponent(profileId)}/activate`, { method: 'POST' });
+    else if (button.dataset.codexApiLogin) await loginApiKeyForProfile(profileId);
+    else if (button.dataset.codexDeviceLogin) await startDeviceLogin(profileId);
+    else await showCodexBackups(profileId);
+    await loadCodexAuthProfiles();
+  } catch (error) { alert(error.message || '认证操作失败'); }
+});
 el.runtimeButton.addEventListener('click', () => {
   closeTopMenus();
   openRuntimeDialog();
@@ -5545,7 +5714,9 @@ function selectSettingsPage(page) {
   for (const panel of el.settingsPages) {
     panel.classList.toggle('active', panel.dataset.settingsPage === page);
   }
-  if (page === 'storage') {
+  if (page === 'account') {
+    loadCodexAuthProfiles();
+  } else if (page === 'storage') {
     loadStorageStats().catch((error) => {
       el.storageStats.textContent = error.message || '加载失败';
     });

@@ -11,7 +11,7 @@
     <title>Codex Ops Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=169">
+    <link rel="stylesheet" href="/styles.css?v=171">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -177,6 +177,7 @@
         <section id="drawerSettingsPanel" class="drawer-panel drawer-settings-panel" role="tabpanel" aria-labelledby="drawerSettingsButton">
           <div class="segmented-control settings-tabs" role="tablist" aria-label="设置分类">
             <button class="active" type="button" data-settings-tab="ui">界面</button>
+            <button type="button" data-settings-tab="account">账号</button>
             <button type="button" data-settings-tab="run">运行</button>
             <button type="button" data-settings-tab="storage">存储</button>
             <button type="button" data-settings-tab="maintenance">维护</button>
@@ -200,6 +201,24 @@
                   <option value="ocean">深海</option>
                 </select>
               </label>
+            </section>
+            <section class="settings-page" data-settings-page="account">
+              <p class="settings-page-note">管理服务器上的 Codex 登录账号和加密备份。</p>
+              <div class="codex-auth-card">
+                <div class="storage-head">
+                  <div>
+                    <strong>Codex 登录</strong>
+                    <small>认证信息只保存在服务器；ChatGPT 密码不会提交给本控制台。</small>
+                  </div>
+                  <button id="refreshCodexAuthButton" class="ghost-button inline" type="button">刷新</button>
+                </div>
+                <div id="codexAuthProfiles" class="codex-auth-profiles">加载中...</div>
+                <div class="codex-auth-actions">
+                  <button id="createApiKeyProfileButton" class="ghost-button inline" type="button">添加 API Key 账号</button>
+                  <button id="createDeviceProfileButton" class="ghost-button inline" type="button">添加 ChatGPT 账号</button>
+                </div>
+                <small>ChatGPT 账号会跳转到官方授权页面；授权完成后可自动恢复，不需要在这里输入密码。</small>
+              </div>
             </section>
             <section class="settings-page" data-settings-page="run">
               <p class="settings-page-note">这些配置只作为新建会话的默认覆盖项；留空表示继续使用本机 Codex 配置。</p>
@@ -418,6 +437,7 @@
             <span id="activeMeta">未选择会话</span>
             <div class="top-meta-tools" aria-label="会话快捷入口">
               <nav id="siteMountStrip" class="site-mount-strip" aria-label="子站点" hidden></nav>
+              <nav id="artifactStrip" class="artifact-strip" aria-label="会话产物" hidden></nav>
               <button id="shareCaptureButton" class="top-meta-tool top-share-button" type="button" aria-label="生成分享截图" title="生成分享截图" aria-pressed="false"></button>
             </div>
           </div>
@@ -482,6 +502,13 @@
           </div>
         </label>
         <label>
+          Codex 账号
+          <select name="authProfileId" data-auth-profile-select>
+            <option value="default">跟随当前默认账号</option>
+          </select>
+          <small>切换账号不会覆盖其他账号的登录信息。</small>
+        </label>
+        <label>
           模型
           <select name="model">
             <option value="">跟随 Codex 配置</option>
@@ -495,6 +522,12 @@
           <input name="modelCustom" class="model-custom-input" placeholder="自定义模型名" hidden disabled>
         </label>
         <div class="field-grid">
+          <label>
+            Codex 账号
+            <select name="authProfileId" data-auth-profile-select>
+              <option value="default">跟随当前默认账号</option>
+            </select>
+          </label>
           <label>
             沙箱
             <select name="sandbox">
@@ -803,6 +836,22 @@
         }
       });
     </script>
-    <script src="/app.js?v=202" type="module"></script>
+    <dialog id="codexApiKeyDialog" class="session-dialog">
+      <form id="codexApiKeyForm" method="dialog">
+        <div class="dialog-head"><h2>添加 API Key 账号</h2><button class="icon-button" id="closeCodexApiKeyDialog" type="button" aria-label="关闭">×</button></div>
+        <label>账号名称<input name="name" required placeholder="例如：个人 API Key"></label>
+        <label>API Key<input name="apiKey" type="password" autocomplete="off" required placeholder="只在提交时发送到服务器"></label>
+        <button class="primary-wide" type="submit">保存并验证</button>
+      </form>
+    </dialog>
+    <dialog id="codexDeviceDialog" class="session-dialog">
+      <form id="codexDeviceForm" method="dialog">
+        <div class="dialog-head"><h2>添加 ChatGPT 账号</h2><button class="icon-button" id="closeCodexDeviceDialog" type="button" aria-label="关闭">×</button></div>
+        <label>账号名称<input name="name" required placeholder="例如：ChatGPT Plus"></label>
+        <p class="settings-page-note">点击开始后会启动 Codex 官方授权流程，请在新窗口完成授权。本控制台不会接收你的 ChatGPT 密码。</p>
+        <button class="primary-wide" type="submit">开始官方授权</button>
+      </form>
+    </dialog>
+    <script src="/app.js?v=204" type="module"></script>
   </body>
 </html>

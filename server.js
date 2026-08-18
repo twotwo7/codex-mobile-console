@@ -9,6 +9,7 @@ import { createSerialExecutor, createSingleFlight } from './server-concurrency.j
 import { createSqliteMessageStore, stateMetadataSnapshot } from './state-store.js';
 import { versionSessionStatus } from './session-status.js';
 import { compactBriefMessages } from './public/brief-view.js';
+import { createCodexAuthManager } from './codex-auth.js';
 import {
   SECRETARY_QUICK_TASKS,
   createSecretaryAuditEntry,
@@ -59,6 +60,9 @@ const DEFAULT_APP_UPDATE_SETTINGS = {
 const MAX_SESSION_RUNS = 200;
 const MAX_RUN_EVENTS = 80;
 const MAX_AUDIT_EVENTS = 200;
+const MAX_SESSION_ARTIFACTS = 120;
+const MAX_ARTIFACT_SCAN_FILES = 1200;
+const MAX_ARTIFACT_SIZE_BYTES = 200 * 1024 * 1024;
 const SMART_TAG_RULE_VERSION = 4;
 const COMMAND_KILL_GRACE_MS = 3000;
 const APP_UPDATE_CHECK_TIMEOUT_MS = 18000;
@@ -72,6 +76,11 @@ const SITE_MOUNT_BLOCKED_FILES = new Set(['.env', '.env.local', '.env.production
 const SITE_MOUNT_SAFE_EXTENSIONS = new Set([
   '.html', '.css', '.js', '.mjs', '.json', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.gif',
   '.ico', '.txt', '.map', '.wasm', '.woff', '.woff2', '.ttf', '.otf', '.mp3', '.mp4', '.webm'
+]);
+const ARTIFACT_BLOCKED_PARTS = new Set(['.git', '.hg', '.svn', 'node_modules', 'data', 'runtime', '.codex']);
+const ARTIFACT_BLOCKED_NAMES = new Set([
+  '.env', '.env.local', '.env.production', '.env.development',
+  'auth.json', 'credentials.json', 'id_rsa', 'id_ed25519', '.npmrc'
 ]);
 
 const contentTypes = {
@@ -108,6 +117,14 @@ let state = {
 };
 const clients = new Map();
 const running = new Map();
+const codexAuth = createCodexAuthManager({
+  dataDir: DATA_DIR,
+  codexHome: CODEX_HOME,
+  codexBin: CODEX_BIN,
+  codexNode: CODEX_NODE,
+  commandEnv,
+  runningCount: () => running.size
+});
 const codexUsageCache = new Map();
 const codexMessagesCache = new Map();
 const runCodexImportSingleFlight = createSingleFlight();
@@ -178,6 +195,9 @@ async function exists(file) {
 async function init() {
   await mkdir(DATA_DIR, { recursive: true });
   await mkdir(UPLOAD_DIR, { recursive: true });
+  await codexAuth.ensureLayout();
+  state.codexAuthProfiles ||= {};
+  state.codexAuthProfiles.default ||= { id: 'default', name: '当前 Codex', mode: 'apikey', active: true, authStatus: 'unknown' };
   await loadSkillRegistry();
   if (!(await exists(PASSWORD_FILE))) {
     const password = randomBytes(18).toString('base64url');
@@ -195,9 +215,11 @@ async function init() {
     state.codexSessionProjects ||= {};
     state.starredMessages ||= {};
     state.siteMounts ||= {};
+    state.sessionArtifacts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
     state.secretary = normalizeSecretaryControl(state.secretary);
+    state.codexAuthProfiles ||= {};
     state.nextSeq ||= 1;
   } else {
     state.hiddenCodexSessions ||= {};
@@ -206,9 +228,11 @@ async function init() {
     state.codexSessionProjects ||= {};
     state.starredMessages ||= {};
     state.siteMounts ||= {};
+    state.sessionArtifacts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
     state.secretary = normalizeSecretaryControl(state.secretary);
+    state.codexAuthProfiles ||= {};
     await saveState();
   }
   await recoverSecretaryAuditHead();
@@ -217,6 +241,7 @@ async function init() {
     await saveState();
   }
   for (const session of Object.values(state.sessions || {})) ensureSessionHarness(session);
+  await codexAuth.list(state);
   retagSessionsIfNeeded();
   const restartMarker = await consumeRestartMarker();
   reconcileRunningSessions(restartMarker);
@@ -277,6 +302,7 @@ function normalizeSessionConfig(value = {}, current = {}) {
     : current.reasoningEffort || '';
 
   return {
+    authProfileId: cleanShortString(value.authProfileId ?? current.authProfileId ?? 'default', 64) || 'default',
     model: cleanShortString(value.model ?? current.model ?? '', 100),
     profile: cleanShortString(value.profile ?? current.profile ?? '', 80),
     reasoningEffort,
@@ -1437,6 +1463,98 @@ function registerSiteLinksFromText(session, text) {
   return mounts.filter((mount) => !before.has(mount.id));
 }
 
+function artifactMimeType(filePath) {
+  return contentTypes[path.extname(filePath).toLowerCase()] || 'application/octet-stream';
+}
+
+function publicArtifact(artifact, sessionId) {
+  return {
+    id: artifact.id,
+    name: artifact.name,
+    relativePath: artifact.relativePath,
+    size: artifact.size,
+    type: artifact.type || 'application/octet-stream',
+    kind: artifact.kind || 'file',
+    runId: artifact.runId || '',
+    createdAt: artifact.createdAt,
+    updatedAt: artifact.updatedAt || artifact.createdAt,
+    downloadUrl: `/api/sessions/${encodeURIComponent(sessionId)}/artifacts/${encodeURIComponent(artifact.id)}/download`
+  };
+}
+
+function publicArtifactsForSession(session) {
+  return (Array.isArray(session?.artifacts) ? session.artifacts : [])
+    .slice()
+    .sort((a, b) => String(b.updatedAt || b.createdAt).localeCompare(String(a.updatedAt || a.createdAt)))
+    .map((artifact) => publicArtifact(artifact, session.id));
+}
+
+function artifactPathAllowed(root, target) {
+  if (!isInsidePath(root, target)) return false;
+  const relative = path.relative(root, target);
+  const parts = relative.split(path.sep).filter(Boolean);
+  if (parts.some((part) => ARTIFACT_BLOCKED_PARTS.has(part) || part.startsWith('.'))) return false;
+  return !ARTIFACT_BLOCKED_NAMES.has(path.basename(target).toLowerCase());
+}
+
+async function walkArtifactFiles(root, out = [], limit = MAX_ARTIFACT_SCAN_FILES) {
+  if (out.length >= limit) return out;
+  let entries = [];
+  try { entries = await readdir(root, { withFileTypes: true }); } catch { return out; }
+  for (const entry of entries) {
+    if (out.length >= limit) break;
+    const full = path.join(root, entry.name);
+    if (!artifactPathAllowed(root, full)) continue;
+    if (entry.isDirectory()) await walkArtifactFiles(full, out, limit);
+    else if (entry.isFile()) out.push(full);
+  }
+  return out;
+}
+
+async function discoverSessionArtifacts(session, runId, startedAt) {
+  if (!session?.cwd) return [];
+  const root = path.resolve(session.cwd);
+  const files = await walkArtifactFiles(root);
+  const discovered = [];
+  const threshold = new Date(startedAt || 0).getTime() - 1000;
+  for (const file of files) {
+    let info;
+    try { info = await stat(file); } catch { continue; }
+    if (!info.isFile() || info.size > MAX_ARTIFACT_SIZE_BYTES || info.mtimeMs < threshold) continue;
+    const relativePath = path.relative(root, file);
+    if (!artifactPathAllowed(root, file)) continue;
+    const existing = (session.artifacts || []).find((item) => item.relativePath === relativePath && item.updatedAt === new Date(info.mtimeMs).toISOString());
+    if (existing) continue;
+    discovered.push({
+      id: randomUUID(),
+      name: path.basename(file),
+      relativePath,
+      absolutePath: file,
+      size: info.size,
+      type: artifactMimeType(file),
+      kind: path.extname(file) ? 'file' : 'file',
+      runId,
+      createdAt: nowIso(),
+      updatedAt: new Date(info.mtimeMs).toISOString()
+    });
+  }
+  session.artifacts = [...(session.artifacts || []), ...discovered]
+    .slice(-MAX_SESSION_ARTIFACTS);
+  if (discovered.length) {
+    messageStore.markSessionDirty(session.id);
+    addMessage(session, {
+      role: 'system',
+      runId,
+      text: `本轮发现 ${discovered.length} 个可下载产物。`,
+      status: 'completed',
+      artifactCount: discovered.length
+    });
+    broadcastSession(session);
+    scheduleSave();
+  }
+  return discovered;
+}
+
 function sessionActivityAt(session) {
   const messages = Array.isArray(session?.messages) ? session.messages : [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -1476,6 +1594,7 @@ function publicSession(session) {
     strictConfig: session.strictConfig === true,
     ignoreUserConfig: session.ignoreUserConfig === true,
     ignoreRules: session.ignoreRules === true,
+    authProfileId: session.authProfileId || 'default',
     tags: normalizeSessionTags(session.tags || []),
     codexSessionId: session.codexSessionId || '',
     status: effectiveStatus,
@@ -1489,6 +1608,7 @@ function publicSession(session) {
     lastRun: publicRun(lastRun),
     runCounts,
     siteMounts: publicSiteMountsForSession(session.id),
+    artifacts: publicArtifactsForSession(session),
     contextHealth: statusSummary.contextHealth,
     recentAudit: (session.audit || []).slice(-10),
     trashedAt: session.trashedAt || '',
@@ -1523,6 +1643,11 @@ function publicSession(session) {
     messageCount: session.messages.length,
     runCount: session.runs.length
   };
+}
+
+function activeCodexAuthProfileId() {
+  const profiles = state.codexAuthProfiles || {};
+  return Object.values(profiles).find((profile) => profile.active === true)?.id || 'default';
 }
 
 async function ensureSecretarySession() {
@@ -4885,6 +5010,10 @@ function runCodex(session, prompt, options = {}) {
   });
 
   const args = buildCodexArgs(session, prompt, options);
+  const selectedAuthId = session.authProfileId && session.authProfileId !== 'default'
+    ? session.authProfileId
+    : activeCodexAuthProfileId();
+  const authProfile = codexAuth.get(state, selectedAuthId) || codexAuth.get(state, 'default');
   const command = CODEX_BIN.endsWith('.js') ? CODEX_NODE : CODEX_BIN;
   const commandArgs = CODEX_BIN.endsWith('.js') ? [CODEX_BIN, ...args] : args;
   const child = spawn(command, commandArgs, {
@@ -4893,7 +5022,8 @@ function runCodex(session, prompt, options = {}) {
     env: {
       ...process.env,
       PATH: `${CODEX_BIN_DIR}:${process.env.PATH || ''}`,
-      NO_COLOR: '1'
+      NO_COLOR: '1',
+      CODEX_HOME: authProfile ? codexAuth.home(authProfile) : CODEX_HOME
     },
     stdio: ['pipe', 'pipe', 'pipe']
   });
@@ -4966,6 +5096,7 @@ function runCodex(session, prompt, options = {}) {
       ? classifyCodexFailure({ code, lastError: lastCodexError, session, wasStopping })
       : null;
     const activeRunId = session.activeRun?.runId || run.id;
+    const activeRunStartedAt = session.activeRun?.startedAt || run.startedAt || nowIso();
     updateRunStatus(session, activeRunId, finalRunState, {
       endedAt: nowIso(),
       exitCode: code,
@@ -4997,7 +5128,11 @@ function runCodex(session, prompt, options = {}) {
       status: next?.prompt ? 'running' : nextStatus,
       queuedCount: session.queue?.length || 0
     });
-    if (finalRunState === 'completed') {
+    if (finalRunState === 'completed' || finalRunState === 'failed') {
+      discoverSessionArtifacts(session, activeRunId, activeRunStartedAt).catch((error) => {
+        appendRunEvent(session, 'artifact.scan_failed', { error: error.message || String(error) }, { runId: activeRunId });
+        scheduleSave();
+      });
       autoMountSessionSites(session).then((mounts) => {
         if (!mounts.length) return;
         addMessage(session, {
@@ -5384,6 +5519,49 @@ async function handleApi(req, res, url) {
     return json(res, 200, await codexConfigSummary());
   }
 
+  if (url.pathname === '/api/codex/auth/profiles' && req.method === 'GET') {
+    return json(res, 200, { profiles: await codexAuth.list(state) });
+  }
+  if (url.pathname === '/api/codex/auth/profiles' && req.method === 'POST') {
+    try {
+      const profile = await codexAuth.create(state, await readJson(req));
+      scheduleSave();
+      return json(res, 201, { profile });
+    } catch (error) {
+      return json(res, 400, { error: error.code || 'profile_create_failed', message: error.message || String(error) });
+    }
+  }
+  const authProfileMatch = url.pathname.match(/^\/api\/codex\/auth\/profiles\/([^/]+)(?:\/(api-key|device\/start|logout|activate|backups))?$/);
+  if (authProfileMatch) {
+    const profile = codexAuth.get(state, decodeURIComponent(authProfileMatch[1]));
+    if (!profile) return json(res, 404, { error: 'auth_profile_not_found' });
+    const action = authProfileMatch[2] || '';
+    try {
+      if (!action && req.method === 'GET') return json(res, 200, { profile: (await codexAuth.list(state)).find((item) => item.id === profile.id) });
+      if (action === 'api-key' && req.method === 'POST') {
+        const body = await readJson(req);
+        const result = await codexAuth.apiKeyLogin(state, profile, body.apiKey);
+        scheduleSave(); return json(res, 200, { profile: result });
+      }
+      if (action === 'device/start' && req.method === 'POST') {
+        const task = await codexAuth.startDevice(state, profile);
+        scheduleSave(); return json(res, 202, { task });
+      }
+      if (action === 'logout' && req.method === 'POST') { const result = await codexAuth.logout(state, profile); scheduleSave(); return json(res, 200, { profile: result }); }
+      if (action === 'activate' && req.method === 'POST') { const result = await codexAuth.activate(state, profile); scheduleSave(); return json(res, 200, { profile: result }); }
+      if (action === 'backups' && req.method === 'GET') return json(res, 200, { backups: await codexAuth.listBackups(profile.id) });
+      if (action === 'backups' && req.method === 'POST') { const body = await readJson(req); await codexAuth.restore(profile, String(body.backupId || '')); scheduleSave(); return json(res, 200, { profile: codexAuth.publicProfile(profile) }); }
+    } catch (error) {
+      const status = ['codex_sessions_running'].includes(error.code) ? 409 : error.code === 'backup_not_found' ? 404 : 400;
+      return json(res, status, { error: error.code || 'codex_auth_failed', message: error.detail || error.message || String(error) });
+    }
+  }
+  const authTaskMatch = url.pathname.match(/^\/api\/codex\/auth\/tasks\/([^/]+)$/);
+  if (authTaskMatch && req.method === 'GET') {
+    const task = codexAuth.task(decodeURIComponent(authTaskMatch[1]));
+    return task ? json(res, 200, { task }) : json(res, 404, { error: 'auth_task_not_found' });
+  }
+
   if (url.pathname === '/api/system/health' && req.method === 'GET') {
     return json(res, 200, await systemHealth());
   }
@@ -5597,6 +5775,40 @@ async function handleApi(req, res, url) {
     return;
   }
 
+  const artifactListMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifacts$/);
+  if (artifactListMatch && req.method === 'GET') {
+    const session = state.sessions[decodeURIComponent(artifactListMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    return json(res, 200, { artifacts: publicArtifactsForSession(session) });
+  }
+
+  const artifactDownloadMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/artifacts\/([^/]+)\/download$/);
+  if (artifactDownloadMatch && req.method === 'GET') {
+    const session = state.sessions[decodeURIComponent(artifactDownloadMatch[1])];
+    if (!session) return json(res, 404, { error: 'session_not_found' });
+    const artifact = (session.artifacts || []).find((item) => item.id === decodeURIComponent(artifactDownloadMatch[2]));
+    if (!artifact) return json(res, 404, { error: 'artifact_not_found' });
+    const root = path.resolve(session.cwd);
+    const filePath = path.resolve(artifact.absolutePath || path.join(root, artifact.relativePath || ''));
+    if (!artifactPathAllowed(root, filePath)) return json(res, 403, { error: 'artifact_forbidden' });
+    try {
+      const info = await stat(filePath);
+      if (!info.isFile()) return json(res, 404, { error: 'artifact_not_found' });
+      const downloadName = String(artifact.name || path.basename(filePath)).replace(/[\r\n"\\]/g, '_');
+      res.writeHead(200, {
+        'content-type': artifact.type || artifactMimeType(filePath),
+        'content-length': info.size,
+        'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
+        'cache-control': 'private, no-store',
+        'x-content-type-options': 'nosniff'
+      });
+      createReadStream(filePath).pipe(res);
+    } catch {
+      return json(res, 404, { error: 'artifact_not_found' });
+    }
+    return;
+  }
+
   const messageListMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/);
   if (messageListMatch && req.method === 'GET') {
     const session = state.sessions[decodeURIComponent(messageListMatch[1])];
@@ -5705,6 +5917,9 @@ async function handleApi(req, res, url) {
       cwd,
       linkedProjectPath,
       ...sessionConfig,
+      authProfileId: state.codexAuthProfiles[String(body.authProfileId || '')]
+        ? String(body.authProfileId)
+        : activeCodexAuthProfileId(),
       tags: normalizeSessionTags(body.tags || []),
       codexSessionId: '',
       status: 'idle',
