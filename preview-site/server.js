@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const PROJECT_DIR = path.resolve(__dirname, '..');
+const DATA_DIR = path.join(PROJECT_DIR, 'data');
+const BUNDLE_FILE = path.join(DATA_DIR, 'archives', 'gush-offline-bundle-20260818.tar.gz');
+const COLLECT_SCRIPT_FILE = path.join(DATA_DIR, 'uploads', '8e4aaed2-2107-4f36-aaa7-024418ae5b81.sh');
 const HOST = process.env.HOST || '127.0.0.1';
 const PORT = Number(process.env.PORT || 7372);
 
@@ -18,6 +21,11 @@ const TYPES = {
   '.svg': 'image/svg+xml',
   '.ico': 'image/x-icon'
 };
+
+const DOWNLOADS = new Map([
+  ['/downloads/gush-offline-bundle-20260818.tar.gz', { file: BUNDLE_FILE, type: 'application/gzip', disposition: 'attachment; filename="gush-offline-bundle-20260818.tar.gz"' }],
+  ['/downloads/01-offline-bundle.sh', { file: COLLECT_SCRIPT_FILE, type: 'text/x-shellscript; charset=utf-8', disposition: 'attachment; filename="01-offline-bundle.sh"' }]
+]);
 
 function normalizeRequestPath(url) {
   let pathname = url.pathname;
@@ -410,6 +418,27 @@ async function sendFile(res, requestPath) {
   }
 }
 
+async function sendDownload(req, res, requestPath) {
+  const download = DOWNLOADS.get(requestPath);
+  if (!download) return false;
+  try {
+    const info = await stat(download.file);
+    res.writeHead(200, {
+      'content-type': download.type,
+      'content-length': info.size,
+      'content-disposition': download.disposition,
+      'cache-control': 'no-store',
+      'x-content-type-options': 'nosniff'
+    });
+    if (req.method !== 'HEAD') createReadStream(download.file).pipe(res);
+    else res.end();
+  } catch {
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('Download artifact not found');
+  }
+  return true;
+}
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || `${HOST}:${PORT}`}`);
   if (url.pathname.match(/^\/sites\/[^/]+$/)) {
@@ -422,7 +451,15 @@ const server = http.createServer((req, res) => {
     res.end('Method Not Allowed');
     return;
   }
-  const requestPath = normalizeRequestPath(url);
+  const downloadPath = normalizeRequestPath(url);
+  if (downloadPath.startsWith('/downloads/')) {
+    sendDownload(req, res, downloadPath).catch((error) => {
+      res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(error.message || 'Internal Server Error');
+    });
+    return;
+  }
+  const requestPath = downloadPath;
   const response = requestPath === '/install.sh'
     ? sendInstaller(req, res)
     : sendFile(res, requestPath);
