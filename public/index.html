@@ -35,8 +35,8 @@
             <strong id="drawerTitle">会话</strong>
           </div>
           <div id="drawerModeRow" class="drawer-mode-row" role="tablist" aria-label="侧边栏视图">
-            <button id="opsManagerButton" class="active" type="button" role="tab" aria-selected="true" aria-controls="drawerOpsPanel">中枢</button>
-            <button id="drawerSessionsButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSessionsPanel">会话</button>
+            <button id="opsManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerOpsPanel">中枢</button>
+            <button id="drawerSessionsButton" class="active" type="button" role="tab" aria-selected="true" aria-controls="drawerSessionsPanel">会话</button>
             <button id="secretaryManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSecretaryPanel">秘书<span id="secretaryUnreadBadge" class="secretary-unread-badge" hidden></span></button>
             <button id="skillManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSkillsPanel">Skills</button>
             <button id="drawerSettingsButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSettingsPanel">设置</button>
@@ -45,7 +45,7 @@
             <button id="closeDrawer" class="drawer-tool-button" type="button" aria-label="关闭会话列表" title="关闭">×</button>
           </div>
         </div>
-        <section id="drawerOpsPanel" class="drawer-panel drawer-ops-panel active" role="tabpanel" aria-labelledby="opsManagerButton">
+        <section id="drawerOpsPanel" class="drawer-panel drawer-ops-panel" role="tabpanel" aria-labelledby="opsManagerButton">
           <div class="ops-hero">
             <div><p class="eyebrow">Self-hosted AI operations</p><h2>AI 运维中枢</h2><p>统一查看服务器资源、长期秘书、项目会话和审计恢复。</p></div>
             <button id="refreshOpsButton" class="ghost-button inline" type="button">刷新</button>
@@ -61,7 +61,7 @@
             <button type="button" data-ops-target="sessions"><strong>项目与会话</strong><span>切换项目、排队指令、停止运行</span></button>
           </div>
         </section>
-        <section id="drawerSessionsPanel" class="drawer-panel" role="tabpanel" aria-labelledby="drawerSessionsButton">
+        <section id="drawerSessionsPanel" class="drawer-panel active" role="tabpanel" aria-labelledby="drawerSessionsButton">
           <div class="drawer-session-controls">
             <div class="segmented-control drawer-view-row" role="radiogroup" aria-label="会话视图">
               <button type="button" data-session-view="recent">最近</button>
@@ -841,6 +841,6 @@
         <button class="primary-wide" type="submit">开始官方授权</button>
       </form>
     </dialog>
-    <script src="/app.js?v=207" type="module"></script>
+    <script src="/app.js?v=208" type="module"></script>
   </body>
 </html>
