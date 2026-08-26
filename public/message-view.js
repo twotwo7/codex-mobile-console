@@ -22,15 +22,29 @@ export function createMessageView(actions) {
     const savedCollapsed = message.role === 'tool' ? true : actions.getMessageCollapsed?.(message);
     const defaultCollapsed = typeof savedCollapsed === 'boolean' ? savedCollapsed : isDefaultCollapsedMessage(message);
     const deferredText = collapsible && defaultCollapsed;
+    const progressiveText = !deferredText && shouldProgressivelyRenderMarkdown(message.text);
     article.innerHTML = `
       <div class="message-head">
         <span>${escapeHtml(role)}</span>
         <span>${escapeHtml(formatTime(message.at))}</span>
       </div>
       <div class="message-summary">${escapeHtml(summarizeMessage(message))}</div>
-      <div class="message-text"${deferredText ? '' : ' data-loaded="1"'}></div>
+      <div class="message-text"${deferredText || progressiveText ? '' : ' data-loaded="1"'}></div>
     `;
-    if (!deferredText) renderMarkdownText(article.querySelector('.message-text'), message.text || '');
+    if (!deferredText) {
+      const textNode = article.querySelector('.message-text');
+      if (progressiveText) {
+        article.classList.add('message-rendering');
+        textNode.dataset.loading = '1';
+        renderMarkdownTextProgressive(textNode, message.text || '', () => {
+          textNode.dataset.loaded = '1';
+          delete textNode.dataset.loading;
+          article.classList.remove('message-rendering');
+        });
+      } else {
+        renderMarkdownText(textNode, message.text || '');
+      }
+    }
 
     if (actions.isShareMode?.()) {
       const shareToggle = document.createElement('button');
@@ -60,12 +74,31 @@ export function createMessageView(actions) {
       button.className = 'message-toggle';
       button.textContent = defaultCollapsed ? '▸' : '▾';
       button.setAttribute('aria-label', defaultCollapsed ? '展开消息' : '折叠消息');
+      let cancelProgressiveRender = null;
       button.addEventListener('click', () => {
         const collapsed = article.classList.toggle('collapsed');
         const textNode = article.querySelector('.message-text');
         if (!collapsed && textNode && !textNode.dataset.loaded) {
-          renderMarkdownText(textNode, message.text || '');
-          textNode.dataset.loaded = '1';
+          const text = String(message.text || '');
+          if (shouldProgressivelyRenderMarkdown(text)) {
+            article.classList.add('message-rendering');
+            cancelProgressiveRender = renderMarkdownTextProgressive(textNode, text, () => {
+              textNode.dataset.loaded = '1';
+              delete textNode.dataset.loading;
+              article.classList.remove('message-rendering');
+              cancelProgressiveRender = null;
+            });
+            textNode.dataset.loading = '1';
+          } else {
+            renderMarkdownText(textNode, text);
+            textNode.dataset.loaded = '1';
+          }
+        } else if (collapsed && textNode?.dataset.loading) {
+          cancelProgressiveRender?.();
+          cancelProgressiveRender = null;
+          textNode.textContent = '';
+          delete textNode.dataset.loading;
+          article.classList.remove('message-rendering');
         }
         button.textContent = collapsed ? '▸' : '▾';
         button.setAttribute('aria-label', collapsed ? '展开消息' : '折叠消息');
@@ -228,6 +261,11 @@ function isDefaultCollapsedMessage(message) {
   return message.role === 'tool' || text.includes('```') || text.length > 3000;
 }
 
+export function shouldProgressivelyRenderMarkdown(text) {
+  const value = String(text || '');
+  return value.length > 8000 || value.split('\n').length > 400;
+}
+
 function summarizeMessage(message) {
   const text = String(message.text || '').replaceAll('```', '').trim();
   const firstLine = text.split('\n').map((line) => line.trim()).find(Boolean) || '(空消息)';
@@ -293,90 +331,100 @@ function renderMarkdownText(container, text) {
   container.textContent = '';
   const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
   for (let index = 0; index < lines.length;) {
-    const line = lines[index];
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
-
-    const fence = line.match(/^\s*```([\w-]*)\s*$/);
-    if (fence) {
-      const codeLines = [];
-      index += 1;
-      while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) {
-        codeLines.push(lines[index]);
-        index += 1;
-      }
-      if (index < lines.length) index += 1;
-      container.append(renderCodeBlock(codeLines.join('\n'), fence[1] || ''));
-      continue;
-    }
-
-    if (isTableStart(lines, index)) {
-      const tableLines = [lines[index], lines[index + 1]];
-      index += 2;
-      while (index < lines.length && isTableRow(lines[index])) {
-        tableLines.push(lines[index]);
-        index += 1;
-      }
-      container.append(renderTable(tableLines));
-      continue;
-    }
-
-    const heading = line.match(/^(#{1,4})\s+(.+)$/);
-    if (heading) {
-      const level = Math.min(4, heading[1].length);
-      const node = document.createElement(`h${level + 2}`);
-      appendInlineMarkdown(node, heading[2].trim());
-      container.append(node);
-      index += 1;
-      continue;
-    }
-
-    if (/^\s*>\s?/.test(line)) {
-      const quote = document.createElement('blockquote');
-      while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
-        appendInlineMarkdown(quote, lines[index].replace(/^\s*>\s?/, ''));
-        quote.append(document.createElement('br'));
-        index += 1;
-      }
-      quote.lastChild?.remove();
-      container.append(quote);
-      continue;
-    }
-
-    const listMatch = line.match(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/);
-    if (listMatch) {
-      const ordered = /^\s*\d+[.)]\s+/.test(line);
-      const list = document.createElement(ordered ? 'ol' : 'ul');
-      while (index < lines.length && /^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(lines[index]) === true && (/^\s*\d+[.)]\s+/.test(lines[index]) === ordered)) {
-        const item = document.createElement('li');
-        appendInlineMarkdown(item, lines[index].replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, ''));
-        list.append(item);
-        index += 1;
-      }
-      container.append(list);
-      continue;
-    }
-
-    const paragraphLines = [];
-    while (index < lines.length
-      && lines[index].trim()
-      && !/^\s*```/.test(lines[index])
-      && !isTableStart(lines, index)
-      && !/^(#{1,4})\s+/.test(lines[index])
-      && !/^\s*>\s?/.test(lines[index])
-      && !/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(lines[index])) {
-      paragraphLines.push(lines[index]);
-      index += 1;
-    }
-    const paragraph = document.createElement('p');
-    paragraphLines.forEach((part, partIndex) => {
-      if (partIndex) paragraph.append(document.createElement('br'));
-      appendInlineMarkdown(paragraph, part);
-    });
-    container.append(paragraph);
+    const block = renderMarkdownBlock(lines, index);
+    index = block.nextIndex;
+    if (block.node) container.append(block.node);
   }
+}
+
+function renderMarkdownBlock(lines, startIndex) {
+  let index = startIndex;
+  const line = lines[index];
+  if (!line?.trim()) return { nextIndex: index + 1, node: null };
+
+  const fence = line.match(/^\s*```([\w-]*)\s*$/);
+  if (fence) {
+    const codeLines = [];
+    index += 1;
+    while (index < lines.length && !/^\s*```\s*$/.test(lines[index])) codeLines.push(lines[index++]);
+    if (index < lines.length) index += 1;
+    return { nextIndex: index, node: renderCodeBlock(codeLines.join('\n'), fence[1] || '') };
+  }
+
+  if (isTableStart(lines, index)) {
+    const tableLines = [lines[index], lines[index + 1]];
+    index += 2;
+    while (index < lines.length && isTableRow(lines[index])) tableLines.push(lines[index++]);
+    return { nextIndex: index, node: renderTable(tableLines) };
+  }
+
+  const heading = line.match(/^(#{1,4})\s+(.+)$/);
+  if (heading) {
+    const level = Math.min(4, heading[1].length);
+    const node = document.createElement(`h${level + 2}`);
+    appendInlineMarkdown(node, heading[2].trim());
+    return { nextIndex: index + 1, node };
+  }
+
+  if (/^\s*>\s?/.test(line)) {
+    const quote = document.createElement('blockquote');
+    while (index < lines.length && /^\s*>\s?/.test(lines[index])) {
+      appendInlineMarkdown(quote, lines[index++].replace(/^\s*>\s?/, ''));
+      quote.append(document.createElement('br'));
+    }
+    quote.lastChild?.remove();
+    return { nextIndex: index, node: quote };
+  }
+
+  if (/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(line)) {
+    const ordered = /^\s*\d+[.)]\s+/.test(line);
+    const list = document.createElement(ordered ? 'ol' : 'ul');
+    while (index < lines.length && /^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(lines[index]) && (/^\s*\d+[.)]\s+/.test(lines[index]) === ordered)) {
+      const item = document.createElement('li');
+      appendInlineMarkdown(item, lines[index++].replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, ''));
+      list.append(item);
+    }
+    return { nextIndex: index, node: list };
+  }
+
+  const paragraphLines = [];
+  while (index < lines.length && lines[index].trim()
+    && !/^\s*```/.test(lines[index]) && !isTableStart(lines, index)
+    && !/^(#{1,4})\s+/.test(lines[index]) && !/^\s*>\s?/.test(lines[index])
+    && !/^\s*(?:[-*+]\s+|\d+[.)]\s+)/.test(lines[index])) paragraphLines.push(lines[index++]);
+  const paragraph = document.createElement('p');
+  paragraphLines.forEach((part, partIndex) => {
+    if (partIndex) paragraph.append(document.createElement('br'));
+    appendInlineMarkdown(paragraph, part);
+  });
+  if (!paragraphLines.length) {
+    appendInlineMarkdown(paragraph, line);
+    index = startIndex + 1;
+  }
+  return { nextIndex: index > startIndex ? index : startIndex + 1, node: paragraph };
+}
+
+function renderMarkdownTextProgressive(container, text, onDone) {
+  if (!container) return;
+  container.textContent = '';
+  const lines = String(text || '').replace(/\r\n?/g, '\n').split('\n');
+  let index = 0;
+  let cancelled = false;
+  const renderChunk = () => {
+    if (cancelled || !container.isConnected) return;
+    const fragment = document.createDocumentFragment();
+    const deadline = performance.now() + 8;
+    while (index < lines.length && performance.now() < deadline) {
+      const block = renderMarkdownBlock(lines, index);
+      index = block.nextIndex;
+      if (block.node) fragment.append(block.node);
+    }
+    container.append(fragment);
+    if (index < lines.length) requestAnimationFrame(renderChunk);
+    else onDone?.();
+  };
+  requestAnimationFrame(renderChunk);
+  return () => { cancelled = true; };
 }
 
 function appendInlineMarkdown(container, text) {

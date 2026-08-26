@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { buildBriefRounds, compactBriefMessages, oldestMessageOrderSeq } from '../public/brief-view.js';
 import { compileTextSearch, createSearchTextCache, normalizeSearchText } from '../public/session-search.js';
+import { mergeMessages, shouldMergeDisplayMessage } from '../public/message-utils.js';
+import { shouldProgressivelyRenderMarkdown } from '../public/message-view.js';
 
 assert.equal(normalizeSearchText('  Codex\n手机  '), 'codex 手机');
 
@@ -44,5 +46,33 @@ assert.equal(rounds[0].outputCount, 903);
 assert.equal(rounds[0].conclusion.id, 'a2');
 assert.deepEqual(compactBriefMessages(verboseRounds).map((message) => message.id), ['u1', 'a2', 'u2', 'a3']);
 assert.equal(oldestMessageOrderSeq(compactBriefMessages(verboseRounds)), 1);
+
+const duplicateAssistantRun = mergeMessages([], [
+  { id: 'a1', role: 'assistant', runId: 'run-1', text: '同一条回复', at: '2026-08-26T06:00:00Z' },
+  { id: 'a2', role: 'assistant', runId: 'run-1', text: '同一条回复\n', at: '2026-08-26T06:00:01Z' }
+]);
+assert.equal(duplicateAssistantRun.length, 1);
+assert.equal(duplicateAssistantRun[0].id, 'a2');
+
+const repeatedAcrossRuns = mergeMessages([], [
+  { id: 'a1', role: 'assistant', runId: 'run-1', text: '相同结论', at: '2026-08-26T06:00:00Z' },
+  { id: 'a2', role: 'assistant', runId: 'run-2', text: '相同结论', at: '2026-08-26T06:01:00Z' }
+]);
+assert.equal(repeatedAcrossRuns.length, 2);
+assert.equal(shouldProgressivelyRenderMarkdown('短回复'), false);
+assert.equal(shouldProgressivelyRenderMarkdown(Array.from({ length: 401 }, () => '一行').join('\n')), true);
+assert.equal(shouldProgressivelyRenderMarkdown('x'.repeat(8001)), true);
+assert.equal(shouldMergeDisplayMessage(
+  { role: 'assistant', runId: 'run-1' },
+  { role: 'assistant', runId: 'run-1' }
+), true);
+assert.equal(shouldMergeDisplayMessage(
+  { role: 'assistant', runId: 'run-1' },
+  { role: 'assistant', runId: 'run-2' }
+), false);
+assert.equal(shouldMergeDisplayMessage(
+  { role: 'assistant' },
+  { role: 'assistant' }
+), false);
 
 console.log('frontend utility checks passed');

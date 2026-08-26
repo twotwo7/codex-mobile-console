@@ -30,6 +30,13 @@ function sameCrossSourceContent(left, right) {
   return Math.abs(leftAt - rightAt) <= 5 * 60 * 1000;
 }
 
+function sameRunAssistantContent(left, right) {
+  if (!left || !right || left.role !== 'assistant' || right.role !== 'assistant') return false;
+  if (!left.runId || left.runId !== right.runId) return false;
+  const text = comparableMessageText(left);
+  return Boolean(text && text === comparableMessageText(right));
+}
+
 export function mergeMessagePair(current, incoming) {
   const preferCurrent = !isCodexSource(current) && isCodexSource(incoming);
   const base = preferCurrent ? incoming : current;
@@ -53,7 +60,7 @@ export function findMessageIndex(messages, message) {
   const key = messageKey(message);
   const direct = messages.findIndex((item) => messageKey(item) === key);
   if (direct >= 0) return direct;
-  return messages.findIndex((item) => sameCrossSourceContent(item, message));
+  return messages.findIndex((item) => sameRunAssistantContent(item, message) || sameCrossSourceContent(item, message));
 }
 
 export function mergeMessages(existing, incoming) {
@@ -69,6 +76,15 @@ export function mergeMessages(existing, incoming) {
     else out.push(next);
   }
   return out.sort(compareMessages);
+}
+
+export function shouldMergeDisplayMessage(previous, message) {
+  if (!previous || !message || previous.pending || message.pending) return false;
+  if (previous.role === 'tool' && message.role === 'tool') return true;
+  return previous.role === 'assistant'
+    && message.role === 'assistant'
+    && Boolean(previous.runId)
+    && previous.runId === message.runId;
 }
 
 export function compareMessages(a, b) {

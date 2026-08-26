@@ -4522,7 +4522,10 @@ function sameDisplayMessage(left, right) {
   if ((left.role || '') !== (right.role || '')) return false;
   const text = displayMessageText(left);
   if (!text || text !== displayMessageText(right)) return false;
-  if (displayIsCodex(left) === displayIsCodex(right) && !displayIsCodex(left)) return false;
+  const sameRunAssistant = left.role === 'assistant'
+    && left.runId
+    && left.runId === right.runId;
+  if (!sameRunAssistant && displayIsCodex(left) === displayIsCodex(right) && !displayIsCodex(left)) return false;
   const leftAt = displayMessageTime(left);
   const rightAt = displayMessageTime(right);
   if (!leftAt || !rightAt) return true;
@@ -4764,14 +4767,23 @@ async function listDirectories(dir) {
 
 function addMessage(session, message) {
   ensureSessionHarness(session);
+  const run = activeRunRecord(session);
+  const effectiveRunId = message.runId || (run && ['assistant', 'tool', 'system'].includes(message.role || '') ? run.id : '');
+  if (message.role === 'assistant' && effectiveRunId && String(message.text || '').trim()) {
+    const duplicate = (session.messages || []).slice(-20).reverse().find((entry) => (
+      entry.role === 'assistant'
+      && entry.runId === effectiveRunId
+      && String(entry.text || '').replace(/\s+/g, ' ').trim() === String(message.text || '').replace(/\s+/g, ' ').trim()
+    ));
+    if (duplicate) return duplicate;
+  }
   const entry = {
     seq: state.nextSeq++,
     id: randomUUID(),
     at: nowIso(),
     ...message
   };
-  const run = activeRunRecord(session);
-  if (!entry.runId && run && ['assistant', 'tool', 'system'].includes(entry.role || '')) entry.runId = run.id;
+  if (!entry.runId && effectiveRunId) entry.runId = effectiveRunId;
   attachReplyImages(session, entry);
   session.messages.push(entry);
   messageStore.markSessionDirty(session.id);

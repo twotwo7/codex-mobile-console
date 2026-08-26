@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<body>
+  <main id="messages"></main>
+  <script type="module">
+    import { createMessageView } from '../public/message-view.js';
+    const sections = [];
+    for (let index = 0; index < 48; index += 1) {
+      sections.push(`# 分析 ${index + 1}`, '', '```text', ...Array.from({ length: 14 }, (_, line) => `line ${index}-${line}`), '```', '', `结论 **${index + 1}**：这是长消息渲染测试。`);
+    }
+    const view = createMessageView({
+      getMessageCollapsed: () => true,
+      setMessageCollapsed: () => {},
+      isShareMode: () => false
+    });
+    document.querySelector('#messages').append(view.renderMessage({ id: 'long', role: 'assistant', at: new Date().toISOString(), text: sections.join('\n') }));
+    window.fixtureReady = true;
+  </script>
+</body>
+</html>

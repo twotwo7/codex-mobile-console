@@ -5,8 +5,8 @@ import { createConnectionState } from './connection-state.js?v=1';
 import { escapeHtml, formatBytes, formatDuration, formatNumber, formatTime, summarizeText } from './format-utils.js?v=1';
 import { createFrontendEvents } from './frontend-events.js?v=1';
 import { installMessageCopyGuard } from './message-copy.js?v=1';
-import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages } from './message-utils.js?v=2';
-import { createMessageView } from './message-view.js?v=17';
+import { compareMessages, findMessageIndex, lastRealSeq, mergeMessagePair, mergeMessages, shouldMergeDisplayMessage } from './message-utils.js?v=4';
+import { createMessageView } from './message-view.js?v=18';
 import { createPerformanceMetrics } from './performance-metrics.js?v=1';
 import { createPromptActions } from './prompt-actions.js?v=9';
 import { createQueueView } from './queue-view.js?v=6';
@@ -484,7 +484,7 @@ updateCollapseActionButtons();
 updateRunSettingsState();
 
 function cacheKey(id) {
-  return `cmc.messages.${id}`;
+  return `cmc.messages.v2.${id}`;
 }
 
 function pageCacheKey(id) {
@@ -2929,23 +2929,22 @@ function mergeDisplayMessages(messages) {
   const out = [];
   for (const message of messages) {
     const previous = out.at(-1);
-    const canMerge = ['assistant', 'tool'].includes(message.role)
-      && previous?.role === message.role
-      && !message.pending
-      && !previous.pending;
+    const canMerge = shouldMergeDisplayMessage(previous, message);
     if (canMerge) {
+      const merged = { ...previous };
       if (message.role === 'tool' && !previous.groupFormatted) {
-        previous.text = formatMergedMessagePart(previous);
-        previous.groupFormatted = true;
+        merged.text = formatMergedMessagePart(previous);
+        merged.groupFormatted = true;
       }
-      previous.text = [previous.text, formatMergedMessagePart(message)].filter(Boolean).join('\n\n');
-      previous.at = message.at || previous.at;
-      previous.seq = message.seq || previous.seq;
-      previous.id = previous.id || message.id;
-      previous.ids = [...(previous.ids || [previous.id]).filter(Boolean), message.id].filter(Boolean);
-      previous.starred = previous.starred === true || message.starred === true;
-      previous.streaming = shouldShowStreamingCursor(message, messages);
-      previous.groupCount = (previous.groupCount || 1) + 1;
+      merged.text = [merged.text, formatMergedMessagePart(message)].filter(Boolean).join('\n\n');
+      merged.at = message.at || merged.at;
+      merged.seq = message.seq || merged.seq;
+      merged.id = merged.id || message.id;
+      merged.ids = [...(merged.ids || [merged.id]).filter(Boolean), message.id].filter(Boolean);
+      merged.starred = merged.starred === true || message.starred === true;
+      merged.streaming = shouldShowStreamingCursor(message, messages);
+      merged.groupCount = (merged.groupCount || 1) + 1;
+      out[out.length - 1] = merged;
       continue;
     }
     out.push({
