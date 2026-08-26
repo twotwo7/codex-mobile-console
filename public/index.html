@@ -11,7 +11,7 @@
     <title>Codex Ops Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=171">
+    <link rel="stylesheet" href="/styles.css?v=172">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -39,7 +39,6 @@
             <button id="drawerSessionsButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSessionsPanel">会话</button>
             <button id="secretaryManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSecretaryPanel">秘书<span id="secretaryUnreadBadge" class="secretary-unread-badge" hidden></span></button>
             <button id="skillManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSkillsPanel">Skills</button>
-            <button id="evolutionManagerButton" type="button" role="tab" aria-selected="false" aria-controls="drawerEvolutionPanel">进化</button>
             <button id="drawerSettingsButton" type="button" role="tab" aria-selected="false" aria-controls="drawerSettingsPanel">设置</button>
           </div>
           <div class="drawer-toolbar">
@@ -60,7 +59,6 @@
             <button type="button" data-ops-target="secretary"><strong>长期秘书</strong><span>任务、晨报、自主循环与总停止</span></button>
             <button type="button" data-ops-target="maintenance"><strong>资源看板</strong><span>服务健康、磁盘、版本与安全升级</span></button>
             <button type="button" data-ops-target="sessions"><strong>项目与会话</strong><span>切换项目、排队指令、停止运行</span></button>
-            <button type="button" data-ops-target="evolution"><strong>审计与恢复</strong><span>项目检查、演进记录与可恢复操作</span></button>
           </div>
         </section>
         <section id="drawerSessionsPanel" class="drawer-panel" role="tabpanel" aria-labelledby="drawerSessionsButton">
@@ -164,15 +162,6 @@
           </div>
           <p id="drawerSkillStatus" class="skill-status">读取缓存列表，不阻塞聊天主流程。</p>
           <div id="drawerSkillList" class="skill-list drawer-skill-list">加载中...</div>
-        </section>
-        <section id="drawerEvolutionPanel" class="drawer-panel drawer-evolution-panel" role="tabpanel" aria-labelledby="evolutionManagerButton">
-          <div class="drawer-skill-toolbar evolution-toolbar">
-            <input id="evolutionSearch" type="search" placeholder="搜索项目..." autocomplete="off">
-            <button id="autoLinkSessionsButton" class="ghost-button inline" type="button">推荐</button>
-            <button id="refreshEvolutionButton" class="ghost-button inline" type="button">刷新</button>
-          </div>
-          <p id="evolutionStatus" class="skill-status">项目自演进：先巡检和生成提示词，再由你决定是否执行。</p>
-          <div id="evolutionList" class="evolution-list">加载中...</div>
         </section>
         <section id="drawerSettingsPanel" class="drawer-panel drawer-settings-panel" role="tabpanel" aria-labelledby="drawerSettingsButton">
           <div class="segmented-control settings-tabs" role="tablist" aria-label="设置分类">
@@ -619,7 +608,7 @@
           <select name="linkedProjectPath">
             <option value="">未关联项目</option>
           </select>
-          <small>用于项目进化、目标和巡检；不会改变会话工作目录。</small>
+          <small>用于标识会话所属项目，不会改变会话工作目录。</small>
         </label>
         <div class="field-grid">
           <label>
@@ -852,6 +841,6 @@
         <button class="primary-wide" type="submit">开始官方授权</button>
       </form>
     </dialog>
-    <script src="/app.js?v=206" type="module"></script>
+    <script src="/app.js?v=207" type="module"></script>
   </body>
 </html>

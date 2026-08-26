@@ -127,6 +127,9 @@ const codexAuth = createCodexAuthManager({
 });
 const codexUsageCache = new Map();
 const codexMessagesCache = new Map();
+const CODEX_SESSION_LIST_TTL_MS = 10000;
+let codexSessionListCache = { loadedAt: 0, sessions: [] };
+let codexSessionListPromise = null;
 const runCodexImportSingleFlight = createSingleFlight();
 const runStateWriteSerial = createSerialExecutor();
 const secretaryAuditWriteSerial = createSerialExecutor();
@@ -3138,96 +3141,10 @@ function compareSemver(a = '', b = '') {
   return 0;
 }
 
-function projectIdFromPath(projectPath = '') {
-  return createHash('sha1').update(path.resolve(projectPath)).digest('hex').slice(0, 16);
-}
-
 function isProjectCandidate(entry) {
   return entry.isDirectory()
     && !entry.name.startsWith('.')
     && !['node_modules', 'runtime', 'data'].includes(entry.name);
-}
-
-async function readJsonFile(file, fallback = null) {
-  try {
-    return JSON.parse(await readFile(file, 'utf8'));
-  } catch {
-    return fallback;
-  }
-}
-
-async function packageInfo(projectPath) {
-  const pkg = await readJsonFile(path.join(projectPath, 'package.json'), null);
-  if (!pkg) return { exists: false, name: '', version: '', scripts: {} };
-  return {
-    exists: true,
-    name: String(pkg.name || ''),
-    version: String(pkg.version || ''),
-    scripts: pkg.scripts && typeof pkg.scripts === 'object' ? pkg.scripts : {}
-  };
-}
-
-function defaultEvolutionConfig(projectPath, pkg = {}) {
-  const name = pkg.name || path.basename(projectPath);
-  const checkCommands = [];
-  const scripts = pkg.scripts || {};
-  for (const scriptName of ['check:state', 'check:mobile-ui', 'test', 'lint']) {
-    if (scripts[scriptName]) checkCommands.push(`npm run ${scriptName}`);
-  }
-  if (checkCommands.length === 0 && pkg.exists) checkCommands.push('node --check server.js');
-  return {
-    version: 1,
-    project: name,
-    objective: '',
-    autonomyLevel: 'L1',
-    qualityGoals: ['主流程稳定', '错误可诊断', '变更可验证'],
-    signals: ['git status --short', 'git log --oneline -5', 'runtime logs', 'user feedback'],
-    checkCommands,
-    allowedAutonomousChanges: ['文档', '测试', '日志增强', '错误提示', '低风险 UI 修复'],
-    requiresHumanApproval: ['认证授权', '删除数据', '大重构', '依赖升级', '自动发布']
-  };
-}
-
-function normalizeEvolutionConfig(config = {}, projectPath = '', pkg = {}) {
-  const base = defaultEvolutionConfig(projectPath, pkg);
-  const list = (value, fallback) => Array.isArray(value)
-    ? value.map((item) => String(item || '').trim()).filter(Boolean).slice(0, 50)
-    : fallback;
-  return {
-    version: 1,
-    project: String(config.project || base.project || path.basename(projectPath)).slice(0, 120),
-    objective: String(config.objective || base.objective || '').slice(0, 500),
-    autonomyLevel: ['L0', 'L1', 'L2', 'L3'].includes(config.autonomyLevel) ? config.autonomyLevel : base.autonomyLevel,
-    qualityGoals: list(config.qualityGoals, base.qualityGoals),
-    signals: list(config.signals, base.signals),
-    checkCommands: list(config.checkCommands, base.checkCommands).slice(0, 12),
-    allowedAutonomousChanges: list(config.allowedAutonomousChanges, base.allowedAutonomousChanges),
-    requiresHumanApproval: list(config.requiresHumanApproval, base.requiresHumanApproval)
-  };
-}
-
-async function projectGitSummary(projectPath) {
-  const [inside, branch, commit, status, log] = await Promise.all([
-    runCommand('git', ['rev-parse', '--is-inside-work-tree'], { cwd: projectPath, timeoutMs: 4000 }),
-    runCommand('git', ['branch', '--show-current'], { cwd: projectPath, timeoutMs: 4000 }),
-    runCommand('git', ['rev-parse', '--short', 'HEAD'], { cwd: projectPath, timeoutMs: 4000 }),
-    runCommand('git', ['status', '--short'], { cwd: projectPath, timeoutMs: 4000 }),
-    runCommand('git', ['log', '--oneline', '-5'], { cwd: projectPath, timeoutMs: 4000 })
-  ]);
-  const ok = inside.ok && inside.stdout === 'true';
-  return {
-    ok,
-    branch: ok ? branch.stdout : '',
-    commit: ok ? commit.stdout : '',
-    dirty: ok ? Boolean(status.stdout) : false,
-    dirtySummary: ok ? status.stdout.split('\n').filter(Boolean).slice(0, 10) : [],
-    recent: ok ? log.stdout.split('\n').filter(Boolean) : []
-  };
-}
-
-async function resolveEvolutionProject(projectId) {
-  const projects = await listEvolutionProjects({ includeDetails: false });
-  return projects.find((project) => project.id === projectId) || null;
 }
 
 async function normalizeLinkedProjectPath(value = '') {
@@ -3243,318 +3160,28 @@ async function normalizeLinkedProjectPath(value = '') {
   return real;
 }
 
-async function publicEvolutionProject(projectPath, options = {}) {
+async function workspaceProjectSummary(entry) {
+  const projectPath = path.join(PROJECTS_ROOT, entry.name);
   const real = await realpath(projectPath).catch(() => '');
   if (!real || !isInsidePath(PROJECTS_ROOT, real)) return null;
-  const pkg = await packageInfo(real);
-  const configPath = path.join(real, 'evolution.json');
-  const rawConfig = await readJsonFile(configPath, null);
-  const config = normalizeEvolutionConfig(rawConfig || {}, real, pkg);
-  const git = options.includeDetails === false ? null : await projectGitSummary(real);
-  return {
-    id: projectIdFromPath(real),
-    name: config.project || pkg.name || path.basename(real),
-    path: real,
-    relativePath: path.relative(PROJECTS_ROOT, real) || '.',
-    hasConfig: Boolean(rawConfig),
-    config,
-    package: pkg,
-    git
-  };
-}
-
-async function listEvolutionProjects(options = {}) {
-  const entries = await readdir(PROJECTS_ROOT, { withFileTypes: true }).catch(() => []);
-  const projects = [];
-  for (const entry of entries.filter(isProjectCandidate).slice(0, 80)) {
-    const project = await publicEvolutionProject(path.join(PROJECTS_ROOT, entry.name), options);
-    if (project) projects.push(project);
-  }
-  return projects.sort((a, b) => a.name.localeCompare(b.name));
-}
-
-async function initEvolutionProject(projectId) {
-  const project = await resolveEvolutionProject(projectId);
-  if (!project) return null;
-  const full = await publicEvolutionProject(project.path);
-  await writeFile(path.join(project.path, 'evolution.json'), `${JSON.stringify(full.config, null, 2)}\n`, { mode: 0o644 });
-  return publicEvolutionProject(project.path);
-}
-
-async function updateEvolutionConfig(projectId, patch = {}) {
-  const project = await resolveEvolutionProject(projectId);
-  if (!project) return null;
-  const full = await publicEvolutionProject(project.path);
-  const nextPatch = {};
-  if ('objective' in patch) nextPatch.objective = String(patch.objective || '').trim().slice(0, 500);
-  const nextConfig = normalizeEvolutionConfig({
-    ...full.config,
-    ...nextPatch
-  }, project.path, full.package);
-  await writeFile(path.join(project.path, 'evolution.json'), `${JSON.stringify(nextConfig, null, 2)}\n`, { mode: 0o644 });
-  return publicEvolutionProject(project.path);
-}
-
-async function linkedSessionsForProject(projectPath) {
-  const external = await listCodexSessions();
-  return [
-    ...Object.values(state.sessions || {}),
-    ...external
-  ].filter((session) => session.linkedProjectPath === projectPath && !session.trashedAt);
-}
-
-async function projectLinkedHistoryText(projectPath) {
-  const sessions = await linkedSessionsForProject(projectPath);
-  const chunks = [];
-  for (const session of sessions.slice(0, 8)) {
-    chunks.push(`${session.title || ''} ${session.cwd || ''}`);
-    chunks.push(await sessionHistoryMatchText(session));
-  }
-  return chunks.join('\n').slice(-60000);
-}
-
-function hasAnyText(text, words) {
-  return words.some((word) => text.includes(word));
-}
-
-function uniqueObjectiveSuggestions(items) {
-  const seen = new Set();
-  const out = [];
-  for (const item of items) {
-    const text = String(item || '').replace(/\s+/g, ' ').trim();
-    if (!text || seen.has(text)) continue;
-    seen.add(text);
-    out.push(text);
-  }
-  return out.slice(0, 5);
-}
-
-async function suggestEvolutionObjectives(projectId) {
-  const project = await resolveEvolutionProject(projectId);
-  if (!project) return null;
-  const full = await publicEvolutionProject(project.path, { includeDetails: false });
-  const name = full.name || path.basename(full.path);
-  const history = normalizeProjectMatchText([
-    full.config.objective,
-    full.package?.name,
-    full.relativePath,
-    await projectLinkedHistoryText(full.path)
-  ].join('\n'));
-  const suggestions = [];
-
-  if (hasAnyText(history, ['手机', 'mobile', 'ui', '界面', '卡顿', '滚动', '侧边栏', '按钮', '交互'])) {
-    suggestions.push(`持续提升 ${name} 的移动端使用体验，重点优化界面密度、交互流畅度、状态反馈和低卡顿操作。`);
-  }
-  if (hasAnyText(history, ['会话', 'session', '队列', '停止', '运行', '状态', '恢复', '重启', '上下文'])) {
-    suggestions.push(`完善 ${name} 的会话生命周期管理，确保运行状态准确、任务可恢复、队列可控、历史上下文可追踪。`);
-  }
-  if (hasAnyText(history, ['进化', '目标', '关联', '项目', '巡检', '推荐', '自演进', 'loop'])) {
-    suggestions.push(`为 ${name} 建立项目自演进能力，围绕目标、会话关联、巡检建议和低风险优化形成可持续迭代流程。`);
-  }
-  if (hasAnyText(history, ['部署', '发布', '版本', '更新', 'github', 'oss', 'release', '自动升级'])) {
-    suggestions.push(`提升 ${name} 的部署和更新可靠性，确保版本检查、发布分发、自动升级和回滚流程清晰可验证。`);
-  }
-  if (hasAnyText(history, ['图片', '附件', '文件', 'markdown', '表格', '截图', '复制', '分享'])) {
-    suggestions.push(`增强 ${name} 的富内容输入输出能力，让图片、文件、Markdown、表格和分享内容在手机端稳定易用。`);
-  }
-  if (hasAnyText(history, ['skill', '技能', '工具', 'runtime', '运行时', '日志', '诊断'])) {
-    suggestions.push(`强化 ${name} 的工具化和诊断能力，让 Skill、运行时信息、日志和异常排查更容易被发现和使用。`);
-  }
-
-  suggestions.push(`持续提升 ${name} 的稳定性、可维护性和可验证性，优先保障核心流程可靠运行并降低后续迭代风险。`);
-  suggestions.push(`围绕真实使用场景优化 ${name}，把高频操作做得更顺手，把异常状态做得更可诊断。`);
-
-  return {
-    project: full,
-    linkedSessionCount: (await linkedSessionsForProject(full.path)).length,
-    suggestions: uniqueObjectiveSuggestions(suggestions)
-  };
-}
-
-function evolutionPrompt(project, audit = {}) {
-  return [
-    '你是本项目的维护代理。请基于项目自演进配置进行一轮低风险优化。',
-    '',
-    `项目：${project.name}`,
-    `路径：${project.path}`,
-    `自治等级：${project.config.autonomyLevel}`,
-    `目标：${project.config.objective || '未填写，请先根据项目代码和 README 推断。'}`,
-    '',
-    `质量目标：${project.config.qualityGoals.join('；')}`,
-    `允许自动修改：${project.config.allowedAutonomousChanges.join('；')}`,
-    `必须人工确认：${project.config.requiresHumanApproval.join('；')}`,
-    '',
-    '请执行：',
-    '1. 读取 evolution.json、README、最近 git log 和可用日志。',
-    '2. 生成 5 个候选优化项，并按用户影响、风险、成本、可验证性评分。',
-    '3. 只选择一个低风险、高价值、可验证的小任务实现。',
-    '4. 运行项目 checkCommands 中的检查。',
-    '5. 如果涉及必须人工确认的范围，只输出方案，不要修改。',
-    '',
-    audit.candidates?.length ? `本次巡检候选：\n${audit.candidates.map((item, index) => `${index + 1}. ${item.title} - ${item.reason}`).join('\n')}` : ''
-  ].filter(Boolean).join('\n');
-}
-
-async function auditEvolutionProject(projectId) {
-  const project = await resolveEvolutionProject(projectId);
-  if (!project) return null;
-  const full = await publicEvolutionProject(project.path);
-  const candidates = [];
-  if (!full.hasConfig) candidates.push({ title: '初始化 evolution.json', reason: '项目还没有自演进配置。', risk: 'low' });
-  if (full.git?.dirty) candidates.push({ title: '清理或提交工作区改动', reason: `存在 ${full.git.dirtySummary.length} 条未提交改动。`, risk: 'medium' });
-  if (full.config.checkCommands.length === 0) candidates.push({ title: '补充检查命令', reason: '缺少可自动验证的 checkCommands。', risk: 'low' });
-  if (!full.config.objective) candidates.push({ title: '补充项目目标', reason: 'objective 为空，AI 难以判断优化方向。', risk: 'low' });
-  const todo = await runCommand('rg', ['-n', 'TODO|FIXME', '.', '--glob', '!node_modules', '--glob', '!data', '--glob', '!runtime'], { cwd: project.path, timeoutMs: 5000 });
-  const todoCount = todo.ok ? todo.stdout.split('\n').filter(Boolean).length : 0;
-  if (todoCount > 0) candidates.push({ title: '梳理 TODO/FIXME', reason: `检测到 ${todoCount} 条 TODO/FIXME。`, risk: 'low' });
-  if (candidates.length === 0) candidates.push({ title: '进行一轮低风险体验/可靠性巡检', reason: '未发现明确异常，可从日志、测试和 README 寻找小步优化。', risk: 'low' });
-  return {
-    project: full,
-    candidates,
-    prompt: evolutionPrompt(full, { candidates }),
-    checkedAt: nowIso()
-  };
-}
-
-async function runEvolutionChecks(projectId) {
-  const project = await resolveEvolutionProject(projectId);
-  if (!project) return null;
-  const full = await publicEvolutionProject(project.path);
-  const results = [];
-  for (const command of full.config.checkCommands.slice(0, 8)) {
-    const result = await runCommand('/bin/bash', ['-lc', command], { cwd: project.path, timeoutMs: 120000 });
-    results.push({
-      command,
-      ok: result.ok,
-      code: result.code,
-      stdout: result.stdout.slice(-4000),
-      stderr: result.stderr.slice(-4000)
-    });
-    if (!result.ok) break;
-  }
-  return { project: full, results, ok: results.every((item) => item.ok), checkedAt: nowIso() };
-}
-
-function normalizeProjectMatchText(value = '') {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '');
-}
-
-function projectAliases(project) {
-  return [
-    project.name,
-    project.relativePath,
-    path.basename(project.path || ''),
-    project.package?.name
-  ]
-    .map((item) => String(item || '').trim())
-    .filter(Boolean);
-}
-
-async function sessionHistoryMatchText(session) {
+  let packageName = '';
   try {
-    const messages = await displayMessages(session, 140);
-    return messages
-      .slice(-140)
-      .map((message) => [
-        message.role || '',
-        message.text || '',
-        ...(message.files || []).map((file) => file.name || file.path || ''),
-        ...(message.images || []).map((image) => image.name || '')
-      ].join(' '))
-      .join('\n')
-      .slice(-28000);
+    const pkg = JSON.parse(await readFile(path.join(real, 'package.json'), 'utf8'));
+    packageName = String(pkg.name || '').trim();
   } catch {
-    return '';
+    // A project does not need package.json to be selectable.
   }
-}
-
-function bestProjectAliasMatch(projects, text, baseConfidence, reasonPrefix) {
-  const normalizedText = normalizeProjectMatchText(text);
-  if (!normalizedText) return null;
-  let best = null;
-  for (const project of projects) {
-    for (const alias of projectAliases(project)) {
-      const normalizedAlias = normalizeProjectMatchText(alias);
-      if (normalizedAlias.length < 4) continue;
-      if (!normalizedText.includes(normalizedAlias)) continue;
-      const confidence = Math.min(96, baseConfidence + Math.min(8, Math.floor(normalizedAlias.length / 4)));
-      if (!best || confidence > best.confidence || normalizedAlias.length > best.aliasLength) {
-        best = {
-          project,
-          confidence,
-          reason: `${reasonPrefix} ${alias}`,
-          aliasLength: normalizedAlias.length
-        };
-      }
-    }
-  }
-  return best ? { project: best.project, confidence: best.confidence, reason: best.reason } : null;
-}
-
-async function inferLinkedProjectForSession(session, projects) {
-  if (session.linkedProjectPath) return null;
-  const cwd = session.cwd ? path.resolve(session.cwd) : '';
-  const cwdProject = projects
-    .filter((project) => cwd && cwd !== PROJECTS_ROOT && (cwd === project.path || cwd.startsWith(`${project.path}${path.sep}`)))
-    .sort((a, b) => b.path.length - a.path.length)[0];
-  if (cwdProject) {
-    return { project: cwdProject, confidence: 100, reason: '工作目录在项目目录内' };
-  }
-
-  const titleMatch = bestProjectAliasMatch(projects, `${session.title || ''} ${session.cwd || ''}`, 84, '标题匹配');
-  if (titleMatch) return titleMatch;
-
-  const historyText = await sessionHistoryMatchText(session);
-  const historyMatch = bestProjectAliasMatch(projects, historyText, 80, '历史上下文匹配');
-  if (historyMatch) return historyMatch;
-  return null;
-}
-
-async function inferEvolutionSessionLinks({ apply = false } = {}) {
-  const projects = await listEvolutionProjects({ includeDetails: false });
-  const sessions = [
-    ...Object.values(state.sessions || {}),
-    ...(await listCodexSessions())
-  ].filter((session) => !session.trashedAt);
-  const suggestions = [];
-  let applied = 0;
-  for (const session of sessions) {
-    const match = await inferLinkedProjectForSession(session, projects);
-    if (!match) continue;
-    const suggestion = {
-      sessionId: session.id,
-      sessionTitle: session.title || '',
-      sessionCwd: session.cwd || '',
-      projectName: match.project.name,
-      projectPath: match.project.path,
-      confidence: match.confidence,
-      reason: match.reason,
-      applied: false
-    };
-    if (apply && match.confidence >= 82) {
-      if (session.id.startsWith('codex:')) {
-        state.codexSessionProjects ||= {};
-        state.codexSessionProjects[session.codexSessionId] = match.project.path;
-      } else if (state.sessions[session.id]) {
-        state.sessions[session.id].linkedProjectPath = match.project.path;
-        state.sessions[session.id].updatedAt = nowIso();
-      }
-      suggestion.applied = true;
-      applied += 1;
-    }
-    suggestions.push(suggestion);
-  }
-  if (applied > 0) scheduleSave();
   return {
-    ok: true,
-    apply,
-    applied,
-    suggested: suggestions.length,
-    suggestions: suggestions.slice(0, 200),
-    sessions: sortPublicSessions([...Object.values(state.sessions || {}).map(publicSession), ...(await listCodexSessions())])
+    name: packageName || path.basename(real),
+    path: real,
+    relativePath: path.relative(PROJECTS_ROOT, real) || '.'
   };
+}
+
+async function listWorkspaceProjects() {
+  const entries = await readdir(PROJECTS_ROOT, { withFileTypes: true }).catch(() => []);
+  const projects = await Promise.all(entries.filter(isProjectCandidate).slice(0, 80).map(workspaceProjectSummary));
+  return projects.filter(Boolean).sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function appUpdateCheck() {
@@ -4668,14 +4295,34 @@ async function displayMessageRange(session, options = {}) {
 }
 
 async function listCodexSessions() {
+  const now = Date.now();
+  if (codexSessionListCache.loadedAt && now - codexSessionListCache.loadedAt < CODEX_SESSION_LIST_TTL_MS) {
+    return publicCachedCodexSessions(codexSessionListCache.sessions);
+  }
+  if (!codexSessionListPromise) {
+    codexSessionListPromise = scanCodexSessions().finally(() => {
+      codexSessionListPromise = null;
+    });
+  }
+  const sessions = await codexSessionListPromise;
+  return publicCachedCodexSessions(sessions);
+}
+
+function publicCachedCodexSessions(sessions) {
+  const imported = new Set(Object.values(state.sessions || {}).map((session) => session.codexSessionId).filter(Boolean));
+  return sessions
+    .filter((session) => !imported.has(session.codexSessionId))
+    .map(publicExternalSession);
+}
+
+async function scanCodexSessions() {
   const names = await readCodexThreadNames();
   const files = await walkFiles(path.join(CODEX_HOME, 'sessions'));
-  const imported = new Set(Object.values(state.sessions || {}).map((session) => session.codexSessionId).filter(Boolean));
   const byId = new Map();
   for (const file of files) {
     try {
       const session = await readCodexSessionFile(file, names);
-      if (!session || imported.has(session.codexSessionId)) continue;
+      if (!session) continue;
       const existing = byId.get(session.codexSessionId);
       if (!existing || String(session.updatedAt) > String(existing.updatedAt)) {
         byId.set(session.codexSessionId, session);
@@ -4684,9 +4331,10 @@ async function listCodexSessions() {
       // Keep the index usable if an old session file is malformed.
     }
   }
-  return Array.from(byId.values())
-    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
-    .map(publicExternalSession);
+  const sessions = Array.from(byId.values())
+    .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  codexSessionListCache = { loadedAt: Date.now(), sessions };
+  return sessions;
 }
 
 async function importCodexSession(codexSessionId, options = {}) {
@@ -5839,49 +5487,9 @@ async function handleApi(req, res, url) {
   if (url.pathname === '/api/projects') {
     return json(res, 200, {
       roots: [PROJECTS_ROOT, '/root/data/disk/Projects'],
-      defaultCwd: PROJECTS_ROOT
+      defaultCwd: PROJECTS_ROOT,
+      projects: await listWorkspaceProjects()
     });
-  }
-
-  if (url.pathname === '/api/evolution/projects' && req.method === 'GET') {
-    return json(res, 200, { projects: await listEvolutionProjects({ includeDetails: false }) });
-  }
-
-  if (url.pathname === '/api/evolution/session-links/infer' && req.method === 'POST') {
-    const body = await readJson(req).catch(() => ({}));
-    return json(res, 200, await inferEvolutionSessionLinks({ apply: body.apply !== false }));
-  }
-
-  const evolutionMatch = url.pathname.match(/^\/api\/evolution\/projects\/([^/]+)\/(init|audit|check|config|objective-suggestions)$/);
-  if (evolutionMatch && (req.method === 'POST' || req.method === 'PATCH')) {
-    const projectId = decodeURIComponent(evolutionMatch[1]);
-    const action = evolutionMatch[2];
-    if (action === 'init' && req.method === 'POST') {
-      const project = await initEvolutionProject(projectId);
-      if (!project) return json(res, 404, { error: 'project_not_found' });
-      return json(res, 200, { project });
-    }
-    if (action === 'audit' && req.method === 'POST') {
-      const audit = await auditEvolutionProject(projectId);
-      if (!audit) return json(res, 404, { error: 'project_not_found' });
-      return json(res, 200, audit);
-    }
-    if (action === 'check' && req.method === 'POST') {
-      const result = await runEvolutionChecks(projectId);
-      if (!result) return json(res, 404, { error: 'project_not_found' });
-      return json(res, 200, result);
-    }
-    if (action === 'config' && req.method === 'PATCH') {
-      const body = await readJson(req).catch(() => ({}));
-      const project = await updateEvolutionConfig(projectId, body);
-      if (!project) return json(res, 404, { error: 'project_not_found' });
-      return json(res, 200, { project });
-    }
-    if (action === 'objective-suggestions' && req.method === 'POST') {
-      const result = await suggestEvolutionObjectives(projectId);
-      if (!result) return json(res, 404, { error: 'project_not_found' });
-      return json(res, 200, result);
-    }
   }
 
   if (url.pathname === '/api/sessions' && req.method === 'GET') {

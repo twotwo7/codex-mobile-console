@@ -78,6 +78,8 @@ const state = {
   localRuntimeSessionId: '',
   skills: [],
   skillsLoadedAt: 0,
+  workspaceProjects: [],
+  workspaceProjectsLoadedAt: 0,
   skillDialogMode: 'quick',
   installPromptEvent: null,
   installStatus: '',
@@ -86,12 +88,6 @@ const state = {
   shareSelectedMessages: new Map(),
   shareImageBlob: null,
   shareImageUrl: '',
-  evolutionProjects: [],
-  evolutionAudits: new Map(),
-  evolutionChecks: new Map(),
-  evolutionObjectiveSuggestions: new Map(),
-  evolutionLoadedAt: 0,
-  evolutionEditingId: '',
   secretary: null,
   secretaryPollTimer: null,
   secretarySeenNotifications: new Set(storageJsonGet('cmc.secretarySeenNotifications', []))
@@ -112,8 +108,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '201';
-const SW_CACHE_VERSION = 'codex-console-v218';
+const APP_ASSET_VERSION = '207';
+const SW_CACHE_VERSION = 'codex-console-v225';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -194,7 +190,6 @@ const el = {
   drawerSessionsPanel: document.querySelector('#drawerSessionsPanel'),
   drawerSecretaryPanel: document.querySelector('#drawerSecretaryPanel'),
   drawerSkillsPanel: document.querySelector('#drawerSkillsPanel'),
-  drawerEvolutionPanel: document.querySelector('#drawerEvolutionPanel'),
   drawerSettingsPanel: document.querySelector('#drawerSettingsPanel'),
   drawerSettingsButton: document.querySelector('#drawerSettingsButton'),
   sessionList: document.querySelector('#sessionList'),
@@ -244,7 +239,6 @@ const el = {
   killSecretaryButton: document.querySelector('#killSecretaryButton'),
   secretaryTaskButtons: [...document.querySelectorAll('[data-secretary-task]')],
   skillManagerButton: document.querySelector('#skillManagerButton'),
-  evolutionManagerButton: document.querySelector('#evolutionManagerButton'),
   logoutButton: document.querySelector('#logoutButton'),
   topbar: document.querySelector('.topbar'),
   activeTitle: document.querySelector('#activeTitle'),
@@ -362,11 +356,6 @@ const el = {
   drawerRefreshSkillsButton: document.querySelector('#drawerRefreshSkillsButton'),
   drawerSkillStatus: document.querySelector('#drawerSkillStatus'),
   drawerSkillList: document.querySelector('#drawerSkillList'),
-  evolutionSearch: document.querySelector('#evolutionSearch'),
-  autoLinkSessionsButton: document.querySelector('#autoLinkSessionsButton'),
-  refreshEvolutionButton: document.querySelector('#refreshEvolutionButton'),
-  evolutionStatus: document.querySelector('#evolutionStatus'),
-  evolutionList: document.querySelector('#evolutionList'),
   skillDetailDialog: document.querySelector('#skillDetailDialog'),
   closeSkillDetailDialog: document.querySelector('#closeSkillDetailDialog'),
   skillDetailTitle: document.querySelector('#skillDetailTitle'),
@@ -713,6 +702,22 @@ function loadCachedSessions() {
   state.sessionListDirty = true;
 }
 
+function hydrateCachedSessionView() {
+  loadCachedSessions();
+  const visibleSessions = state.sessions.filter((session) => !session.trashedAt);
+  if (state.activeId && !visibleSessions.some((session) => session.id === state.activeId)) {
+    setActiveSessionId('');
+  }
+  if (!state.activeId) {
+    const firstWebSession = visibleSessions.find((session) => session.source !== 'codex');
+    if (firstWebSession) setActiveSessionId(firstWebSession.id);
+  }
+  if (state.activeId) loadMessages(state.activeId);
+  renderSessions({ force: true });
+  renderActive({ stickToBottom: true });
+  return Boolean(state.sessions.length);
+}
+
 function saveMessages(id) {
   const messages = trimMessagesForStorage(mergeMessages([], state.messages.get(id) || []));
   const cached = messages.slice(-MAX_BROWSER_CACHED_MESSAGES).map(cacheSafeMessage);
@@ -860,6 +865,23 @@ function isMessageCacheFresh(sessionId, session) {
     && Boolean(page?.beforeSeq || messages.some((message) => message.orderSeq))
     && page?.sessionUpdatedAt === (session.activityAt || session.updatedAt)
     && Number(page?.offset || 0) >= Math.min(firstPageLimit(), messages.length);
+}
+
+function messagesChangedForRender(previous = [], next = []) {
+  if (previous.length !== next.length) return true;
+  for (let index = 0; index < previous.length; index += 1) {
+    const left = previous[index] || {};
+    const right = next[index] || {};
+    if ((left.id || '') !== (right.id || '')
+      || Number(left.seq || 0) !== Number(right.seq || 0)
+      || (left.role || '') !== (right.role || '')
+      || (left.text || '') !== (right.text || '')
+      || (left.runState || '') !== (right.runState || '')
+      || Boolean(left.streaming) !== Boolean(right.streaming)
+      || (left.images?.length || 0) !== (right.images?.length || 0)
+      || (left.files?.length || 0) !== (right.files?.length || 0)) return true;
+  }
+  return false;
 }
 
 function sessionMessagesUrl(sessionId, params = {}) {
@@ -1087,11 +1109,6 @@ function setDrawer(open) {
       if (el.secretarySummary) el.secretarySummary.textContent = error.message || '秘书状态加载失败';
     });
   }
-  if (open && state.drawerPanel === 'evolution') {
-    loadEvolutionProjects().catch((error) => {
-      if (el.evolutionList) el.evolutionList.textContent = error.message || '加载失败';
-    });
-  }
 }
 
 function resetSessionRenderLimit() {
@@ -1118,31 +1135,27 @@ function setSessionViewMode(mode) {
 }
 
 function setDrawerPanel(panel) {
-  state.drawerPanel = ['ops', 'sessions', 'secretary', 'skills', 'evolution', 'settings'].includes(panel) ? panel : 'ops';
+  state.drawerPanel = ['ops', 'sessions', 'secretary', 'skills', 'settings'].includes(panel) ? panel : 'ops';
   const opsActive = state.drawerPanel === 'ops';
   const sessionsActive = state.drawerPanel === 'sessions';
   const secretaryActive = state.drawerPanel === 'secretary';
   const skillsActive = state.drawerPanel === 'skills';
-  const evolutionActive = state.drawerPanel === 'evolution';
   const settingsActive = state.drawerPanel === 'settings';
-  if (el.drawerTitle) el.drawerTitle.textContent = opsActive ? '中枢' : settingsActive ? '设置' : evolutionActive ? '进化' : skillsActive ? 'Skills' : secretaryActive ? '秘书' : '会话';
+  if (el.drawerTitle) el.drawerTitle.textContent = opsActive ? '中枢' : settingsActive ? '设置' : skillsActive ? 'Skills' : secretaryActive ? '秘书' : '会话';
   el.opsManagerButton?.classList.toggle('active', opsActive);
   el.drawerSessionsButton.classList.toggle('active', sessionsActive);
   el.secretaryManagerButton?.classList.toggle('active', secretaryActive);
   el.skillManagerButton.classList.toggle('active', skillsActive);
-  el.evolutionManagerButton?.classList.toggle('active', evolutionActive);
   el.drawerSettingsButton.classList.toggle('active', settingsActive);
   el.opsManagerButton?.setAttribute('aria-selected', String(opsActive));
   el.drawerSessionsButton.setAttribute('aria-selected', String(sessionsActive));
   el.secretaryManagerButton?.setAttribute('aria-selected', String(secretaryActive));
   el.skillManagerButton.setAttribute('aria-selected', String(skillsActive));
-  el.evolutionManagerButton?.setAttribute('aria-selected', String(evolutionActive));
   el.drawerSettingsButton.setAttribute('aria-selected', String(settingsActive));
   el.drawerOpsPanel?.classList.toggle('active', opsActive);
   el.drawerSessionsPanel.classList.toggle('active', sessionsActive);
   el.drawerSecretaryPanel?.classList.toggle('active', secretaryActive);
   el.drawerSkillsPanel.classList.toggle('active', skillsActive);
-  el.drawerEvolutionPanel?.classList.toggle('active', evolutionActive);
   el.drawerSettingsPanel.classList.toggle('active', settingsActive);
   el.logoutButton.hidden = !settingsActive;
   if (opsActive) {
@@ -1156,10 +1169,6 @@ function setDrawerPanel(panel) {
   } else if (skillsActive) {
     loadSkills().catch((error) => {
       el.drawerSkillList.textContent = error.message || '加载失败';
-    });
-  } else if (evolutionActive) {
-    loadEvolutionProjects().catch((error) => {
-      if (el.evolutionList) el.evolutionList.textContent = error.message || '加载失败';
     });
   } else if (settingsActive) {
     selectSettingsPage('ui');
@@ -1405,7 +1414,7 @@ async function killSecretary() {
   el.secretarySummary.textContent = '正在停止所有秘书动作...';
   try {
     mergeSecretaryPayload(await api('/api/secretary/kill', { method: 'POST' }));
-    if (state.activeId === state.secretary?.session?.id) await loadSession(state.activeId, { showLoading: false });
+    if (state.activeId === state.secretary?.session?.id) await loadSession(state.activeId);
   } catch (error) {
     el.secretarySummary.textContent = error.message || '停止失败';
     el.killSecretaryButton.disabled = false;
@@ -1736,7 +1745,7 @@ function formatSessionCwd(cwd = '') {
 
 function projectNameFromPath(projectPath = '') {
   if (!projectPath) return '';
-  const project = state.evolutionProjects.find((item) => item.path === projectPath);
+  const project = state.workspaceProjects.find((item) => item.path === projectPath);
   return project?.name || projectPath.split('/').filter(Boolean).pop() || projectPath;
 }
 
@@ -2980,16 +2989,6 @@ function renderFavoriteEmpty() {
   empty.className = 'favorite-empty';
   empty.textContent = '暂无收藏';
   return empty;
-}
-
-function renderSessionLoading(text = '加载会话...') {
-  state.renderingMessages = false;
-  state.userScrolledDuringRender = false;
-  el.emptyState.hidden = true;
-  el.messagePane.hidden = false;
-  el.messagePane.innerHTML = `<div class="session-loading">${escapeHtml(text)}</div>`;
-  removeQueuePanel();
-  removeRunIndicator();
 }
 
 function renderRunIndicator(session) {
@@ -4339,274 +4338,6 @@ async function refreshSkillsInBackground() {
   }
 }
 
-function filteredEvolutionProjects() {
-  const query = String(el.evolutionSearch?.value || '').trim().toLowerCase();
-  if (!query) return state.evolutionProjects;
-  return state.evolutionProjects.filter((project) => [
-    project.name,
-    project.relativePath,
-    project.package?.name,
-    project.config?.objective
-  ].some((value) => String(value || '').toLowerCase().includes(query)));
-}
-
-function evolutionBadge(project) {
-  const badges = [];
-  badges.push(project.hasConfig ? '已配置' : '待初始化');
-  if (project.config?.autonomyLevel) badges.push(project.config.autonomyLevel);
-  if (project.package?.version) badges.push(`v${project.package.version}`);
-  if (project.git) badges.push(project.git.dirty ? '有改动' : '干净');
-  return badges;
-}
-
-function renderEvolutionProjects() {
-  if (!el.evolutionList) return;
-  const projects = filteredEvolutionProjects();
-  if (!projects.length) {
-    el.evolutionList.innerHTML = '<p class="skill-empty">没有匹配的项目。</p>';
-    return;
-  }
-  el.evolutionList.innerHTML = projects.map((project) => {
-    const audit = state.evolutionAudits.get(project.id);
-    const check = state.evolutionChecks.get(project.id);
-    const objective = project.config?.objective || '未填写目标';
-    const editingObjective = state.evolutionEditingId === project.id;
-    const commands = project.config?.checkCommands || [];
-    const candidates = audit?.candidates || [];
-    const checkRows = check?.results || [];
-    const linkedCount = state.sessions.filter((session) => session.linkedProjectPath === project.path).length;
-    const objectiveSuggestions = state.evolutionObjectiveSuggestions.get(project.id) || [];
-    return `
-      <article class="evolution-card" data-project-id="${escapeHtml(project.id)}">
-        <div class="evolution-card-head">
-          <div class="evolution-title">
-            <strong>${escapeHtml(project.name || project.relativePath || '未命名项目')}</strong>
-            <span>${escapeHtml(project.relativePath || project.path || '')}</span>
-          </div>
-          <div class="evolution-badges">
-            ${evolutionBadge(project).map((badge) => `<span>${escapeHtml(badge)}</span>`).join('')}
-          </div>
-        </div>
-        ${editingObjective ? `
-          <form class="evolution-objective-form" data-evolution-objective-form>
-            <textarea name="objective" rows="3" maxlength="500" placeholder="例如：持续提升手机端 Codex 控制台的稳定性、性能和远程开发体验。">${escapeHtml(project.config?.objective || '')}</textarea>
-            <div>
-              <button class="ghost-button inline" type="button" data-evolution-action="save-objective">保存</button>
-              <button class="ghost-button inline" type="button" data-evolution-action="cancel-objective">取消</button>
-            </div>
-          </form>
-        ` : `
-          <div class="evolution-objective-row">
-            <p class="evolution-objective">${escapeHtml(objective)}</p>
-            <button class="evolution-icon-button" type="button" data-evolution-action="edit-objective" aria-label="编辑项目目标" title="编辑目标">✎</button>
-          </div>
-        `}
-        <div class="evolution-meta">
-          <span>检查 ${escapeHtml(String(commands.length || 0))} 项</span>
-          ${linkedCount ? `<span>关联会话 ${escapeHtml(String(linkedCount))}</span>` : ''}
-          ${audit?.checkedAt ? `<span>巡检 ${escapeHtml(formatTime(audit.checkedAt))}</span>` : ''}
-          ${check?.checkedAt ? `<span>检查 ${escapeHtml(formatTime(check.checkedAt))}</span>` : ''}
-        </div>
-        ${candidates.length ? `
-          <div class="evolution-candidates">
-            ${candidates.slice(0, 4).map((item) => `
-              <div>
-                <strong>${escapeHtml(item.title || '候选项')}</strong>
-                <span>${escapeHtml(item.reason || '')}</span>
-              </div>
-            `).join('')}
-          </div>
-        ` : ''}
-        ${checkRows.length ? `
-          <div class="evolution-checks ${check.ok ? 'ok' : 'failed'}">
-            ${checkRows.map((item) => `
-              <div>
-                <span>${item.ok ? '通过' : '失败'}</span>
-                <code>${escapeHtml(item.command || '')}</code>
-              </div>
-            `).join('')}
-          </div>
-        ` : ''}
-        ${objectiveSuggestions.length ? `
-          <div class="evolution-suggestions">
-            ${objectiveSuggestions.map((item, index) => `
-              <div>
-                <span>${escapeHtml(item)}</span>
-                <button class="ghost-button inline" type="button" data-evolution-action="use-objective-suggestion" data-suggestion-index="${escapeHtml(String(index))}">使用</button>
-              </div>
-            `).join('')}
-          </div>
-        ` : ''}
-        <div class="evolution-actions">
-          <button class="ghost-button inline" type="button" data-evolution-action="init">${project.hasConfig ? '更新配置' : '初始化'}</button>
-          <button class="ghost-button inline" type="button" data-evolution-action="suggest-objectives">目标建议</button>
-          <button class="ghost-button inline" type="button" data-evolution-action="audit">巡检</button>
-          <button class="ghost-button inline" type="button" data-evolution-action="check">检查</button>
-          <button class="ghost-button inline" type="button" data-evolution-action="copy">复制提示词</button>
-        </div>
-      </article>
-    `;
-  }).join('');
-}
-
-async function loadEvolutionProjects(force = false) {
-  if (!el.evolutionList) return;
-  const fresh = Date.now() - state.evolutionLoadedAt < 60 * 1000;
-  if (!force && state.evolutionProjects.length && fresh) {
-    renderEvolutionProjects();
-    return;
-  }
-  el.evolutionStatus.textContent = '正在读取项目列表...';
-  el.evolutionList.textContent = '加载中...';
-  const data = await api('/api/evolution/projects', { timeoutMs: 15000 });
-  state.evolutionProjects = data.projects || [];
-  state.evolutionLoadedAt = Date.now();
-  el.evolutionStatus.textContent = `发现 ${state.evolutionProjects.length} 个项目。先巡检，再复制提示词给对应 Codex 会话执行。`;
-  renderEvolutionProjects();
-}
-
-async function autoLinkEvolutionSessions() {
-  if (!el.autoLinkSessionsButton) return;
-  el.autoLinkSessionsButton.disabled = true;
-  el.evolutionStatus.textContent = '正在推荐并应用会话关联...';
-  try {
-    const data = await api('/api/evolution/session-links/infer', {
-      method: 'POST',
-      timeoutMs: 30000,
-      body: JSON.stringify({ apply: true })
-    });
-    if (Array.isArray(data.sessions)) {
-      state.sessions = data.sessions;
-      saveSessionCache();
-    }
-    el.evolutionStatus.textContent = data.applied
-      ? `已自动关联 ${data.applied} 个会话，推荐 ${data.suggested || data.applied} 条。`
-      : `没有新的高置信度关联；推荐 ${data.suggested || 0} 条。`;
-    renderSessions({ force: true });
-    renderEvolutionProjects();
-    renderActive({ messages: false });
-  } catch (error) {
-    el.evolutionStatus.textContent = error.message || '推荐关联失败';
-  } finally {
-    el.autoLinkSessionsButton.disabled = false;
-  }
-}
-
-function mergeEvolutionProject(project) {
-  if (!project?.id) return;
-  const index = state.evolutionProjects.findIndex((item) => item.id === project.id);
-  if (index >= 0) {
-    state.evolutionProjects.splice(index, 1, project);
-  } else {
-    state.evolutionProjects.push(project);
-    state.evolutionProjects.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
-  }
-}
-
-async function initEvolutionProject(id) {
-  el.evolutionStatus.textContent = '正在写入 evolution.json...';
-  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/init`, { method: 'POST', timeoutMs: 20000 });
-  mergeEvolutionProject(data.project);
-  el.evolutionStatus.textContent = '已初始化项目自演进配置。';
-  renderEvolutionProjects();
-}
-
-async function auditEvolutionProject(id) {
-  el.evolutionStatus.textContent = '正在巡检项目...';
-  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/audit`, { method: 'POST', timeoutMs: 25000 });
-  mergeEvolutionProject(data.project);
-  state.evolutionAudits.set(id, data);
-  el.evolutionStatus.textContent = `巡检完成，生成 ${data.candidates?.length || 0} 个候选项。`;
-  renderEvolutionProjects();
-  return data;
-}
-
-async function checkEvolutionProject(id) {
-  el.evolutionStatus.textContent = '正在运行项目检查...';
-  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/check`, { method: 'POST', timeoutMs: 130000 });
-  mergeEvolutionProject(data.project);
-  state.evolutionChecks.set(id, data);
-  el.evolutionStatus.textContent = data.ok ? '检查通过。' : '检查失败，请先查看命令结果或复制提示词让 Codex 修复。';
-  renderEvolutionProjects();
-}
-
-async function saveEvolutionObjective(id, objective) {
-  el.evolutionStatus.textContent = '正在保存项目目标...';
-  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/config`, {
-    method: 'PATCH',
-    timeoutMs: 20000,
-    body: JSON.stringify({ objective })
-  });
-  mergeEvolutionProject(data.project);
-  state.evolutionEditingId = '';
-  state.evolutionAudits.delete(id);
-  el.evolutionStatus.textContent = objective.trim() ? '项目目标已保存。建议重新巡检一次。' : '项目目标已清空。';
-  renderEvolutionProjects();
-}
-
-async function suggestEvolutionObjectives(id) {
-  el.evolutionStatus.textContent = '正在分析关联会话并生成目标建议...';
-  const data = await api(`/api/evolution/projects/${encodeURIComponent(id)}/objective-suggestions`, {
-    method: 'POST',
-    timeoutMs: 45000
-  });
-  mergeEvolutionProject(data.project);
-  state.evolutionObjectiveSuggestions.set(id, data.suggestions || []);
-  el.evolutionStatus.textContent = data.suggestions?.length
-    ? `已生成 ${data.suggestions.length} 条目标建议，分析关联会话 ${data.linkedSessionCount || 0} 个。`
-    : '暂时没有生成目标建议。';
-  renderEvolutionProjects();
-}
-
-async function copyEvolutionPrompt(id) {
-  let audit = state.evolutionAudits.get(id);
-  if (!audit?.prompt) audit = await auditEvolutionProject(id);
-  await navigator.clipboard?.writeText(audit.prompt || '');
-  el.evolutionStatus.textContent = '已复制自演进提示词，可粘贴到目标项目的 Codex 会话。';
-}
-
-async function handleEvolutionAction(event) {
-  const button = event.target.closest('[data-evolution-action]');
-  if (!button) return;
-  const card = button.closest('[data-project-id]');
-  const id = card?.dataset.projectId;
-  if (!id) return;
-  const action = button.dataset.evolutionAction;
-  if (action === 'edit-objective') {
-    state.evolutionEditingId = id;
-    renderEvolutionProjects();
-    el.evolutionList.querySelector(`[data-project-id="${CSS.escape(id)}"] textarea[name="objective"]`)?.focus();
-    return;
-  }
-  if (action === 'cancel-objective') {
-    state.evolutionEditingId = '';
-    renderEvolutionProjects();
-    return;
-  }
-  button.disabled = true;
-  try {
-    if (action === 'use-objective-suggestion') {
-      const suggestions = state.evolutionObjectiveSuggestions.get(id) || [];
-      const index = Number(button.dataset.suggestionIndex || -1);
-      const objective = suggestions[index] || '';
-      if (objective) await saveEvolutionObjective(id, objective);
-    }
-    if (action === 'save-objective') {
-      const textarea = card.querySelector('textarea[name="objective"]');
-      await saveEvolutionObjective(id, textarea?.value || '');
-    }
-    if (action === 'suggest-objectives') await suggestEvolutionObjectives(id);
-    if (action === 'init') await initEvolutionProject(id);
-    if (action === 'audit') await auditEvolutionProject(id);
-    if (action === 'check') await checkEvolutionProject(id);
-    if (action === 'copy') await copyEvolutionPrompt(id);
-  } catch (error) {
-    el.evolutionStatus.textContent = error.message || '操作失败';
-  } finally {
-    button.disabled = false;
-  }
-}
-
 async function openSkillDialog() {
   state.skillDialogMode = 'quick';
   if (el.skillDialogHint) {
@@ -4728,9 +4459,9 @@ async function refreshSessions(options = {}) {
     setActiveSessionId(state.activeId);
     renderSessions();
     if (state.activeId && options.messages !== false) {
-      renderActive({ messages: false });
-      renderSessionLoading();
-      await loadSession(state.activeId, { showLoading: false });
+      loadMessages(state.activeId);
+      renderActive({ stickToBottom: true });
+      await loadSession(state.activeId);
     } else {
       renderActive({ messages: false });
     }
@@ -4746,23 +4477,22 @@ async function refreshSessions(options = {}) {
 
 window.cmcAfterLogin = async function cmcAfterLogin() {
   setAuthView(true);
+  hydrateCachedSessionView();
   await refreshSessions();
-  await loadSecretary({ notify: false }).catch(() => {});
-  startSecretaryPolling();
+  scheduleIdle(() => {
+    loadSecretary({ notify: false }).catch(() => {});
+    startSecretaryPolling();
+  }, 1200);
 };
 
 async function loadSession(id, options = {}) {
   recordFrontendEvent('session.load_start', `${id} full:${options.full === true}`);
   lockInitialBottom(id);
-  if (options.showLoading !== false && state.activeId === id) {
-    renderActive({ messages: false });
-    renderSessionLoading();
-  }
+  loadMessages(id);
   try {
     const knownSession = state.sessions.find((item) => item.id === id);
     if (options.full !== true && isMessageCacheFresh(id, knownSession)) {
-      renderSessions();
-      renderActive({ stickToBottom: true });
+      renderActive({ messages: false, stickToBottom: true });
       connectEvents(id);
       startContextRefreshLoop();
       scheduleResourceCleanup();
@@ -4772,20 +4502,21 @@ async function loadSession(id, options = {}) {
     const limit = options.full === true ? maxHistoryLimit() : firstPageLimit();
     const data = await api(sessionMessagesUrl(id, { limit }));
     const session = data.session || { id };
-    mergeSessionSnapshot(session);
-    if (data.view) mergeSessionView(data.view, id);
+    let sessionChanged = mergeSessionSnapshot(session);
+    if (data.view) sessionChanged = mergeSessionView(data.view, id) || sessionChanged;
     const cached = state.messages.get(id) || [];
     const merged = options.full === true
       ? mergeMessages([], data.messages || [])
       : mergeMessages(cached, data.messages || []);
     const trimmed = trimMessagesForStorage(merged);
+    const messagesChanged = messagesChangedForRender(cached, trimmed);
     state.messages.set(id, trimmed);
     state.lastSeq.set(id, lastRealSeq(trimmed));
     setMessagePage(id, data, { preserveOffset: options.full !== true });
     saveSessionCache();
     saveMessages(id);
-    renderSessions();
-    renderActive({ stickToBottom: true });
+    if (sessionChanged) renderSessions();
+    renderActive({ messages: messagesChanged, stickToBottom: true });
     connectEvents(id);
     startContextRefreshLoop();
     scheduleResourceCleanup();
@@ -5013,10 +4744,10 @@ async function selectSession(id) {
   }
   setActiveSessionId(id);
   setDrawer(false);
+  loadMessages(id);
   renderSessions();
-  renderActive({ messages: false });
-  renderSessionLoading();
-  await loadSession(id, { showLoading: false });
+  renderActive({ stickToBottom: true });
+  await loadSession(id);
 }
 
 async function importExternalSession(codexSessionId) {
@@ -5031,6 +4762,8 @@ async function importExternalSession(codexSessionId) {
     saveSessionCache();
     setDrawer(false);
     renderSessions();
+    loadMessages(state.activeId);
+    renderActive({ stickToBottom: true });
     await loadSession(state.activeId);
   } catch (error) {
     alert(error.message || '导入失败');
@@ -5205,12 +4938,12 @@ function renderSessionProjectOptions(selectedPath = '') {
   if (!select) return;
   const current = String(selectedPath || '');
   const options = ['<option value="">未关联项目</option>'];
-  for (const project of state.evolutionProjects) {
+  for (const project of state.workspaceProjects) {
     const selected = project.path === current ? ' selected' : '';
     const label = `${project.name || project.relativePath} · ${project.relativePath || project.path}`;
     options.push(`<option value="${escapeHtml(project.path)}"${selected}>${escapeHtml(label)}</option>`);
   }
-  if (current && !state.evolutionProjects.some((project) => project.path === current)) {
+  if (current && !state.workspaceProjects.some((project) => project.path === current)) {
     options.push(`<option value="${escapeHtml(current)}" selected>${escapeHtml(projectNameFromPath(current))} · ${escapeHtml(formatSessionCwd(current))}</option>`);
   }
   select.innerHTML = options.join('');
@@ -5221,7 +4954,12 @@ async function ensureSessionProjectOptions(selectedPath = '') {
   if (!select) return;
   select.innerHTML = '<option value="">读取项目列表...</option>';
   try {
-    await loadEvolutionProjects();
+    const fresh = state.workspaceProjectsLoadedAt && Date.now() - state.workspaceProjectsLoadedAt < 60000;
+    if (!state.workspaceProjects.length || !fresh) {
+      const data = await api('/api/projects');
+      state.workspaceProjects = data.projects || [];
+      state.workspaceProjectsLoadedAt = Date.now();
+    }
   } catch {
     // A stale selected project can still be saved as empty if project loading fails.
   }
@@ -5467,7 +5205,7 @@ el.shareCaptureButton?.addEventListener('click', async () => {
     return;
   }
   if (!allShareableMessages().length && state.activeId) {
-    await loadSession(state.activeId, { full: true, showLoading: false });
+    await loadSession(state.activeId, { full: true });
   }
   if (!allShareableMessages().length) {
     alert('当前会话还没有可分享的消息。');
@@ -5626,7 +5364,6 @@ el.newSessionButton.addEventListener('click', () => {
   openModal(el.dialog);
 });
 el.skillManagerButton.addEventListener('click', () => setDrawerPanel('skills'));
-el.evolutionManagerButton?.addEventListener('click', () => setDrawerPanel('evolution'));
 el.drawerSettingsButton.addEventListener('click', () => setDrawerPanel('settings'));
 el.commandButton.addEventListener('click', () => {
   skillView.renderCommandList();
@@ -5643,18 +5380,6 @@ el.refreshSkillsButton?.addEventListener('click', () => {
 });
 el.drawerRefreshSkillsButton.addEventListener('click', () => {
   refreshSkillsInBackground();
-});
-el.evolutionSearch?.addEventListener('input', renderEvolutionProjects);
-el.autoLinkSessionsButton?.addEventListener('click', () => {
-  autoLinkEvolutionSessions();
-});
-el.refreshEvolutionButton?.addEventListener('click', () => {
-  loadEvolutionProjects(true).catch((error) => {
-    if (el.evolutionStatus) el.evolutionStatus.textContent = error.message || '刷新失败';
-  });
-});
-el.evolutionList?.addEventListener('click', (event) => {
-  handleEvolutionAction(event);
 });
 el.refreshCodexConfigButton?.addEventListener('click', loadCodexConfigSummary);
 el.refreshCodexAuthButton?.addEventListener('click', loadCodexAuthProfiles);
@@ -5958,9 +5683,12 @@ async function boot() {
   try {
     await api('/api/me');
     setAuthView(true);
+    hydrateCachedSessionView();
     await refreshSessions();
-    await loadSecretary({ notify: false }).catch(() => {});
-    startSecretaryPolling();
+    scheduleIdle(() => {
+      loadSecretary({ notify: false }).catch(() => {});
+      startSecretaryPolling();
+    }, 1200);
   } catch {
     loadCachedSessions();
     if (!navigator.onLine && state.sessions.length) {
