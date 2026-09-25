@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 import { appendFile, copyFile, mkdir, readFile, writeFile, stat, rename, readdir, unlink, statfs, readlink, realpath } from 'node:fs/promises';
 import { chmodSync, copyFileSync, createReadStream, statSync } from 'node:fs';
@@ -36,6 +37,10 @@ const SECRETARY_PROJECT_DIR = path.resolve(process.env.SECRETARY_PROJECT_DIR || 
 const SECRETARY_TASK_FILE = path.join(SECRETARY_PROJECT_DIR, 'data', 'tasks.json');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const CODEX_HOME = process.env.CODEX_HOME || '/root/.codex';
+const CODEX_AUTH_FILE = path.join(CODEX_HOME, 'auth.json');
+const DSH_CREDENTIALS_FILE = process.env.DSH_CREDENTIALS_FILE || '/root/.dsh/.credentials.yaml';
+const DSH_PROXY_BASE_PATH = '/api/dsh/deepseek';
+const DSH_UPSTREAM_BASE_URL = (process.env.DSH_UPSTREAM_BASE_URL || 'https://api.deepseek.com').replace(/\/+$/, '');
 const SKILL_ROOTS = (process.env.SKILL_ROOTS || `${path.join(CODEX_HOME, 'skills')},/root/.agents/skills`)
   .split(',')
   .map((item) => item.trim())
@@ -56,6 +61,16 @@ const DEFAULT_STORAGE_SETTINGS = {
 const DEFAULT_APP_UPDATE_SETTINGS = {
   autoUpdate: false,
   checkIntervalHours: 6
+};
+const DEFAULT_DSH_FALLBACK_SETTINGS = {
+  mode: 'auto',
+  activeKey: 'none',
+  lastSuccessAt: '',
+  lastFailureAt: '',
+  lastFailureCode: '',
+  lastFailureReason: '',
+  fallbackCount: 0,
+  updatedAt: ''
 };
 const MAX_SESSION_RUNS = 200;
 const MAX_RUN_EVENTS = 80;
@@ -221,6 +236,7 @@ async function init() {
     state.sessionArtifacts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
+    state.dshFallback = normalizeDshFallbackSettings(state.dshFallback);
     state.secretary = normalizeSecretaryControl(state.secretary);
     state.codexAuthProfiles ||= {};
     state.nextSeq ||= 1;
@@ -234,6 +250,7 @@ async function init() {
     state.sessionArtifacts ||= {};
     state.storageSettings = normalizeStorageSettings(state.storageSettings);
     state.appUpdateSettings = normalizeAppUpdateSettings(state.appUpdateSettings);
+    state.dshFallback = normalizeDshFallbackSettings(state.dshFallback);
     state.secretary = normalizeSecretaryControl(state.secretary);
     state.codexAuthProfiles ||= {};
     await saveState();
@@ -272,6 +289,22 @@ function normalizeAppUpdateSettings(value = {}) {
     lastAutoCheckAt: String(value.lastAutoCheckAt || ''),
     lastAutoUpdateAt: String(value.lastAutoUpdateAt || ''),
     lastAutoError: String(value.lastAutoError || '').slice(0, 500)
+  };
+}
+
+function normalizeDshFallbackSettings(value = {}) {
+  const mode = ['auto', 'preferred', 'backup'].includes(value.mode) ? value.mode : DEFAULT_DSH_FALLBACK_SETTINGS.mode;
+  return {
+    ...DEFAULT_DSH_FALLBACK_SETTINGS,
+    ...value,
+    mode,
+    activeKey: ['preferred', 'backup', 'none'].includes(value.activeKey) ? value.activeKey : 'none',
+    lastSuccessAt: String(value.lastSuccessAt || ''),
+    lastFailureAt: String(value.lastFailureAt || ''),
+    lastFailureCode: cleanShortString(value.lastFailureCode, 80),
+    lastFailureReason: cleanShortString(value.lastFailureReason, 240),
+    fallbackCount: clampInteger(value.fallbackCount, 0, 1000000, 0),
+    updatedAt: String(value.updatedAt || '')
   };
 }
 
@@ -1212,6 +1245,154 @@ function safeCompare(a, b) {
   const left = Buffer.from(createHash('sha256').update(String(a)).digest('hex'));
   const right = Buffer.from(createHash('sha256').update(String(b)).digest('hex'));
   return timingSafeEqual(left, right);
+}
+
+function isDshLoopbackHost(host = '') {
+  const value = String(host).split(':')[0].replace(/^\[/, '').replace(/\]$/, '');
+  return value === '127.0.0.1' || value === 'localhost' || value === '::1';
+}
+
+function isLoopbackRequest(req) {
+  const address = String(req.socket?.remoteAddress || '').replace(/^::ffff:/, '');
+  return ['127.0.0.1', '::1', 'localhost'].includes(address) && isDshLoopbackHost(req.headers.host || '');
+}
+
+function yamlScalar(value) {
+  const text = String(value || '').trim();
+  const quoted = text.match(/^(?:"([\s\S]*)"|'([\s\S]*)')$/);
+  return (quoted ? quoted[1] ?? quoted[2] : text).replace(/\\([\\"'])/g, '$1');
+}
+
+async function readDshCredential() {
+  try {
+    const text = await readFile(DSH_CREDENTIALS_FILE, 'utf8');
+    const match = text.match(/^\s*DEEPSEEK_API_KEY\s*:\s*(.*?)\s*$/m);
+    return match ? yamlScalar(match[1]) : '';
+  } catch {
+    return '';
+  }
+}
+
+async function readCodexApiKey() {
+  try {
+    const auth = JSON.parse(await readFile(CODEX_AUTH_FILE, 'utf8'));
+    return typeof auth.OPENAI_API_KEY === 'string' ? auth.OPENAI_API_KEY.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+async function dshKeyState() {
+  const [preferred, backup] = await Promise.all([readDshCredential(), readCodexApiKey()]);
+  return { preferred, backup };
+}
+
+function publicDshFallbackStatus(keys = { preferred: '', backup: '' }) {
+  const settings = normalizeDshFallbackSettings(state.dshFallback);
+  return {
+    mode: settings.mode,
+    activeKey: settings.activeKey,
+    preferredConfigured: Boolean(keys.preferred),
+    backupConfigured: Boolean(keys.backup),
+    preferredSource: 'DSH DeepSeek 凭据',
+    backupSource: 'Codex 默认 API Key',
+    lastSuccessAt: settings.lastSuccessAt,
+    lastFailureAt: settings.lastFailureAt,
+    lastFailureCode: settings.lastFailureCode,
+    lastFailureReason: settings.lastFailureReason,
+    fallbackCount: settings.fallbackCount,
+    updatedAt: settings.updatedAt
+  };
+}
+
+function recordDshSuccess(key, usedFallback = false) {
+  state.dshFallback = normalizeDshFallbackSettings({
+    ...state.dshFallback,
+    activeKey: key,
+    lastSuccessAt: nowIso(),
+    updatedAt: nowIso(),
+    ...(usedFallback ? { fallbackCount: Number(state.dshFallback?.fallbackCount || 0) + 1 } : {})
+  });
+  scheduleSave();
+}
+
+function recordDshFailure(code, reason) {
+  state.dshFallback = normalizeDshFallbackSettings({
+    ...state.dshFallback,
+    activeKey: 'none',
+    lastFailureAt: nowIso(),
+    lastFailureCode: code,
+    lastFailureReason: reason,
+    updatedAt: nowIso()
+  });
+  scheduleSave();
+}
+
+function shouldRetryDsh(status) {
+  return status === 401 || status === 403 || status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+async function fetchDshUpstream(pathname, query, body, headers, apiKey) {
+  const target = `${DSH_UPSTREAM_BASE_URL}${pathname}${query || ''}`;
+  return fetch(target, {
+    method: headers.method,
+    headers: {
+      ...headers.values,
+      authorization: `Bearer ${apiKey}`
+    },
+    body: headers.method === 'GET' || headers.method === 'HEAD' ? undefined : body,
+    signal: AbortSignal.timeout(120000)
+  });
+}
+
+async function handleDshProxy(req, res, url) {
+  if (!isLoopbackRequest(req)) return json(res, 403, { error: 'loopback_only' });
+  if (!['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD'].includes(req.method)) return json(res, 405, { error: 'method_not_allowed' });
+  const keys = await dshKeyState();
+  const settings = normalizeDshFallbackSettings(state.dshFallback);
+  const candidates = settings.mode === 'backup'
+    ? [['backup', keys.backup]]
+    : settings.mode === 'preferred'
+      ? [['preferred', keys.preferred]]
+      : [['preferred', keys.preferred], ['backup', keys.backup]];
+  const usable = candidates.filter(([, key]) => key);
+  if (!usable.length) {
+    recordDshFailure('missing_key', '首选和备用 API Key 都未配置');
+    return json(res, 503, { error: 'dsh_key_not_configured' });
+  }
+  const body = req.method === 'GET' || req.method === 'HEAD' ? '' : await readBody(req, 50 * 1024 * 1024);
+  const forwardHeaders = {};
+  for (const [name, value] of Object.entries(req.headers)) {
+    if (['host', 'content-length', 'authorization', 'connection'].includes(name)) continue;
+    if (typeof value === 'string') forwardHeaders[name] = value;
+  }
+  let lastError = null;
+  for (let index = 0; index < usable.length; index += 1) {
+    const [keyName, apiKey] = usable[index];
+    try {
+      const upstream = await fetchDshUpstream(url.pathname.slice(DSH_PROXY_BASE_PATH.length) || '/', url.search, body, {
+        method: req.method,
+        values: forwardHeaders
+      }, apiKey);
+      if (upstream.ok || index === usable.length - 1 || !shouldRetryDsh(upstream.status)) {
+        if (upstream.ok) recordDshSuccess(keyName, index > 0);
+        else recordDshFailure(`upstream_${upstream.status}`, `上游返回 HTTP ${upstream.status}`);
+        res.writeHead(upstream.status, {
+          'cache-control': 'no-store',
+          'content-type': upstream.headers.get('content-type') || 'application/json; charset=utf-8'
+        });
+        if (upstream.body) Readable.fromWeb(upstream.body).pipe(res);
+        else res.end();
+        return;
+      }
+      lastError = `upstream_${upstream.status}`;
+    } catch (error) {
+      lastError = error?.name === 'TimeoutError' ? 'upstream_timeout' : 'upstream_network_error';
+      if (index === usable.length - 1) break;
+    }
+  }
+  recordDshFailure(lastError || 'upstream_failed', '上游请求失败，备用 Key 也未成功');
+  return json(res, 502, { error: 'dsh_upstream_failed', code: lastError || 'upstream_failed' });
 }
 
 function escapeHtml(value) {
@@ -5120,6 +5301,10 @@ async function serveSiteMount(req, res, url) {
 
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/healthz') return json(res, 200, { ok: true });
+  const isDshFallbackApi = url.pathname === `${DSH_PROXY_BASE_PATH}/fallback`;
+  if (!isDshFallbackApi && (url.pathname === DSH_PROXY_BASE_PATH || url.pathname.startsWith(`${DSH_PROXY_BASE_PATH}/`))) {
+    return handleDshProxy(req, res, url);
+  }
 
   if (url.pathname === '/api/login' && req.method === 'POST') {
     const body = await readJson(req);
@@ -5148,6 +5333,24 @@ async function handleApi(req, res, url) {
 
   const auth = requireAuth(req, res);
   if (!auth) return;
+
+  if (url.pathname === '/api/dsh/deepseek/fallback' && req.method === 'GET') {
+    return json(res, 200, publicDshFallbackStatus(await dshKeyState()));
+  }
+
+  if (url.pathname === '/api/dsh/deepseek/fallback' && req.method === 'PATCH') {
+    const body = await readJson(req).catch(() => ({}));
+    if (!['auto', 'preferred', 'backup'].includes(body.mode)) {
+      return json(res, 400, { error: 'invalid_dsh_fallback_mode' });
+    }
+    state.dshFallback = normalizeDshFallbackSettings({
+      ...state.dshFallback,
+      mode: body.mode,
+      updatedAt: nowIso()
+    });
+    scheduleSave();
+    return json(res, 200, publicDshFallbackStatus(await dshKeyState()));
+  }
 
   if (url.pathname === '/api/me') {
     return json(res, 200, { ok: true, expiresAt: auth.session.expiresAt });

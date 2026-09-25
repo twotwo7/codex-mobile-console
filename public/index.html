@@ -11,7 +11,7 @@
     <title>Codex Ops Console</title>
     <link rel="manifest" href="/manifest.json?v=3">
     <link rel="apple-touch-icon" href="/icons/icon-192.png">
-    <link rel="stylesheet" href="/styles.css?v=172">
+    <link rel="stylesheet" href="/styles.css?v=173">
   </head>
   <body>
     <div id="loginView" class="login-view" hidden>
@@ -207,6 +207,22 @@
                   <button id="createDeviceProfileButton" class="ghost-button inline" type="button">添加 ChatGPT 账号</button>
                 </div>
                 <small>ChatGPT 账号会跳转到官方授权页面；授权完成后可自动恢复，不需要在这里输入密码。</small>
+              </div>
+              <div class="codex-auth-card dsh-fallback-card">
+                <div class="storage-head">
+                  <div>
+                    <strong>DSH / DeepSeek API</strong>
+                    <small>DSH 请求经本机代理发送；密钥只在服务器读取，浏览器不会看到真实值。</small>
+                  </div>
+                  <button id="refreshDshFallbackButton" class="ghost-button inline" type="button">刷新</button>
+                </div>
+                <div id="dshFallbackStatus" class="codex-config-summary">加载中...</div>
+                <div class="dsh-fallback-actions" role="group" aria-label="DSH API Key 使用策略">
+                  <button class="ghost-button inline" type="button" data-dsh-mode="auto">自动切换</button>
+                  <button class="ghost-button inline" type="button" data-dsh-mode="preferred">仅首选 Key</button>
+                  <button class="ghost-button inline" type="button" data-dsh-mode="backup">仅备用 Key</button>
+                </div>
+                <small>首选：当前 DSH DeepSeek 凭据；备用：本机 Codex 默认 API Key。只有认证失败、限流、超时、网络错误或 5xx 才会尝试切换。</small>
               </div>
             </section>
             <section class="settings-page" data-settings-page="run">
@@ -844,6 +860,6 @@
         <button class="primary-wide" type="submit">开始官方授权</button>
       </form>
     </dialog>
-    <script src="/app.js?v=210" type="module"></script>
+    <script src="/app.js?v=211" type="module"></script>
   </body>
 </html>

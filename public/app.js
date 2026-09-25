@@ -290,6 +290,9 @@ const el = {
   codexConfigSummary: document.querySelector('#codexConfigSummary'),
   refreshCodexAuthButton: document.querySelector('#refreshCodexAuthButton'),
   codexAuthProfiles: document.querySelector('#codexAuthProfiles'),
+  refreshDshFallbackButton: document.querySelector('#refreshDshFallbackButton'),
+  dshFallbackStatus: document.querySelector('#dshFallbackStatus'),
+  dshFallbackModeButtons: [...document.querySelectorAll('[data-dsh-mode]')],
   createApiKeyProfileButton: document.querySelector('#createApiKeyProfileButton'),
   createDeviceProfileButton: document.querySelector('#createDeviceProfileButton'),
   codexApiKeyDialog: document.querySelector('#codexApiKeyDialog'),
@@ -4250,6 +4253,58 @@ async function loadCodexAuthProfiles() {
   }
 }
 
+function dshFallbackTime(value) {
+  if (!value) return '暂无';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '暂无' : date.toLocaleString();
+}
+
+function renderDshFallbackStatus(data = null) {
+  if (!el.dshFallbackStatus) return;
+  if (!data) {
+    el.dshFallbackStatus.textContent = '加载中...';
+    return;
+  }
+  const keyLabel = { preferred: '首选 Key', backup: '备用 Key', none: '暂无成功请求' }[data.activeKey] || '未知';
+  const modeLabel = { auto: '自动切换', preferred: '仅首选 Key', backup: '仅备用 Key' }[data.mode] || data.mode;
+  const failure = data.lastFailureCode ? `${data.lastFailureCode}${data.lastFailureReason ? `：${data.lastFailureReason}` : ''}` : '暂无';
+  el.dshFallbackStatus.innerHTML = `
+    <div class="dsh-fallback-grid">
+      <div><small>当前策略</small><strong>${escapeHtml(modeLabel)}</strong></div>
+      <div><small>最近有效</small><strong>${escapeHtml(keyLabel)}</strong></div>
+      <div><small>首选 Key</small><strong class="${data.preferredConfigured ? 'status-ok' : 'status-muted'}">${data.preferredConfigured ? '已配置' : '未配置'}</strong></div>
+      <div><small>备用 Key</small><strong class="${data.backupConfigured ? 'status-ok' : 'status-muted'}">${data.backupConfigured ? '已配置' : '未配置'}</strong></div>
+      <div><small>最近成功</small><strong>${escapeHtml(dshFallbackTime(data.lastSuccessAt))}</strong></div>
+      <div><small>切换次数</small><strong>${escapeHtml(String(data.fallbackCount || 0))}</strong></div>
+    </div>
+    <small class="dsh-fallback-failure">最近失败：${escapeHtml(failure)} · ${escapeHtml(dshFallbackTime(data.lastFailureAt))}</small>
+  `;
+  for (const button of el.dshFallbackModeButtons) {
+    const active = button.dataset.dshMode === data.mode;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+}
+
+async function loadDshFallbackStatus() {
+  if (!el.dshFallbackStatus) return;
+  renderDshFallbackStatus(null);
+  try {
+    renderDshFallbackStatus(await api('/api/dsh/deepseek/fallback', { timeoutMs: 15000 }));
+  } catch (error) {
+    el.dshFallbackStatus.textContent = error.message || '读取 DSH API 状态失败';
+  }
+}
+
+async function setDshFallbackMode(mode) {
+  const data = await api('/api/dsh/deepseek/fallback', {
+    method: 'PATCH',
+    body: { mode },
+    timeoutMs: 15000
+  });
+  renderDshFallbackStatus(data);
+}
+
 async function createCodexProfile(mode) {
   const dialog = mode === 'device' ? el.codexDeviceDialog : el.codexApiKeyDialog;
   if (dialog) openModal(dialog);
@@ -5388,6 +5443,12 @@ el.drawerRefreshSkillsButton.addEventListener('click', () => {
 });
 el.refreshCodexConfigButton?.addEventListener('click', loadCodexConfigSummary);
 el.refreshCodexAuthButton?.addEventListener('click', loadCodexAuthProfiles);
+el.refreshDshFallbackButton?.addEventListener('click', loadDshFallbackStatus);
+for (const button of el.dshFallbackModeButtons) {
+  button.addEventListener('click', () => setDshFallbackMode(button.dataset.dshMode).catch((error) => {
+    if (el.dshFallbackStatus) el.dshFallbackStatus.textContent = error.message || '保存 DSH 策略失败';
+  }));
+}
 el.createApiKeyProfileButton?.addEventListener('click', () => createCodexProfile('apikey'));
 el.createDeviceProfileButton?.addEventListener('click', () => createCodexProfile('device'));
 el.closeCodexApiKeyDialog?.addEventListener('click', () => closeModal(el.codexApiKeyDialog));
@@ -5445,6 +5506,7 @@ function selectSettingsPage(page) {
   }
   if (page === 'account') {
     loadCodexAuthProfiles();
+    loadDshFallbackStatus();
   } else if (page === 'storage') {
     loadStorageStats().catch((error) => {
       el.storageStats.textContent = error.message || '加载失败';
