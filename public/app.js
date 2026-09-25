@@ -108,8 +108,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '209';
-const SW_CACHE_VERSION = 'codex-console-v227';
+const APP_ASSET_VERSION = '210';
+const SW_CACHE_VERSION = 'codex-console-v228';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -124,7 +124,7 @@ const DEFAULT_RUN_CONFIG = {
   ignoreRules: false
 };
 
-const MODEL_OPTIONS = new Set(['', 'gpt-5.5', 'gpt-5.4', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-4.1']);
+const MODEL_OPTIONS = new Set(['', 'gpt-6-astra', 'gpt-5.5', 'gpt-5.4', 'gpt-5.1', 'gpt-5.1-codex', 'gpt-4.1']);
 const getSessionSearchText = createSearchTextCache();
 
 const frontendEvents = createFrontendEvents({
