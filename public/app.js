@@ -108,8 +108,8 @@ const DESKTOP_MESSAGE_CHUNK = 40;
 const SESSION_RENDER_STEP = 40;
 const MAX_LOCAL_MESSAGE_CACHE_BYTES = 1_200_000;
 const LOCAL_CACHE_CLEANUP_BATCH = 3;
-const APP_ASSET_VERSION = '210';
-const SW_CACHE_VERSION = 'codex-console-v228';
+const APP_ASSET_VERSION = '212';
+const SW_CACHE_VERSION = 'codex-console-v230';
 
 const DEFAULT_RUN_CONFIG = {
   model: '',
@@ -705,15 +705,31 @@ function loadCachedSessions() {
   state.sessionListDirty = true;
 }
 
-function hydrateCachedSessionView() {
+function isSecretarySession(session) {
+  return session?.kind === 'secretary' || session?.autonomous === true || session?.title === '专家秘书';
+}
+
+function defaultSessionCandidate(sessions = []) {
+  const visible = sessions.filter((session) => !session.trashedAt);
+  return visible.find((session) => session.source !== 'codex' && !isSecretarySession(session))
+    || visible.find((session) => session.source !== 'codex')
+    || visible[0]
+    || null;
+}
+
+function hydrateCachedSessionView(options = {}) {
   loadCachedSessions();
   const visibleSessions = state.sessions.filter((session) => !session.trashedAt);
-  if (state.activeId && !visibleSessions.some((session) => session.id === state.activeId)) {
-    setActiveSessionId('');
+  const activeSession = visibleSessions.find((session) => session.id === state.activeId);
+  const defaultSession = defaultSessionCandidate(state.sessions);
+  if (state.activeId && (!activeSession || (options.initial === true && isSecretarySession(activeSession)))) {
+    setActiveSessionId(defaultSession?.id || '');
   }
   if (!state.activeId) {
-    const firstWebSession = visibleSessions.find((session) => session.source !== 'codex');
-    if (firstWebSession) setActiveSessionId(firstWebSession.id);
+    if (defaultSession) setActiveSessionId(defaultSession.id);
+  }
+  if (state.activeId && !visibleSessions.some((session) => session.id === state.activeId)) {
+    setActiveSessionId('');
   }
   if (state.activeId) loadMessages(state.activeId);
   renderSessions({ force: true });
@@ -4511,8 +4527,11 @@ async function refreshSessions(options = {}) {
       if (session.view?.session) mergeSessionView(session.view, session.id);
     }
     saveSessionCache();
-    const firstWebSession = state.sessions.find((item) => item.source !== 'codex' && !item.trashedAt);
-    if (!state.activeId && firstWebSession) setActiveSessionId(firstWebSession.id);
+    const firstWebSession = defaultSessionCandidate(state.sessions);
+    const activeSession = state.sessions.find((item) => item.id === state.activeId && !item.trashedAt);
+    if ((!state.activeId || (options.initial === true && isSecretarySession(activeSession))) && firstWebSession) {
+      setActiveSessionId(firstWebSession.id);
+    }
     if (state.activeId && !state.sessions.some((item) => item.id === state.activeId && !item.trashedAt)) {
       setActiveSessionId(firstWebSession?.id || '');
     }
@@ -4537,8 +4556,8 @@ async function refreshSessions(options = {}) {
 
 window.cmcAfterLogin = async function cmcAfterLogin() {
   setAuthView(true);
-  hydrateCachedSessionView();
-  await refreshSessions();
+  hydrateCachedSessionView({ initial: true });
+  await refreshSessions({ initial: true });
   scheduleIdle(() => {
     loadSecretary({ notify: false }).catch(() => {});
     startSecretaryPolling();
@@ -5750,8 +5769,8 @@ async function boot() {
   try {
     await api('/api/me');
     setAuthView(true);
-    hydrateCachedSessionView();
-    await refreshSessions();
+    hydrateCachedSessionView({ initial: true });
+    await refreshSessions({ initial: true });
     scheduleIdle(() => {
       loadSecretary({ notify: false }).catch(() => {});
       startSecretaryPolling();
